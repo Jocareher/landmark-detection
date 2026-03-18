@@ -165,7 +165,8 @@ cython_debug/
 # Skip wandb's folder
 wandb/
 
-data/
+data/*
+!data/.gitkeep
 weights/*
 !weights/.gitkeep
 *.csv

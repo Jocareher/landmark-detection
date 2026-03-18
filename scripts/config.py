@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
 
 
@@ -10,7 +11,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 @dataclass
 class ExperimentConfig:
     dataset_root: Path = PROJECT_ROOT / "data" / "synthetic_lmks_vis_dataset"
-    output_dir: Path = PROJECT_ROOT / "outputs" / "lmks_cnn"
+    runs_dir: Path = PROJECT_ROOT / "runs"
+    output_dir: Path = PROJECT_ROOT / "runs" / "default_run"
     cache_dir: Path | None = PROJECT_ROOT / "notebooks"
     pretrained_weights: Path | None = PROJECT_ROOT / "weights" / "HR18-300W.pth"
     batch_size: int = 16
@@ -52,3 +54,11 @@ class ExperimentConfig:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+    def resolve_output_dir(self) -> Path:
+        run_name = (
+            self.wandb_run_name or f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        )
+        self.wandb_run_name = run_name
+        self.output_dir = self.runs_dir / run_name
+        return self.output_dir
