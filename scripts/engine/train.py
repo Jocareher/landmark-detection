@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from tqdm.auto import tqdm
 
 from .losses import compute_multitask_loss
 from .metrics import (
@@ -29,6 +30,7 @@ def run_epoch(
     training: bool = True,
     use_subpixel_decode: bool = False,
     use_amp: bool = True,
+    progress_desc: str | None = None,
 ) -> dict[str, float]:
     """Run one full training or validation epoch and aggregate split metrics."""
     if training and optimizer is None:
@@ -42,8 +44,14 @@ def run_epoch(
     batch_time_meter = AverageMeter()
     autocast_device = device.type
     epoch_start_time = time.time()
+    progress_bar = tqdm(
+        dataloader,
+        desc=progress_desc or ("Train" if training else "Val"),
+        dynamic_ncols=True,
+        leave=False,
+    )
 
-    for batch in dataloader:
+    for batch in progress_bar:
         batch_start_time = time.time()
         images = batch["image"].to(device, non_blocking=True)
         heatmaps = batch["heatmaps"].to(device, non_blocking=True)
@@ -113,6 +121,14 @@ def run_epoch(
             nme_meter.update(float(nme_values.mean()), batch_size)
 
         batch_time_meter.update(time.time() - batch_start_time)
+        progress_bar.set_postfix(
+            total=f"{total_loss_meter.avg:.4f}",
+            heatmap=f"{heatmap_loss_meter.avg:.4f}",
+            vis=f"{visibility_loss_meter.avg:.4f}",
+            nme=f"{nme_meter.avg:.4f}",
+        )
+
+    progress_bar.close()
 
     return {
         "total_loss": total_loss_meter.avg,
@@ -166,6 +182,11 @@ def print_epoch_summary(
     print(
         f"Val   | total: {val_metrics['total_loss']:.6f} | heatmap: {val_metrics['heatmap_loss']:.6f} | "
         f"vis: {val_metrics['visibility_loss']:.6f} | NME: {val_metrics['nme']:.6f}"
+    )
+    print(
+        f"Time  | train: {train_metrics['epoch_time']:.2f}s | "
+        f"val: {val_metrics['epoch_time']:.2f}s | "
+        f"epoch: {train_metrics['epoch_time'] + val_metrics['epoch_time']:.2f}s"
     )
     print(
         f"Best val total loss: {best_val_loss:.6f} | Early stopping: {patience_counter}/{patience}"
@@ -281,6 +302,7 @@ def train_model(
             training=True,
             use_subpixel_decode=False,
             use_amp=amp_enabled,
+            progress_desc=f"Train {epoch + 1:03d}",
         )
         val_metrics = run_epoch(
             model=model,
@@ -295,6 +317,7 @@ def train_model(
             training=False,
             use_subpixel_decode=False,
             use_amp=amp_enabled,
+            progress_desc=f"Val   {epoch + 1:03d}",
         )
 
         history["train"].append(train_metrics)

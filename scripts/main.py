@@ -154,6 +154,7 @@ def main() -> None:
     print(f"[INFO] Dataset root: {config.dataset_root}")
     print(f"[INFO] Mode: {args.mode}")
     print(f"[INFO] Run name: {config.wandb_run_name}")
+    print(f"[INFO] Seed: {config.seed}")
     print("[INFO] Setting global seed and deterministic runtime options...")
     set_seed(config.seed)
     device = get_default_device(config.device)

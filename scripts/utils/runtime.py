@@ -10,15 +10,19 @@ import torch
 def set_seed(seed_value: int = 42) -> None:
     """Seed all relevant random generators and enable deterministic execution."""
     os.environ["PYTHONHASHSEED"] = str(seed_value)
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     np.random.seed(seed_value)
     random.seed(seed_value)
     torch.manual_seed(seed_value)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed_value)
-    torch.use_deterministic_algorithms(True)
+    torch.use_deterministic_algorithms(True, warn_only=False)
     if hasattr(torch.backends, "cudnn"):
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.allow_tf32 = False
+    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+        torch.backends.cuda.matmul.allow_tf32 = False
 
 
 def seed_worker(worker_id: int) -> None:
