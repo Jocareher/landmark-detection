@@ -10,6 +10,8 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 @dataclass
 class ExperimentConfig:
+    """Container for the default settings that define one experiment run."""
+
     dataset_root: Path = PROJECT_ROOT / "data" / "synthetic_lmks_vis_dataset"
     runs_dir: Path = PROJECT_ROOT / "runs"
     output_dir: Path = PROJECT_ROOT / "runs" / "default_run"
@@ -53,9 +55,11 @@ class ExperimentConfig:
     run_smoke_test: bool = False
 
     def to_dict(self) -> dict[str, object]:
+        """Serialize the configuration to a plain Python dictionary."""
         return asdict(self)
 
     def resolve_output_dir(self) -> Path:
+        """Resolve the final output path under `runs/<wandb_run_name>`."""
         run_name = (
             self.wandb_run_name or f"run_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
         )

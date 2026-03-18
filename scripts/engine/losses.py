@@ -11,6 +11,7 @@ def compute_multitask_loss(
     lambda_heatmap: float = 1.0,
     lambda_visibility: float = 1.0,
 ) -> dict[str, torch.Tensor]:
+    """Compute the weighted loss for the heatmap and visibility prediction heads."""
     predicted_heatmaps = outputs["heatmaps"]
     predicted_visibility_logits = outputs["visibility_logits"]
     target_heatmaps = batch["heatmaps"]

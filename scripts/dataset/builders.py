@@ -10,6 +10,7 @@ from .transforms import Compose, Normalize, Resize, ToTensor
 
 
 def build_transforms(config: ExperimentConfig) -> tuple[Compose, Compose]:
+    """Build the train and evaluation transform pipelines from the config."""
     common = [
         Resize(size=config.image_size),
         ToTensor(),
@@ -19,6 +20,7 @@ def build_transforms(config: ExperimentConfig) -> tuple[Compose, Compose]:
 
 
 def build_datasets(config: ExperimentConfig) -> dict[str, SyntheticLandmarkDataset]:
+    """Instantiate dataset objects for the train, validation, and test splits."""
     train_transform, eval_transform = build_transforms(config)
     cache_dir = config.cache_dir
     return {
@@ -65,6 +67,7 @@ def build_datasets(config: ExperimentConfig) -> dict[str, SyntheticLandmarkDatas
 
 
 def build_dataloaders(config: ExperimentConfig) -> dict[str, DataLoader]:
+    """Create reproducible dataloaders for all configured dataset splits."""
     datasets = build_datasets(config)
     pin_memory = config.pin_memory and config.device in {"cuda", "auto"}
     generator = None

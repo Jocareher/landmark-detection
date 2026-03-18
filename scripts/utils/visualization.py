@@ -15,6 +15,7 @@ def denormalize_image_tensor(
     mean: Sequence[float] = (0.485, 0.456, 0.406),
     std: Sequence[float] = (0.229, 0.224, 0.225),
 ) -> torch.Tensor:
+    """Undo channel-wise normalization on one image tensor."""
     if image.ndim != 3:
         raise ValueError(
             f"Expected image with shape (C, H, W), got {tuple(image.shape)}."
@@ -31,6 +32,7 @@ def denormalize_image_tensor(
 def _resize_heatmap_to_image(
     heatmap: torch.Tensor, image_height: int, image_width: int
 ) -> np.ndarray:
+    """Resize a heatmap tensor to match the spatial size of the source image."""
     resized_heatmap = F.interpolate(
         heatmap.unsqueeze(0).unsqueeze(0),
         size=(image_height, image_width),
@@ -55,6 +57,7 @@ def visualize_predicted_heatmaps_on_train_batch(
     normalize_heatmap: bool = True,
     use_wandb: bool = False,
 ) -> Path:
+    """Overlay predicted heatmaps on a fixed set of samples and save the figure."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -85,6 +88,7 @@ def visualize_predicted_heatmaps_on_train_batch(
     axes = axes.flatten() if isinstance(axes, np.ndarray) else np.array([axes])
 
     for image_index in range(num_images):
+        # Aggregate all landmark heatmaps into a single overlay for quick inspection.
         image_tensor = denormalize_image_tensor(
             images_cpu[image_index], mean=mean, std=std
         )

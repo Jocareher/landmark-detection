@@ -14,6 +14,7 @@ def run_inference(
     device: torch.device,
     compute_nme: bool = True,
 ) -> dict[str, Any]:
+    """Run model inference on a dataloader and optionally compute mean NME."""
     model.eval()
     all_predictions = []
     nme_values = []

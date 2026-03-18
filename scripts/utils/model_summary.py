@@ -10,6 +10,7 @@ def save_model_summary(
     output_dir: Path,
     input_size: tuple[int, int, int, int],
 ) -> Path:
+    """Save a `torchinfo` model summary, or a readable fallback if unavailable."""
     output_dir.mkdir(parents=True, exist_ok=True)
     summary_path = output_dir / "model_summary.txt"
 

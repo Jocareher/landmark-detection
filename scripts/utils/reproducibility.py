@@ -13,6 +13,7 @@ import torch
 
 
 def get_git_repo_root(start_path: Path | None = None) -> Path | None:
+    """Find the nearest parent directory that contains a `.git` folder."""
     start_path = Path.cwd() if start_path is None else Path(start_path).resolve()
     for parent in [start_path, *start_path.parents]:
         if (parent / ".git").exists():
@@ -21,6 +22,7 @@ def get_git_repo_root(start_path: Path | None = None) -> Path | None:
 
 
 def run_shell_command(command: list[str], cwd: Path | None = None) -> str:
+    """Execute a shell command and return stdout, or an empty string on failure."""
     try:
         return (
             subprocess.check_output(command, stderr=subprocess.DEVNULL, cwd=cwd)
@@ -37,6 +39,7 @@ def save_reproducibility_metadata(
     include_git_diff: bool = True,
     include_pip_freeze: bool = True,
 ) -> Path:
+    """Write Git, environment, and CLI metadata for one experiment run."""
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata_file = output_dir / "metadata.txt"
 

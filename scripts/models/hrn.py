@@ -13,12 +13,15 @@ TransferMode = Literal["feature_extractor", "fine_tuning"]
 
 
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
+    """Create a 3x3 convolution with padding and no bias."""
     return nn.Conv2d(
         in_planes, out_planes, kernel_size=3, stride=stride, padding=1, bias=False
     )
 
 
 class BasicBlock(nn.Module):
+    """Standard residual block used in HRNet branches."""
+
     expansion = 1
 
     def __init__(
@@ -28,6 +31,7 @@ class BasicBlock(nn.Module):
         stride: int = 1,
         downsample: nn.Module | None = None,
     ) -> None:
+        """Initialize one residual basic block."""
         super().__init__()
         self.conv1 = conv3x3(inplanes, planes, stride)
         self.bn1 = BatchNorm2d(planes, momentum=BN_MOMENTUM)
@@ -37,6 +41,7 @@ class BasicBlock(nn.Module):
         self.downsample = downsample
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply the residual block to one feature tensor."""
         residual = x
         out = self.relu(self.bn1(self.conv1(x)))
         out = self.bn2(self.conv2(out))
@@ -46,6 +51,8 @@ class BasicBlock(nn.Module):
 
 
 class Bottleneck(nn.Module):
+    """Bottleneck residual block used in the HRNet stem stage."""
+
     expansion = 4
 
     def __init__(
@@ -55,6 +62,7 @@ class Bottleneck(nn.Module):
         stride: int = 1,
         downsample: nn.Module | None = None,
     ) -> None:
+        """Initialize one bottleneck residual block."""
         super().__init__()
         self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=False)
         self.bn1 = BatchNorm2d(planes, momentum=BN_MOMENTUM)
@@ -70,6 +78,7 @@ class Bottleneck(nn.Module):
         self.downsample = downsample
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply the bottleneck block to one feature tensor."""
         residual = x
         out = self.relu(self.bn1(self.conv1(x)))
         out = self.relu(self.bn2(self.conv2(out)))
@@ -80,6 +89,8 @@ class Bottleneck(nn.Module):
 
 
 class HighResolutionModule(nn.Module):
+    """Multi-branch HRNet module with feature fusion across resolutions."""
+
     def __init__(
         self,
         num_branches: int,
@@ -90,6 +101,7 @@ class HighResolutionModule(nn.Module):
         fuse_method: str,
         multi_scale_output: bool = True,
     ) -> None:
+        """Construct one HRNet module with its branches and fuse layers."""
         super().__init__()
         self._check_branches(num_branches, num_blocks, num_inchannels, num_channels)
         self.num_inchannels = list(num_inchannels)
@@ -109,6 +121,7 @@ class HighResolutionModule(nn.Module):
         num_inchannels: list[int],
         num_channels: list[int],
     ) -> None:
+        """Validate that all branch configuration lists have matching lengths."""
         if (
             num_branches != len(num_blocks)
             or num_branches != len(num_inchannels)
@@ -124,6 +137,7 @@ class HighResolutionModule(nn.Module):
         num_channels: list[int],
         stride: int = 1,
     ) -> nn.Sequential:
+        """Build one residual branch inside the HRNet module."""
         downsample = None
         expected_channels = num_channels[branch_index] * block.expansion
         if stride != 1 or self.num_inchannels[branch_index] != expected_channels:
@@ -160,6 +174,7 @@ class HighResolutionModule(nn.Module):
         num_blocks: list[int],
         num_channels: list[int],
     ) -> nn.ModuleList:
+        """Build all residual branches for the current HRNet module."""
         return nn.ModuleList(
             [
                 self._make_one_branch(i, block, num_blocks, num_channels)
@@ -168,6 +183,7 @@ class HighResolutionModule(nn.Module):
         )
 
     def _make_fuse_layers(self) -> nn.ModuleList | None:
+        """Create the layers that fuse information across different resolutions."""
         if self.num_branches == 1:
             return None
 
@@ -220,9 +236,11 @@ class HighResolutionModule(nn.Module):
         return nn.ModuleList(fuse_layers)
 
     def get_num_inchannels(self) -> list[int]:
+        """Return the output channel count for each branch."""
         return self.num_inchannels
 
     def forward(self, x: list[torch.Tensor]) -> list[torch.Tensor]:
+        """Apply branch processing and cross-resolution feature fusion."""
         if self.num_branches == 1:
             return [self.branches[0](x[0])]
 
@@ -257,6 +275,8 @@ BLOCKS_DICT = {"BASIC": BasicBlock, "BOTTLENECK": Bottleneck}
 
 
 class HRNetW18Backbone(nn.Module):
+    """HRNetV2-W18 backbone used as the shared feature extractor."""
+
     STEM_INPLANES = 64
     STAGE2 = {
         "NUM_MODULES": 1,
@@ -284,6 +304,7 @@ class HRNetW18Backbone(nn.Module):
     }
 
     def __init__(self) -> None:
+        """Construct the HRNet stem and all multi-resolution stages."""
         super().__init__()
         self.inplanes = self.STEM_INPLANES
         self.conv1 = nn.Conv2d(
@@ -335,6 +356,7 @@ class HRNetW18Backbone(nn.Module):
     def _make_transition_layer(
         self, num_channels_pre_layer: list[int], num_channels_cur_layer: list[int]
     ) -> nn.ModuleList:
+        """Create transition layers between successive HRNet stages."""
         num_branches_cur = len(num_channels_cur_layer)
         num_branches_pre = len(num_channels_pre_layer)
         transition_layers: list[nn.Module | None] = []
@@ -397,6 +419,7 @@ class HRNetW18Backbone(nn.Module):
         blocks: int,
         stride: int = 1,
     ) -> nn.Sequential:
+        """Build a residual stage composed of repeated blocks."""
         downsample = None
         if stride != 1 or inplanes != planes * block.expansion:
             downsample = nn.Sequential(
@@ -421,6 +444,7 @@ class HRNetW18Backbone(nn.Module):
         num_inchannels: list[int],
         multi_scale_output: bool = True,
     ) -> tuple[nn.Sequential, list[int]]:
+        """Build a full HRNet stage composed of one or more modules."""
         num_modules = layer_config["NUM_MODULES"]
         num_branches = layer_config["NUM_BRANCHES"]
         num_blocks = layer_config["NUM_BLOCKS"]
@@ -448,6 +472,7 @@ class HRNetW18Backbone(nn.Module):
         return nn.Sequential(*modules), current_num_inchannels
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Return the fused high-resolution feature map produced by the backbone."""
         x = self.relu(self.bn1(self.conv1(x)))
         x = self.relu(self.bn2(self.conv2(x)))
         x = self.layer1(x)
@@ -494,9 +519,12 @@ class HRNetW18Backbone(nn.Module):
 
 
 class HRNetLandmarkVisibility(nn.Module):
+    """HRNet-based multitask model with heatmap and visibility heads."""
+
     FINAL_CONV_KERNEL = 1
 
     def __init__(self, num_landmarks: int = 72) -> None:
+        """Initialize the multitask model and its task-specific heads."""
         super().__init__()
         self.num_landmarks = num_landmarks
         self.backbone = HRNetW18Backbone()
@@ -542,6 +570,7 @@ class HRNetLandmarkVisibility(nn.Module):
         self._initialize_new_heads()
 
     def _initialize_new_heads(self) -> None:
+        """Initialize the newly created task heads with lightweight random weights."""
         for module in list(self.landmark_head.modules()) + list(
             self.visibility_head.modules()
         ):
@@ -554,9 +583,11 @@ class HRNetLandmarkVisibility(nn.Module):
                 nn.init.constant_(module.bias, 0)
 
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
+        """Extract shared HRNet features before the task-specific heads."""
         return self.backbone(x)
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Return landmark heatmaps and visibility logits for an input batch."""
         features = self.forward_features(x)
         landmark_heatmaps = self.landmark_head(features)
         visibility_logits = self.visibility_head(features).flatten(start_dim=1)
@@ -565,6 +596,7 @@ class HRNetLandmarkVisibility(nn.Module):
     def load_official_hrnet_pretrained(
         self, pretrained_path: str, verbose: bool = True
     ) -> dict[str, list[str]]:
+        """Load matching backbone weights from an official HRNet checkpoint."""
         if not os.path.isfile(pretrained_path):
             raise FileNotFoundError(
                 f"Pretrained checkpoint not found: {pretrained_path}"
@@ -616,6 +648,7 @@ class HRNetLandmarkVisibility(nn.Module):
         num_unfrozen_stages: int = 0,
         unfreeze_stem: bool = False,
     ) -> None:
+        """Freeze or unfreeze backbone stages according to the selected transfer setup."""
         if mode not in {"feature_extractor", "fine_tuning"}:
             raise ValueError(f"Invalid transfer mode: {mode}")
 
@@ -660,6 +693,7 @@ class HRNetLandmarkVisibility(nn.Module):
                 parameter.requires_grad = True
 
     def get_trainable_parameter_names(self) -> list[str]:
+        """Return the names of all parameters currently marked as trainable."""
         return [
             name
             for name, parameter in self.named_parameters()

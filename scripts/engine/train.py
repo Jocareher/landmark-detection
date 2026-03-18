@@ -30,6 +30,7 @@ def run_epoch(
     use_subpixel_decode: bool = False,
     use_amp: bool = True,
 ) -> dict[str, float]:
+    """Run one full training or validation epoch and aggregate split metrics."""
     if training and optimizer is None:
         raise ValueError("An optimizer is required when training=True.")
 
@@ -130,6 +131,7 @@ def save_checkpoint(
     optimizer: torch.optim.Optimizer | None,
     metrics: dict[str, Any],
 ) -> None:
+    """Save a model checkpoint with optimizer state and tracked metrics."""
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     torch.save(
         {
@@ -153,6 +155,7 @@ def print_epoch_summary(
     patience_counter: int,
     patience: int,
 ) -> None:
+    """Print a compact terminal summary for the current epoch."""
     print("=" * 120)
     print(f"Epoch {epoch + 1:03d}/{num_epochs:03d}")
     print("-" * 120)
@@ -171,6 +174,7 @@ def print_epoch_summary(
 
 
 def initialize_results_csv(csv_path: str | Path) -> None:
+    """Create the metrics CSV file and header if it does not exist yet."""
     csv_path = Path(csv_path)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
     if csv_path.exists():
@@ -194,6 +198,7 @@ def initialize_results_csv(csv_path: str | Path) -> None:
 def append_results_row(
     csv_path: str | Path, epoch: int, split: str, metrics: dict[str, float], lr: float
 ) -> None:
+    """Append one train or validation metrics row to the experiment CSV."""
     csv_path = Path(csv_path)
     with csv_path.open("a", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
@@ -232,6 +237,7 @@ def train_model(
     visualize_every_n_epochs: int = 5,
     num_visualization_images: int = 4,
 ) -> dict[str, Any]:
+    """Execute the full training pipeline, including validation and checkpointing."""
     wandb = None
     if use_wandb:
         import wandb as wandb_module
@@ -260,6 +266,7 @@ def train_model(
     history = {"train": [], "val": []}
 
     for epoch in range(num_epochs):
+        # One loop iteration corresponds to one complete train/validation cycle.
         current_lr = optimizer.param_groups[0]["lr"]
         train_metrics = run_epoch(
             model=model,
@@ -376,6 +383,7 @@ def smoke_test_single_batch(
     lambda_heatmap: float = 1.0,
     lambda_visibility: float = 1.0,
 ) -> None:
+    """Run a single optimization step to validate the end-to-end training path."""
     model.train()
     batch = next(iter(dataloader))
     images = batch["image"].to(device, non_blocking=True)

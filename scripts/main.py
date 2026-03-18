@@ -22,6 +22,7 @@ from scripts.utils import (
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for training and inference runs."""
     parser = argparse.ArgumentParser(
         description="Train or evaluate the landmark detection experiment."
     )
@@ -59,6 +60,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
+    """Merge CLI overrides into the default experiment configuration."""
     config = ExperimentConfig()
     if args.dataset_root is not None:
         config.dataset_root = args.dataset_root
@@ -106,6 +108,7 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
 
 
 def maybe_save_config(config: ExperimentConfig) -> None:
+    """Persist the resolved configuration inside the active run directory."""
     config.output_dir.mkdir(parents=True, exist_ok=True)
     serialized = {
         key: str(value)
@@ -121,6 +124,7 @@ def maybe_save_config(config: ExperimentConfig) -> None:
 
 
 def build_model(config: ExperimentConfig) -> HRNetLandmarkVisibility:
+    """Instantiate the model, load pretrained weights, and configure trainable layers."""
     model = HRNetLandmarkVisibility(num_landmarks=config.num_landmarks)
     if (
         config.pretrained_weights is not None
@@ -138,6 +142,7 @@ def build_model(config: ExperimentConfig) -> HRNetLandmarkVisibility:
 
 
 def main() -> None:
+    """Execute the end-to-end experiment pipeline from the command line."""
     args = parse_args()
     from scripts.engine import run_inference, smoke_test_single_batch, train_model
 

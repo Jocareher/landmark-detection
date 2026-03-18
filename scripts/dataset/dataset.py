@@ -16,6 +16,7 @@ TargetMode = Literal["regression", "heatmap", "both"]
 
 @lru_cache(maxsize=32)
 def build_gaussian_kernel(size: int, sigma: float) -> np.ndarray:
+    """Return a cached 2D Gaussian kernel used to render landmark heatmaps."""
     x_axis = np.arange(0, size, dtype=np.float32)
     y_axis = x_axis[:, np.newaxis]
     center = size // 2
@@ -26,6 +27,7 @@ def build_gaussian_kernel(size: int, sigma: float) -> np.ndarray:
 
 
 def draw_gaussian(heatmap: np.ndarray, point: np.ndarray, sigma: float) -> np.ndarray:
+    """Draw a truncated Gaussian centered at `point` on the provided heatmap."""
     tmp_size = int(sigma * 3)
     x_coord, y_coord = float(point[0]), float(point[1])
 
@@ -62,6 +64,8 @@ def draw_gaussian(heatmap: np.ndarray, point: np.ndarray, sigma: float) -> np.nd
 
 
 class SyntheticLandmarkDataset(Dataset):
+    """Dataset for synthetic face images with landmarks, visibility, and heatmaps."""
+
     def __init__(
         self,
         root_dir: str | Path,
@@ -77,6 +81,7 @@ class SyntheticLandmarkDataset(Dataset):
         use_cache: bool = True,
         show_progress: bool = True,
     ) -> None:
+        """Index one dataset split and configure how targets should be returned."""
         self.root_dir = Path(root_dir)
         self.split = split
         self.transform = transform
@@ -114,9 +119,11 @@ class SyntheticLandmarkDataset(Dataset):
             )
 
     def __len__(self) -> int:
+        """Return the number of indexed samples."""
         return len(self.samples)
 
     def __getitem__(self, index: int) -> SampleDict:
+        """Load one sample, apply transforms, and generate the configured targets."""
         sample_info = self.samples[index]
         image_path = Path(sample_info["image_path"])
         label_path = Path(sample_info["label_path"])
@@ -165,6 +172,7 @@ class SyntheticLandmarkDataset(Dataset):
         return output
 
     def _load_or_build_samples(self) -> list[dict[str, str]]:
+        """Load the cached index when available or rebuild it from disk."""
         if self.use_cache and self.cache_file.exists():
             try:
                 samples = self._load_cache()
@@ -179,6 +187,7 @@ class SyntheticLandmarkDataset(Dataset):
         return samples
 
     def _load_cache(self) -> list[dict[str, str]]:
+        """Deserialize a previously saved sample index from disk."""
         payload = torch.load(self.cache_file, map_location="cpu", weights_only=False)
         if not isinstance(payload, dict):
             raise ValueError(f"Invalid cache format in {self.cache_file}")
@@ -192,6 +201,7 @@ class SyntheticLandmarkDataset(Dataset):
         return samples
 
     def _save_cache(self, samples: list[dict[str, str]]) -> None:
+        """Persist the indexed samples using an atomic temporary file."""
         self.cache_file.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "split": self.split,
@@ -203,6 +213,7 @@ class SyntheticLandmarkDataset(Dataset):
         temp_cache_file.replace(self.cache_file)
 
     def _index_samples(self) -> list[dict[str, str]]:
+        """Scan one split directory and keep valid image/label pairs only."""
         valid_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
         image_paths = sorted(
             path
@@ -233,6 +244,7 @@ class SyntheticLandmarkDataset(Dataset):
         return samples
 
     def _is_minimally_valid_label(self, label_path: Path) -> bool:
+        """Check that a label file has the expected `(num_landmarks, 3)` shape."""
         try:
             data = np.loadtxt(label_path, dtype=np.float32)
         except Exception:
@@ -243,11 +255,13 @@ class SyntheticLandmarkDataset(Dataset):
 
     @staticmethod
     def _load_image(image_path: Path) -> Image.Image:
+        """Load an image from disk as an RGB PIL image."""
         return Image.open(image_path).convert("RGB")
 
     def _load_label(
         self, label_path: Path, image_width: int, image_height: int
     ) -> tuple[np.ndarray, np.ndarray]:
+        """Load normalized labels and convert landmark coordinates to pixel space."""
         data = np.loadtxt(label_path, dtype=np.float32)
         if data.ndim == 1:
             data = data.reshape(1, -1)
@@ -264,6 +278,7 @@ class SyntheticLandmarkDataset(Dataset):
 
     @staticmethod
     def _ensure_image_tensor(image: Any) -> torch.Tensor:
+        """Convert the image field to a float tensor in CHW layout."""
         if isinstance(image, torch.Tensor):
             return image.float()
         if isinstance(image, Image.Image):
@@ -274,6 +289,7 @@ class SyntheticLandmarkDataset(Dataset):
 
     @staticmethod
     def _ensure_landmark_tensor(landmarks: Any) -> torch.Tensor:
+        """Validate and convert landmarks to a float tensor of shape `(N, 2)`."""
         tensor = torch.as_tensor(landmarks, dtype=torch.float32)
         if tensor.ndim != 2 or tensor.shape[1] != 2:
             raise ValueError(
@@ -282,6 +298,7 @@ class SyntheticLandmarkDataset(Dataset):
         return tensor
 
     def _ensure_visibility_tensor(self, visibility: Any) -> torch.Tensor:
+        """Validate and convert visibility flags to a float tensor of shape `(N,)`."""
         tensor = torch.as_tensor(visibility, dtype=torch.float32)
         if tensor.ndim != 1 or tensor.shape[0] != self.num_landmarks:
             raise ValueError(
@@ -292,6 +309,7 @@ class SyntheticLandmarkDataset(Dataset):
     def _generate_heatmaps(
         self, landmarks: torch.Tensor, image_size: tuple[int, int]
     ) -> torch.Tensor:
+        """Render one Gaussian heatmap per landmark in the target heatmap resolution."""
         image_height, image_width = image_size
         heatmap_height, heatmap_width = self.heatmap_size
         scale_x = heatmap_width / float(image_width)

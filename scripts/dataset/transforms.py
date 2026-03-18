@@ -12,9 +12,12 @@ SampleDict = dict[str, Any]
 
 @dataclass
 class Compose:
+    """Apply a list of sample-level transforms in sequence."""
+
     transforms: list[Callable[[SampleDict], SampleDict]]
 
     def __call__(self, sample: SampleDict) -> SampleDict:
+        """Transform one sample and return the updated mapping."""
         for transform in self.transforms:
             sample = transform(sample)
         return sample
@@ -22,10 +25,13 @@ class Compose:
 
 @dataclass
 class Resize:
+    """Resize the image and rescale landmark coordinates to the target size."""
+
     size: tuple[int, int]
     interpolation: int = Image.BILINEAR
 
     def __call__(self, sample: SampleDict) -> SampleDict:
+        """Resize one sample while keeping metadata and landmarks aligned."""
         image = sample["image"]
         landmarks = sample["landmarks"]
         metadata = dict(sample.get("metadata", {}))
@@ -58,7 +64,10 @@ class Resize:
 
 @dataclass
 class ToTensor:
+    """Convert image, landmarks, and visibility arrays to tensors."""
+
     def __call__(self, sample: SampleDict) -> SampleDict:
+        """Convert one sample in-place to tensor-based representations."""
         image = sample["image"]
         landmarks = sample["landmarks"]
         visibility = sample["visibility"]
@@ -81,14 +90,18 @@ class ToTensor:
 
 @dataclass
 class Normalize:
+    """Normalize an image tensor using channel-wise mean and standard deviation."""
+
     mean: tuple[float, float, float]
     std: tuple[float, float, float]
 
     def __post_init__(self) -> None:
+        """Precompute broadcastable normalization tensors."""
         self.mean_tensor = torch.tensor(self.mean, dtype=torch.float32).view(3, 1, 1)
         self.std_tensor = torch.tensor(self.std, dtype=torch.float32).view(3, 1, 1)
 
     def __call__(self, sample: SampleDict) -> SampleDict:
+        """Normalize the `image` field of a sample."""
         image = sample["image"]
         if not isinstance(image, torch.Tensor):
             raise TypeError(f"Expected image as torch.Tensor, got {type(image)}.")

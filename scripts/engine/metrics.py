@@ -8,18 +8,22 @@ import torch
 
 @dataclass
 class AverageMeter:
+    """Track running averages for scalar metrics."""
+
     val: float = 0.0
     avg: float = 0.0
     sum: float = 0.0
     count: int = 0
 
     def reset(self) -> None:
+        """Clear the meter state."""
         self.val = 0.0
         self.avg = 0.0
         self.sum = 0.0
         self.count = 0
 
     def update(self, value: float, n: int = 1) -> None:
+        """Accumulate a new value observed over `n` samples."""
         self.val = float(value)
         self.sum += float(value) * n
         self.count += n
@@ -27,6 +31,7 @@ class AverageMeter:
 
 
 def get_preds_from_heatmaps(heatmaps: torch.Tensor) -> torch.Tensor:
+    """Extract argmax landmark coordinates from a batch of heatmaps."""
     if heatmaps.ndim != 4:
         raise ValueError(
             f"Expected heatmaps with shape (B, K, H, W), got {tuple(heatmaps.shape)}."
@@ -46,6 +51,7 @@ def decode_heatmaps_to_image_coords(
     image_width: int,
     use_subpixel: bool = False,
 ) -> torch.Tensor:
+    """Map heatmap-space coordinates back into image-space pixel coordinates."""
     preds = get_preds_from_heatmaps(heatmaps)
     batch_size, num_landmarks, heatmap_height, heatmap_width = heatmaps.shape
 
@@ -78,6 +84,7 @@ def decode_heatmaps_to_image_coords(
 def compute_box_normalized_nme(
     preds: torch.Tensor, targets: torch.Tensor, eps: float = 1e-6
 ) -> np.ndarray:
+    """Compute the box-normalized mean error for a batch of predicted landmarks."""
     preds_np = preds.detach().cpu().numpy()
     targets_np = targets.detach().cpu().numpy()
     batch_size = preds_np.shape[0]

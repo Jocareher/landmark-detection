@@ -8,6 +8,7 @@ import torch
 
 
 def set_seed(seed_value: int = 42) -> None:
+    """Seed all relevant random generators and enable deterministic execution."""
     os.environ["PYTHONHASHSEED"] = str(seed_value)
     np.random.seed(seed_value)
     random.seed(seed_value)
@@ -21,6 +22,7 @@ def set_seed(seed_value: int = 42) -> None:
 
 
 def seed_worker(worker_id: int) -> None:
+    """Seed one DataLoader worker using the worker-specific PyTorch seed."""
     del worker_id
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
@@ -28,6 +30,7 @@ def seed_worker(worker_id: int) -> None:
 
 
 def get_default_device(preferred: str = "auto") -> torch.device:
+    """Return the requested device or the best available fallback."""
     if preferred == "cuda":
         return torch.device("cuda")
     if preferred == "cpu":
