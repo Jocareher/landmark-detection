@@ -17,9 +17,9 @@ class ExperimentConfig:
     pretrained_weights: Path | None = PROJECT_ROOT / "weights" / "HR18-300W.pth"
     batch_size: int = 16
     eval_batch_size: int | None = None
-    num_workers: int = 0
+    num_workers: int = 4
     pin_memory: bool = True
-    num_epochs: int = 50
+    num_epochs: int = 60
     learning_rate: float = 1e-4
     weight_decay: float = 0.0
     lr_milestones: tuple[int, ...] = (30, 50)
@@ -49,7 +49,7 @@ class ExperimentConfig:
     num_unfrozen_stages: int = 0
     unfreeze_stem: bool = False
     visualize_every_n_epochs: int = 5
-    num_visualization_images: int = 4
+    num_visualization_images: int = 5
     run_smoke_test: bool = False
 
     def to_dict(self) -> dict[str, object]:
