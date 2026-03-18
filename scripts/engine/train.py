@@ -81,7 +81,7 @@ def run_epoch(
                 total_loss.backward()
                 optimizer.step()
         else:
-            with torch.no_grad():
+            with torch.inference_mode():
                 with torch.autocast(device_type=autocast_device, enabled=use_amp):
                     outputs = model(images)
                     loss_dict = compute_multitask_loss(
