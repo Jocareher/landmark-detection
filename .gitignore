@@ -1,5 +1,6 @@
 # Ignore DS_Store
 .DS_Store
+.vscode/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -165,4 +166,6 @@ cython_debug/
 wandb/
 
 data/
-weights/
+weights/*
+!weights/.gitkeep
+*.csv
