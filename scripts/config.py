@@ -13,7 +13,7 @@ class ExperimentConfig:
     dataset_root: Path = PROJECT_ROOT / "data" / "synthetic_lmks_vis_dataset"
     runs_dir: Path = PROJECT_ROOT / "runs"
     output_dir: Path = PROJECT_ROOT / "runs" / "default_run"
-    cache_dir: Path | None = PROJECT_ROOT / "notebooks"
+    cache_dir: Path | None = PROJECT_ROOT / "dataset_cache"
     pretrained_weights: Path | None = PROJECT_ROOT / "weights" / "HR18-300W.pth"
     batch_size: int = 16
     eval_batch_size: int | None = None
