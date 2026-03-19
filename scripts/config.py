@@ -54,6 +54,12 @@ class ExperimentConfig:
     num_visualization_images: int = 5
     run_smoke_test: bool = False
 
+    evaluation_dirname: str = "evaluation"
+    visibility_threshold: float = 0.5
+    save_evaluation_overlays: bool = True
+    show_landmark_indices: bool = False
+    use_landmark_names_in_boxplot: bool = False
+
     def to_dict(self) -> dict[str, object]:
         """Serialize the configuration to a plain Python dictionary."""
         return asdict(self)

@@ -30,17 +30,19 @@ def parse_args() -> argparse.Namespace:
         description="Evaluate a trained landmark detection checkpoint on the test split.",
     )
     parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--dataset-root", type=Path)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--cache-dir", type=Path)
-    parser.add_argument("--batch-size", type=int)
-    parser.add_argument("--num-workers", type=int)
-    parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default="auto")
-    parser.add_argument("--seed", type=int)
-    parser.add_argument("--visibility-threshold", type=float, default=0.5)
+    parser.add_argument("--dataset-root", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument("--num-workers", type=int, default=None)
+    parser.add_argument(
+        "--device", choices=["auto", "cpu", "cuda", "mps"], default=None
+    )
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--visibility-threshold", type=float, default=None)
     parser.add_argument("--disable-overlays", action="store_true")
     parser.add_argument("--show-indices", action="store_true")
-    parser.add_argument("--use-landmark-names", action="store_true")
+    parser.add_argument("--disable-landmark-names", action="store_true")
     parser.add_argument("--save-config", action="store_true")
     return parser.parse_args()
 
@@ -75,6 +77,20 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
         config.device = args.device
     if args.seed is not None:
         config.seed = args.seed
+    if args.visibility_threshold is not None:
+        config.visibility_threshold = args.visibility_threshold
+    if args.disable_overlays:
+        config.save_evaluation_overlays = False
+    if args.show_indices:
+        config.show_landmark_indices = True
+    if args.disable_landmark_names:
+        config.use_landmark_names_in_boxplot = False
+
+    if args.output_dir is None:
+        checkpoint_stem = args.checkpoint.stem
+        config.output_dir = (
+            args.checkpoint.parent / f"{checkpoint_stem}_{config.evaluation_dirname}"
+        )
 
     return config
 
@@ -94,7 +110,11 @@ def maybe_save_config(
         Evaluation output directory.
     """
     serialized = {
-        key: str(value) if isinstance(value, Path) else list(value) if isinstance(value, tuple) else value
+        key: str(value)
+        if isinstance(value, Path)
+        else list(value)
+        if isinstance(value, tuple)
+        else value
         for key, value in config.to_dict().items()
     }
 

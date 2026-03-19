@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Sequence
 
 import csv
 import json
@@ -575,23 +576,14 @@ def evaluate_checkpoint(
                 sample_id = str(metadata_batch["sample_id"][sample_index])
                 image_path = Path(metadata_batch["image_path"][sample_index])
 
-                original_size = metadata_batch["original_size"][sample_index]
-                transformed_size = metadata_batch["transformed_size"][sample_index]
-
-                if isinstance(original_size, torch.Tensor):
-                    original_size = tuple(
-                        int(value) for value in original_size.tolist()
-                    )
-                else:
-                    original_size = tuple(int(value) for value in original_size)
-
-                if isinstance(transformed_size, torch.Tensor):
-                    transformed_size = tuple(
-                        int(value) for value in transformed_size.tolist()
-                    )
-                else:
-                    transformed_size = tuple(int(value) for value in transformed_size)
-
+                original_size = _extract_batched_size(
+                    batched_size=metadata_batch["original_size"],
+                    sample_index=sample_index,
+                )
+                transformed_size = _extract_batched_size(
+                    batched_size=metadata_batch["transformed_size"],
+                    sample_index=sample_index,
+                )
                 predicted_landmarks_original = project_landmarks_to_original_size(
                     landmarks=predicted_landmarks_batch[sample_index],
                     transformed_size=transformed_size,
@@ -708,3 +700,75 @@ def evaluate_checkpoint(
     )
 
     return summary
+
+
+def _extract_batched_size(
+    batched_size: Any,
+    sample_index: int,
+) -> tuple[int, int]:
+    """
+    Extract one `(height, width)` pair from a collated metadata size field.
+
+    PyTorch's default collation may transform a per-sample tuple like
+    `(height, width)` into one of several batched structures:
+    - list[tuple[int, int]]
+    - tuple[list[int], list[int]]
+    - tuple[torch.Tensor, torch.Tensor]
+    - list[torch.Tensor]
+    - torch.Tensor with shape (B, 2)
+
+    Parameters
+    ----------
+    batched_size : Any
+        Collated metadata field corresponding to `original_size` or
+        `transformed_size`.
+    sample_index : int
+        Batch sample index.
+
+    Returns
+    -------
+    tuple[int, int]
+        Size pair as `(height, width)`.
+
+    Raises
+    ------
+    ValueError
+        If the input structure cannot be interpreted as a batched size field.
+    """
+    if isinstance(batched_size, torch.Tensor):
+        if batched_size.ndim == 2 and batched_size.shape[1] == 2:
+            return int(batched_size[sample_index, 0].item()), int(
+                batched_size[sample_index, 1].item()
+            )
+        raise ValueError(
+            f"Unsupported tensor shape for batched size: {tuple(batched_size.shape)}."
+        )
+
+    if isinstance(batched_size, Sequence) and not isinstance(
+        batched_size, (str, bytes)
+    ):
+        if len(batched_size) == 2:
+            first, second = batched_size
+
+            if isinstance(first, torch.Tensor) and isinstance(second, torch.Tensor):
+                if first.ndim == 1 and second.ndim == 1:
+                    return int(first[sample_index].item()), int(
+                        second[sample_index].item()
+                    )
+
+            if isinstance(first, Sequence) and isinstance(second, Sequence):
+                return int(first[sample_index]), int(second[sample_index])
+
+        current_value = batched_size[sample_index]
+
+        if isinstance(current_value, torch.Tensor):
+            if current_value.numel() == 2:
+                flat_value = current_value.view(-1)
+                return int(flat_value[0].item()), int(flat_value[1].item())
+
+        if isinstance(current_value, Sequence) and len(current_value) == 2:
+            return int(current_value[0]), int(current_value[1])
+
+    raise ValueError(
+        f"Could not parse batched size field of type {type(batched_size)}."
+    )
