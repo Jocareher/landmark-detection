@@ -175,10 +175,10 @@ def main() -> None:
         dataloader=dataloaders["test"],
         device=device,
         output_dir=output_dir,
-        visibility_threshold=args.visibility_threshold,
-        save_overlays=not args.disable_overlays,
-        show_indices=args.show_indices,
-        use_landmark_names_in_boxplot=args.use_landmark_names,
+        visibility_threshold=config.visibility_threshold,
+        save_overlays=config.save_evaluation_overlays,
+        show_indices=config.show_landmark_indices,
+        use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
     )
 
     print("[INFO] Evaluation finished.")
