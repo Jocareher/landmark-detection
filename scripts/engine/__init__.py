@@ -1,5 +1,6 @@
 """Engine modules for training and inference."""
 
+from .evaluate import evaluate_checkpoint
 from .inference import run_inference
 from .losses import compute_multitask_loss
 from .metrics import (
@@ -14,6 +15,7 @@ __all__ = [
     "compute_box_normalized_nme",
     "compute_multitask_loss",
     "decode_heatmaps_to_image_coords",
+    "evaluate_checkpoint",
     "run_epoch",
     "run_inference",
     "smoke_test_single_batch",
