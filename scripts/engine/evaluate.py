@@ -300,7 +300,7 @@ def save_overlay_image(
     show_indices : bool, optional
         Whether to draw landmark indices. Defaults to False.
     point_radius : int, optional
-        Landmark circle radius in pixels. Defaults to 5.
+        Landmark circle radius in pixels. Defaults to 8.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -801,10 +801,6 @@ def evaluate_checkpoint(
             metadata_batch = batch["metadata"]
 
             batch_size = images.shape[0]
-
-            if per_landmark_errors is None:
-                number_of_landmarks = predicted_landmarks_batch.shape[1]
-                per_landmark_errors = [[] for _ in range(number_of_landmarks)]
 
             if per_landmark_errors is None:
                 number_of_landmarks = predicted_landmarks_batch.shape[1]
