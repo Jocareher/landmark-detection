@@ -278,7 +278,7 @@ def save_overlay_image(
     predicted_landmarks: np.ndarray,
     predicted_visibility: np.ndarray,
     show_indices: bool = False,
-    point_radius: int = 5,
+    point_radius: int = 8,
 ) -> None:
     """
     Save an image overlay with predicted landmarks.
@@ -309,7 +309,7 @@ def save_overlay_image(
 
     for landmark_index, (x_coord, y_coord) in enumerate(predicted_landmarks):
         visibility_value = int(predicted_visibility[landmark_index])
-        color = "red" if visibility_value == 0 else "blue"
+        color = "red" if visibility_value == 1 else "blue"
 
         left = x_coord - point_radius
         top = y_coord - point_radius
@@ -624,14 +624,14 @@ def save_per_image_nme_csv(
 
 def extract_face_orientation(sample_id: str) -> str:
     """
-    Infer face orientation from the sample name.
+    Infer face orientation from the filename stem.
 
-    Expected suffixes inside the filename:
-    - _left
-    - _quarter_left
-    - _frontal
-    - _quarter_right
-    - _right
+    Expected filename patterns:
+    - xxxxx_left
+    - xxxxx_quarter_left
+    - xxxxx_frontal
+    - xxxxx_quarter_right
+    - xxxxx_right
 
     Parameters
     ----------
@@ -641,26 +641,30 @@ def extract_face_orientation(sample_id: str) -> str:
     Returns
     -------
     str
-        Orientation label.
+        Orientation label without leading underscore.
 
     Raises
     ------
     ValueError
-        If the orientation cannot be inferred from the sample name.
+        If the orientation cannot be inferred.
     """
-    orientation_patterns = [
-        "_quarter_left",
-        "_quarter_right",
-        "_frontal",
-        "_left",
-        "_right",
-    ]
+    normalized_name = Path(sample_id).stem
 
-    for orientation in orientation_patterns:
-        if orientation in sample_id:
-            return orientation.lstrip("_")
+    suffix_to_orientation = {
+        "_quarter_left": "quarter_left",
+        "_quarter_right": "quarter_right",
+        "_frontal": "frontal",
+        "_left": "left",
+        "_right": "right",
+    }
 
-    raise ValueError(f"Could not infer orientation from sample_id='{sample_id}'.")
+    for suffix, orientation in suffix_to_orientation.items():
+        if normalized_name.endswith(suffix):
+            return orientation
+
+    raise ValueError(
+        f"Could not infer orientation from sample_id='{sample_id}'."
+    )
 
 
 def plot_yaw_view_boxplots(
@@ -763,6 +767,7 @@ def evaluate_checkpoint(
     all_visibility_predictions: list[np.ndarray] = []
 
     orientation_names = ["left", "quarter_left", "frontal", "quarter_right", "right"]
+
     orientation_to_errors: dict[str, list[list[float]]] = {}
 
     orientation_sample_counts = {
@@ -804,6 +809,7 @@ def evaluate_checkpoint(
             if per_landmark_errors is None:
                 number_of_landmarks = predicted_landmarks_batch.shape[1]
                 per_landmark_errors = [[] for _ in range(number_of_landmarks)]
+
                 orientation_to_errors = {
                     orientation: [[] for _ in range(number_of_landmarks)]
                     for orientation in orientation_names
