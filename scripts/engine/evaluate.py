@@ -17,7 +17,7 @@ from .metrics import decode_heatmaps_to_image_coords
 
 def get_default_landmark_names() -> list[str]:
     """
-    Return the default list of 72 landmark names.
+    Return the default list of 72 landmark names grouped by anatomy.
 
     Returns
     -------
@@ -25,78 +25,47 @@ def get_default_landmark_names() -> list[str]:
         Ordered landmark names.
     """
     return [
-        "exR",
-        "enR",
-        "n",
-        "enL",
-        "exL",
-        "acR",
-        "aR",
-        "prn",
-        "aL",
-        "acL",
-        "sn",
-        "chR",
-        "cphR",
-        "ls",
-        "cphL",
-        "chL",
-        "li",
-        "sl",
-        "pg",
-        "tR",
-        "oiR",
-        "tL",
-        "oiL",
-        "faceO_23",
-        "faceO_24",
-        "faceO_25",
-        "faceO_26",
-        "faceO_27",
-        "faceO_28",
-        "chin_29",
-        "faceO_30",
-        "faceO_31",
-        "faceO_32",
-        "faceO_33",
-        "faceO_34",
-        "faceO_35",
-        "rightEB_36",
-        "rightEB_37",
-        "rightEB_38",
-        "rightEB_39",
-        "rightEB_40",
-        "leftEB_41",
-        "leftEB_42",
-        "leftEB_43",
-        "leftEB_44",
-        "leftEB_45",
-        "nose_46",
-        "nose_47",
-        "rightE_48",
-        "rightE_49",
-        "rightE_50",
-        "rightE_51",
-        "leftE_52",
-        "leftE_53",
-        "leftE_54",
-        "leftE_55",
-        "upperL_56",
-        "upperL_57",
-        "lowerL_58",
-        "lowerL_59",
-        "lowerL_60",
-        "lowerL_61",
-        "lipE_62",
-        "upperL_63",
-        "upperL_64",
-        "upperL_65",
-        "lipE_66",
-        "lowerL_67",
-        "lowerL_68",
-        "lowerL_69",
-        "chin_70",
-        "chin_71",
+        *(f"face_contour_{index}" for index in range(1, 18)),
+        *(f"right_eyebrow_{index}" for index in range(18, 23)),
+        *(f"left_eyebrow_{index}" for index in range(23, 28)),
+        *(f"nose_bridge_{index}" for index in range(28, 32)),
+        *(f"nose_base_{index}" for index in range(32, 37)),
+        *(f"right_eye_{index}" for index in range(37, 43)),
+        *(f"left_eye_{index}" for index in range(43, 49)),
+        *(f"outer_lip_{index}" for index in range(49, 61)),
+        *(f"inner_lip_{index}" for index in range(61, 69)),
+        "under_lip_69",
+        "upper_chin70",
+        "left_chin_71",
+        "right_chin_72",
+    ]
+
+def get_landmark_region_definitions() -> list[tuple[str, range, str]]:
+    """
+    Return semantic landmark region definitions and their colors.
+
+    The region order is aligned with the default landmark indexing used in
+    `get_default_landmark_names()`.
+
+    Returns
+    -------
+    list[tuple[str, range, str]]
+        Tuples of (region_name, landmark_index_range, color_hex).
+    """
+    return [
+        ("Face contour", range(0, 17), "#4C78A8"),
+        ("Right eyebrow", range(17, 22), "#F58518"),
+        ("Left eyebrow", range(22, 27), "#E45756"),
+        ("Nose bridge", range(27, 31), "#72B7B2"),
+        ("Nose base", range(31, 36), "#54A24B"),
+        ("Right eye", range(36, 42), "#EECA3B"),
+        ("Left eye", range(42, 48), "#B279A2"),
+        ("Outer lip", range(48, 60), "#FF9DA6"),
+        ("Inner lip", range(60, 68), "#9D755D"),
+        ("Under lip", range(68, 69), "#BAB0AC"),
+        ("Upper chin", range(69, 70), "#2F4B7C"),
+        ("Left chin", range(70, 71), "#D45087"),
+        ("Right chin", range(71, 72), "#7F7F7F"),
     ]
 
 
@@ -133,6 +102,29 @@ def project_landmarks_to_original_size(
     projected_landmarks[:, 1] *= scale_y
 
     return projected_landmarks
+
+def get_landmark_region_colors(num_landmarks: int) -> list[str]:
+    """
+    Assign one display color to each landmark according to its region.
+
+    Parameters
+    ----------
+    num_landmarks : int
+        Number of landmarks.
+
+    Returns
+    -------
+    list[str]
+        One color per landmark index.
+    """
+    colors = ["#999999"] * num_landmarks
+
+    for _, landmark_range, color in get_landmark_region_definitions():
+        for landmark_index in landmark_range:
+            if 0 <= landmark_index < num_landmarks:
+                colors[landmark_index] = color
+
+    return colors
 
 
 def compute_box_normalization_factor(
@@ -466,7 +458,7 @@ def plot_per_landmark_boxplot(
     title: str = "Per-landmark NME distribution",
 ) -> None:
     """
-    Plot one boxplot per landmark with improved aesthetics.
+    Plot one boxplot per landmark using semantic region colors.
 
     Parameters
     ----------
@@ -475,48 +467,54 @@ def plot_per_landmark_boxplot(
     output_path : Path
         Output image path.
     use_landmark_names : bool, optional
-        Whether to use landmark names on the x-axis. Defaults to True.
+        Whether to use landmark abbreviations on the x-axis. Defaults to True.
     title : str, optional
         Figure title. Defaults to "Per-landmark NME distribution".
     """
     landmark_names = get_default_landmark_names()
     number_of_landmarks = len(per_landmark_errors)
+    landmark_colors = get_landmark_region_colors(number_of_landmarks)
+
+    safe_errors: list[list[float]] = []
+    for landmark_values in per_landmark_errors:
+        safe_landmark_values = [max(float(value), 1e-8) for value in landmark_values]
+        safe_errors.append(safe_landmark_values)
 
     figure_width = max(20.0, number_of_landmarks * 0.34)
     figure, axis = plt.subplots(figsize=(figure_width, 7))
 
     boxplot = axis.boxplot(
-        per_landmark_errors,
+        safe_errors,
         showfliers=True,
         showmeans=True,
         patch_artist=True,
-        medianprops={"color": "#d62728", "linewidth": 2.0},
+        medianprops={"color": "#8B0000", "linewidth": 2.0},
         meanprops={
             "marker": "D",
-            "markerfacecolor": "#1f77b4",
-            "markeredgecolor": "black",
-            "markersize": 4,
+            "markerfacecolor": "#003366",
+            "markeredgecolor": "white",
+            "markersize": 4.5,
         },
         flierprops={
             "marker": "o",
-            "markerfacecolor": "#9467bd",
-            "markeredgecolor": "#9467bd",
+            "markerfacecolor": "#4B0082",
+            "markeredgecolor": "#4B0082",
             "markersize": 2.8,
             "alpha": 0.35,
         },
-        whiskerprops={"color": "#4d4d4d", "linewidth": 1.2},
-        capprops={"color": "#4d4d4d", "linewidth": 1.2},
+        whiskerprops={"color": "#4d4d4d", "linewidth": 1.1},
+        capprops={"color": "#4d4d4d", "linewidth": 1.1},
     )
 
-    box_colors = plt.cm.tab20(np.linspace(0, 1, number_of_landmarks))
-    for patch, color in zip(boxplot["boxes"], box_colors):
+    for patch, color in zip(boxplot["boxes"], landmark_colors):
         patch.set_facecolor(color)
-        patch.set_alpha(0.55)
+        patch.set_alpha(0.65)
         patch.set_edgecolor("#333333")
         patch.set_linewidth(1.0)
 
-    axis.set_xticks(np.arange(1, number_of_landmarks + 1))
+    axis.set_yscale("log")
 
+    axis.set_xticks(np.arange(1, number_of_landmarks + 1))
     if use_landmark_names:
         axis.set_xticklabels(landmark_names, rotation=90, fontsize=8)
     else:
@@ -527,38 +525,47 @@ def plot_per_landmark_boxplot(
         )
 
     axis.set_xlabel("Landmark", fontsize=12)
-    axis.set_ylabel("Normalized error", fontsize=12)
+    axis.set_ylabel("Normalized error (log scale)", fontsize=12)
     axis.set_title(title, fontsize=15, fontweight="bold", pad=12)
     axis.grid(True, axis="y", linestyle="--", alpha=0.35)
 
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
 
-    legend_handles = [
-        Patch(facecolor="#999999", edgecolor="#333333", alpha=0.55, label="IQR"),
-        Line2D([0], [0], color="#d62728", lw=2.0, label="Median"),
+    region_legend_handles = [
+        Patch(facecolor=color, edgecolor="#333333", alpha=0.65, label=region_name)
+        for region_name, _, color in get_landmark_region_definitions()
+    ]
+
+    stats_legend_handles = [
+        Line2D([0], [0], color="#8B0000", lw=2.0, label="Median"),
         Line2D(
-            [0],
-            [0],
+            [0], [0],
             marker="D",
             color="w",
-            markerfacecolor="#1f77b4",
-            markeredgecolor="black",
+            markerfacecolor="#003366",
+            markeredgecolor="white",
             markersize=6,
             label="Mean",
         ),
         Line2D(
-            [0],
-            [0],
+            [0], [0],
             marker="o",
             color="w",
-            markerfacecolor="#9467bd",
-            markeredgecolor="#9467bd",
+            markerfacecolor="#4B0082",
+            markeredgecolor="#4B0082",
             markersize=5,
             label="Outlier",
         ),
     ]
-    axis.legend(handles=legend_handles, loc="upper right", fontsize=10, frameon=True)
+
+    axis.legend(
+        handles=region_legend_handles + stats_legend_handles,
+        loc="upper right",
+        fontsize=9,
+        frameon=True,
+        ncol=2,
+    )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
@@ -751,12 +758,14 @@ def evaluate_checkpoint(
     output_dir = Path(output_dir)
     figures_dir = output_dir / "figures"
     predictions_dir = output_dir / "predictions"
-    overlays_dir = figures_dir / "overlays"
+    prediction_overlays_dir = predictions_dir / "overlays"
+    prediction_labels_dir = predictions_dir / "labels"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
     predictions_dir.mkdir(parents=True, exist_ok=True)
-    overlays_dir.mkdir(parents=True, exist_ok=True)
+    prediction_overlays_dir.mkdir(parents=True, exist_ok=True)
+    prediction_labels_dir.mkdir(parents=True, exist_ok=True)
 
     model.eval()
     model.to(device)
@@ -846,7 +855,7 @@ def evaluate_checkpoint(
                 )
 
                 save_prediction_file(
-                    output_path=predictions_dir / f"{sample_id}.txt",
+                    output_path=prediction_labels_dir / f"{sample_id}.txt",
                     landmarks=predicted_landmarks_original,
                     visibility=predicted_visibility,
                 )
@@ -854,7 +863,7 @@ def evaluate_checkpoint(
                 if save_overlays:
                     save_overlay_image(
                         image_path=image_path,
-                        output_path=overlays_dir / f"{sample_id}.png",
+                        output_path=prediction_overlays_dir / f"{sample_id}.png",
                         predicted_landmarks=predicted_landmarks_original,
                         predicted_visibility=predicted_visibility,
                         show_indices=show_indices,
@@ -938,7 +947,8 @@ def evaluate_checkpoint(
         "confusion_matrix_raw": confusion_matrix_raw.tolist(),
         "confusion_matrix_normalized": confusion_matrix_normalized.tolist(),
         "predictions_dir": str(predictions_dir),
-        "overlays_dir": str(overlays_dir),
+        "prediction_labels_dir": str(prediction_labels_dir),
+        "prediction_overlays_dir": str(prediction_overlays_dir),
         "orientation_sample_counts": orientation_sample_counts,
     }
 
