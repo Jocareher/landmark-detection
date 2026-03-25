@@ -219,6 +219,9 @@ def main() -> None:
     print(f"[INFO] Mean NME: {summary['mean_nme']:.6f}")
     print(f"[INFO] Median NME: {summary['median_nme']:.6f}")
     print(f"[INFO] Visibility accuracy: {summary['visibility_accuracy']:.6f}")
+    print(f"[INFO] Labels dir: {summary['prediction_labels_dir']}")
+    if summary["prediction_overlays_dir"] is not None:
+        print(f"[INFO] Overlays dir: {summary['prediction_overlays_dir']}")
 
 
 if __name__ == "__main__":
