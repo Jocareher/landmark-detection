@@ -110,6 +110,14 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
 def maybe_save_config(config: ExperimentConfig) -> None:
     """Persist the resolved configuration inside the active run directory."""
     config.output_dir.mkdir(parents=True, exist_ok=True)
+    serialized = serialize_config(config)
+    (config.output_dir / "resolved_config.json").write_text(
+        json.dumps(serialized, indent=2), encoding="utf-8"
+    )
+
+
+def serialize_config(config: ExperimentConfig) -> dict[str, object]:
+    """Convert the resolved experiment config into JSON-serializable values."""
     serialized = {
         key: str(value)
         if isinstance(value, Path)
@@ -118,9 +126,7 @@ def maybe_save_config(config: ExperimentConfig) -> None:
         else value
         for key, value in config.to_dict().items()
     }
-    (config.output_dir / "resolved_config.json").write_text(
-        json.dumps(serialized, indent=2), encoding="utf-8"
-    )
+    return serialized
 
 
 def build_model(config: ExperimentConfig) -> HRNetLandmarkVisibility:
@@ -199,6 +205,7 @@ def main() -> None:
         save_reproducibility_metadata(
             output_dir=config.output_dir,
             parsed_args=vars(args),
+            resolved_config=serialize_config(config),
             include_git_diff=config.include_git_diff,
             include_pip_freeze=config.include_pip_freeze,
         )
@@ -290,9 +297,9 @@ def main() -> None:
             device=device,
             output_dir=test_output_dir,
             visibility_threshold=config.visibility_threshold,
-            save_predictions=False,
-            save_overlays=False,
-            show_indices=False,
+            save_predictions=True,
+            save_overlays=config.save_evaluation_overlays,
+            show_indices=config.show_landmark_indices,
             use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
         )
         print("[INFO] Test evaluation finished.")
@@ -302,6 +309,11 @@ def main() -> None:
             f"[INFO] Test visibility accuracy: {test_summary['visibility_accuracy']:.6f}"
         )
         print(f"[INFO] Test evaluation dir: {test_output_dir}")
+        print(f"[INFO] Test labels dir: {test_summary['prediction_labels_dir']}")
+        if test_summary["prediction_overlays_dir"] is not None:
+            print(
+                f"[INFO] Test overlays dir: {test_summary['prediction_overlays_dir']}"
+            )
 
 
 if __name__ == "__main__":

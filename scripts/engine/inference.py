@@ -5,7 +5,7 @@ from typing import Any
 
 import numpy as np
 import torch
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from .metrics import compute_box_normalized_nme, decode_heatmaps_to_image_coords
 from .postprocessing import extract_batched_size, project_landmarks_to_original_size

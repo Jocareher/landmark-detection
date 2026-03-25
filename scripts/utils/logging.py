@@ -26,6 +26,17 @@ class _TeeStream(io.TextIOBase):
     def isatty(self) -> bool:
         return self.primary_stream.isatty()
 
+    def fileno(self) -> int:
+        return self.primary_stream.fileno()
+
+    @property
+    def encoding(self) -> str | None:
+        return getattr(self.primary_stream, "encoding", None)
+
+    @property
+    def errors(self) -> str | None:
+        return getattr(self.primary_stream, "errors", None)
+
 
 @contextmanager
 def tee_terminal_output(log_path: str | Path) -> Iterator[Path]:

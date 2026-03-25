@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import torch
-from tqdm.auto import tqdm
+from tqdm import tqdm
 
 from .losses import compute_multitask_loss
 from .metrics import (
@@ -49,6 +49,7 @@ def run_epoch(
         desc=progress_desc or ("Train" if training else "Val"),
         dynamic_ncols=True,
         leave=False,
+        ascii=False,
     )
 
     for batch in progress_bar:

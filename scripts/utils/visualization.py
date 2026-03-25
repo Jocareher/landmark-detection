@@ -181,6 +181,25 @@ def get_landmark_region_definitions() -> list[tuple[str, range, str]]:
     ]
 
 
+def get_landmark_connection_definitions() -> list[tuple[range, bool]]:
+    """Return landmark index groups and whether they should be drawn as closed loops."""
+    return [
+        (range(0, 17), False),
+        (range(17, 22), False),
+        (range(22, 27), False),
+        (range(27, 31), False),
+        (range(31, 36), False),
+        (range(36, 42), True),
+        (range(42, 48), True),
+        (range(48, 60), True),
+        (range(60, 68), True),
+        (range(68, 69), False),
+        (range(69, 70), False),
+        (range(70, 71), False),
+        (range(71, 72), False),
+    ]
+
+
 def get_landmark_region_colors(num_landmarks: int) -> list[str]:
     """Assign one display color per landmark based on its semantic region."""
     colors = ["#999999"] * num_landmarks
@@ -197,24 +216,55 @@ def save_landmark_overlay_image(
     predicted_landmarks: np.ndarray,
     predicted_visibility: np.ndarray,
     show_indices: bool = False,
-    point_radius: int = 8,
+    point_radius: int = 10,
+    line_width: int = 4,
 ) -> None:
     """Render predicted landmarks on top of the original image and save it."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     image = Image.open(image_path).convert("RGB")
     draw = ImageDraw.Draw(image)
+    landmark_colors = get_landmark_region_colors(len(predicted_landmarks))
+
+    for landmark_range, close_loop in get_landmark_connection_definitions():
+        connected_points = []
+        line_color = None
+        for landmark_index in landmark_range:
+            if landmark_index >= len(predicted_landmarks):
+                continue
+            x_coord, y_coord = predicted_landmarks[landmark_index]
+            connected_points.append((float(x_coord), float(y_coord)))
+            if line_color is None:
+                line_color = landmark_colors[landmark_index]
+
+        if len(connected_points) >= 2 and line_color is not None:
+            draw.line(
+                connected_points, fill=line_color, width=line_width, joint="curve"
+            )
+            if close_loop:
+                draw.line(
+                    [connected_points[-1], connected_points[0]],
+                    fill=line_color,
+                    width=line_width,
+                    joint="curve",
+                )
 
     for landmark_index, (x_coord, y_coord) in enumerate(predicted_landmarks):
         visibility_value = int(predicted_visibility[landmark_index])
-        color = "red" if visibility_value == 1 else "blue"
+        color = landmark_colors[landmark_index]
+        outline_color = "white" if visibility_value == 1 else "black"
 
         left = x_coord - point_radius
         top = y_coord - point_radius
         right = x_coord + point_radius
         bottom = y_coord + point_radius
 
-        draw.ellipse((left, top, right, bottom), fill=color, outline="white", width=1)
+        draw.ellipse(
+            (left, top, right, bottom),
+            fill=color,
+            outline=outline_color,
+            width=max(2, line_width // 2),
+        )
 
         if show_indices:
             draw.text(

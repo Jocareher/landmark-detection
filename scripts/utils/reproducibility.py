@@ -36,10 +36,11 @@ def run_shell_command(command: list[str], cwd: Path | None = None) -> str:
 def save_reproducibility_metadata(
     output_dir: Path,
     parsed_args: dict[str, Any],
+    resolved_config: dict[str, Any] | None = None,
     include_git_diff: bool = True,
     include_pip_freeze: bool = True,
 ) -> Path:
-    """Write Git, environment, and CLI metadata for one experiment run."""
+    """Write Git, environment, CLI, and resolved config metadata for one experiment run."""
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata_file = output_dir / "metadata.txt"
 
@@ -86,6 +87,12 @@ def save_reproducibility_metadata(
         key: str(value) if isinstance(value, Path) else value
         for key, value in parsed_args.items()
     }
+    serializable_config = None
+    if resolved_config is not None:
+        serializable_config = {
+            key: str(value) if isinstance(value, Path) else value
+            for key, value in resolved_config.items()
+        }
 
     with metadata_file.open("w", encoding="utf-8") as handle:
         handle.write(
@@ -97,6 +104,11 @@ def save_reproducibility_metadata(
         handle.write("\n# Parsed arguments\n")
         json.dump(serializable_args, handle, indent=2)
         handle.write("\n")
+
+        if serializable_config is not None:
+            handle.write("\n# Resolved configuration\n")
+            json.dump(serializable_config, handle, indent=2)
+            handle.write("\n")
 
         if git_diff_content:
             handle.write(
