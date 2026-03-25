@@ -22,17 +22,16 @@ from scripts.utils import (
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments for training and inference runs."""
+    """Parse CLI arguments for the end-to-end training pipeline."""
     parser = argparse.ArgumentParser(
-        description="Train or evaluate the landmark detection experiment."
+        description="Run the full landmark detection pipeline: train, validate, and test."
     )
-    parser.add_argument("--mode", choices=["train", "test"], default="train")
     parser.add_argument("--dataset-root", type=Path)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--cache-dir", type=Path)
     parser.add_argument("--pretrained-weights", type=Path)
     parser.add_argument(
-        "--checkpoint", type=Path, help="Checkpoint to load for test mode or resume."
+        "--checkpoint", type=Path, help="Checkpoint to load before continuing training."
     )
     parser.add_argument("--batch-size", type=int)
     parser.add_argument("--eval-batch-size", type=int)
@@ -144,7 +143,7 @@ def build_model(config: ExperimentConfig) -> HRNetLandmarkVisibility:
 def main() -> None:
     """Execute the end-to-end experiment pipeline from the command line."""
     args = parse_args()
-    from scripts.engine import run_inference, smoke_test_single_batch, train_model
+    from scripts.engine import evaluate_checkpoint, smoke_test_single_batch, train_model
 
     print("[INFO] Parsing CLI arguments...")
     config = build_config_from_args(args)
@@ -152,7 +151,6 @@ def main() -> None:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     print(f"[INFO] Run directory: {config.output_dir}")
     print(f"[INFO] Dataset root: {config.dataset_root}")
-    print(f"[INFO] Mode: {args.mode}")
     print(f"[INFO] Run name: {config.wandb_run_name}")
     print(f"[INFO] Seed: {config.seed}")
     print("[INFO] Setting global seed and deterministic runtime options...")
@@ -205,18 +203,6 @@ def main() -> None:
         output_dir=config.output_dir,
         input_size=(1, 3, config.image_size[0], config.image_size[1]),
     )
-
-    if args.mode == "test":
-        print("[INFO] Starting inference on test split...")
-        model.to(device)
-        results = run_inference(
-            model=model, dataloader=dataloaders["test"], device=device, compute_nme=True
-        )
-        print("Inference finished.")
-        if "nme" in results:
-            print(f"Test NME: {results['nme']:.6f}")
-        print(f"Predictions shape: {tuple(results['predictions'].shape)}")
-        return
 
     print("[INFO] Building optimizer, scheduler, and losses...")
     optimizer = torch.optim.Adam(
@@ -278,6 +264,35 @@ def main() -> None:
     print(f"[INFO] Best epoch: {summary['best_epoch']}")
     print(f"[INFO] Best val loss: {summary['best_val_loss']:.6f}")
     print(f"[INFO] Results CSV: {summary['results_csv']}")
+
+    best_checkpoint_path = config.output_dir / "best_model.pth"
+    print(
+        f"[INFO] Loading best checkpoint for final test evaluation: {best_checkpoint_path}"
+    )
+    best_checkpoint = torch.load(
+        best_checkpoint_path, map_location="cpu", weights_only=False
+    )
+    model.load_state_dict(best_checkpoint["model_state_dict"])
+    model.to(device)
+
+    test_output_dir = config.output_dir / config.evaluation_dirname
+    print("[INFO] Evaluating best model on test split...")
+    test_summary = evaluate_checkpoint(
+        model=model,
+        dataloader=dataloaders["test"],
+        device=device,
+        output_dir=test_output_dir,
+        visibility_threshold=config.visibility_threshold,
+        save_predictions=False,
+        save_overlays=False,
+        show_indices=False,
+        use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
+    )
+    print("[INFO] Test evaluation finished.")
+    print(f"[INFO] Test mean NME: {test_summary['mean_nme']:.6f}")
+    print(f"[INFO] Test median NME: {test_summary['median_nme']:.6f}")
+    print(f"[INFO] Test visibility accuracy: {test_summary['visibility_accuracy']:.6f}")
+    print(f"[INFO] Test evaluation dir: {test_output_dir}")
 
 
 if __name__ == "__main__":

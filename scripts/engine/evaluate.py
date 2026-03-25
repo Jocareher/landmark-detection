@@ -1,130 +1,25 @@
 from __future__ import annotations
-from collections.abc import Sequence
 
 import csv
 import json
 from pathlib import Path
 from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from PIL import Image, ImageDraw
 from tqdm.auto import tqdm
 
 from .metrics import decode_heatmaps_to_image_coords
-
-
-def get_default_landmark_names() -> list[str]:
-    """
-    Return the default list of 72 landmark names grouped by anatomy.
-
-    Returns
-    -------
-    list[str]
-        Ordered landmark names.
-    """
-    return [
-        *(f"face_contour_{index}" for index in range(1, 18)),
-        *(f"right_eyebrow_{index}" for index in range(18, 23)),
-        *(f"left_eyebrow_{index}" for index in range(23, 28)),
-        *(f"nose_bridge_{index}" for index in range(28, 32)),
-        *(f"nose_base_{index}" for index in range(32, 37)),
-        *(f"right_eye_{index}" for index in range(37, 43)),
-        *(f"left_eye_{index}" for index in range(43, 49)),
-        *(f"outer_lip_{index}" for index in range(49, 61)),
-        *(f"inner_lip_{index}" for index in range(61, 69)),
-        "under_lip_69",
-        "upper_chin70",
-        "left_chin_71",
-        "right_chin_72",
-    ]
-
-def get_landmark_region_definitions() -> list[tuple[str, range, str]]:
-    """
-    Return semantic landmark region definitions and their colors.
-
-    The region order is aligned with the default landmark indexing used in
-    `get_default_landmark_names()`.
-
-    Returns
-    -------
-    list[tuple[str, range, str]]
-        Tuples of (region_name, landmark_index_range, color_hex).
-    """
-    return [
-        ("Face contour", range(0, 17), "#4C78A8"),
-        ("Right eyebrow", range(17, 22), "#F58518"),
-        ("Left eyebrow", range(22, 27), "#E45756"),
-        ("Nose bridge", range(27, 31), "#72B7B2"),
-        ("Nose base", range(31, 36), "#54A24B"),
-        ("Right eye", range(36, 42), "#EECA3B"),
-        ("Left eye", range(42, 48), "#B279A2"),
-        ("Outer lip", range(48, 60), "#FF9DA6"),
-        ("Inner lip", range(60, 68), "#9D755D"),
-        ("Under lip", range(68, 69), "#BAB0AC"),
-        ("Upper chin", range(69, 70), "#2F4B7C"),
-        ("Left chin", range(70, 71), "#D45087"),
-        ("Right chin", range(71, 72), "#7F7F7F"),
-    ]
-
-
-def project_landmarks_to_original_size(
-    landmarks: torch.Tensor,
-    transformed_size: tuple[int, int],
-    original_size: tuple[int, int],
-) -> torch.Tensor:
-    """
-    Project landmark coordinates from transformed image space to original image space.
-
-    Parameters
-    ----------
-    landmarks : torch.Tensor
-        Landmark coordinates of shape (K, 2) in transformed image space.
-    transformed_size : tuple[int, int]
-        Transformed image size as (height, width).
-    original_size : tuple[int, int]
-        Original image size as (height, width).
-
-    Returns
-    -------
-    torch.Tensor
-        Landmark coordinates of shape (K, 2) in original image space.
-    """
-    transformed_height, transformed_width = transformed_size
-    original_height, original_width = original_size
-
-    scale_x = original_width / float(transformed_width)
-    scale_y = original_height / float(transformed_height)
-
-    projected_landmarks = landmarks.clone()
-    projected_landmarks[:, 0] *= scale_x
-    projected_landmarks[:, 1] *= scale_y
-
-    return projected_landmarks
-
-def get_landmark_region_colors(num_landmarks: int) -> list[str]:
-    """
-    Assign one display color to each landmark according to its region.
-
-    Parameters
-    ----------
-    num_landmarks : int
-        Number of landmarks.
-
-    Returns
-    -------
-    list[str]
-        One color per landmark index.
-    """
-    colors = ["#999999"] * num_landmarks
-
-    for _, landmark_range, color in get_landmark_region_definitions():
-        for landmark_index in landmark_range:
-            if 0 <= landmark_index < num_landmarks:
-                colors[landmark_index] = color
-
-    return colors
+from .postprocessing import extract_batched_size, project_landmarks_to_original_size
+from ..utils.predictions import save_prediction_file
+from ..utils.visualization import (
+    compute_global_log_y_limits,
+    get_default_landmark_names,
+    plot_confusion_matrix,
+    plot_per_landmark_boxplot,
+    plot_yaw_view_boxplots,
+    save_landmark_overlay_image,
+)
 
 
 def compute_box_normalization_factor(
@@ -237,89 +132,6 @@ def normalize_confusion_matrix(confusion_matrix: np.ndarray) -> np.ndarray:
     return confusion_matrix.astype(np.float64) / row_sums
 
 
-def save_prediction_file(
-    output_path: Path,
-    landmarks: np.ndarray,
-    visibility: np.ndarray,
-) -> None:
-    """
-    Save predicted landmarks and visibility to a text file.
-
-    Parameters
-    ----------
-    output_path : Path
-        Destination file path.
-    landmarks : np.ndarray
-        Landmark coordinates of shape (K, 2).
-    visibility : np.ndarray
-        Predicted binary visibility of shape (K,).
-    """
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with output_path.open("w", encoding="utf-8") as file:
-        for landmark_index in range(landmarks.shape[0]):
-            x_coord = float(landmarks[landmark_index, 0])
-            y_coord = float(landmarks[landmark_index, 1])
-            visibility_value = int(visibility[landmark_index])
-            file.write(f"{x_coord:.6f} {y_coord:.6f} {visibility_value}\n")
-
-
-def save_overlay_image(
-    image_path: Path,
-    output_path: Path,
-    predicted_landmarks: np.ndarray,
-    predicted_visibility: np.ndarray,
-    show_indices: bool = False,
-    point_radius: int = 8,
-) -> None:
-    """
-    Save an image overlay with predicted landmarks.
-
-    Visibility convention:
-    - 0: visible   -> red
-    - 1: invisible -> blue
-
-    Parameters
-    ----------
-    image_path : Path
-        Original image path.
-    output_path : Path
-        Output image path.
-    predicted_landmarks : np.ndarray
-        Predicted landmark coordinates of shape (K, 2).
-    predicted_visibility : np.ndarray
-        Predicted binary visibility of shape (K,).
-    show_indices : bool, optional
-        Whether to draw landmark indices. Defaults to False.
-    point_radius : int, optional
-        Landmark circle radius in pixels. Defaults to 8.
-    """
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    image = Image.open(image_path).convert("RGB")
-    draw = ImageDraw.Draw(image)
-
-    for landmark_index, (x_coord, y_coord) in enumerate(predicted_landmarks):
-        visibility_value = int(predicted_visibility[landmark_index])
-        color = "red" if visibility_value == 1 else "blue"
-
-        left = x_coord - point_radius
-        top = y_coord - point_radius
-        right = x_coord + point_radius
-        bottom = y_coord + point_radius
-
-        draw.ellipse((left, top, right, bottom), fill=color, outline="white", width=1)
-
-        if show_indices:
-            draw.text(
-                (x_coord + point_radius + 2, y_coord + point_radius + 2),
-                str(landmark_index),
-                fill=color,
-            )
-
-    image.save(output_path)
-
-
 def save_metrics_summary_csv(
     output_path: Path,
     summary: dict[str, Any],
@@ -378,199 +190,6 @@ def save_metrics_summary_csv(
         writer.writerow(["metric", "value"])
         for metric_name, metric_value in rows:
             writer.writerow([metric_name, metric_value])
-
-
-def plot_confusion_matrix(
-    matrix: np.ndarray,
-    output_path: Path,
-    title: str,
-    value_format: str,
-    normalized: bool = False,
-) -> None:
-    """
-    Plot and save a confusion matrix with adaptive text color.
-
-    Visibility convention:
-    - 0: visible
-    - 1: invisible
-
-    Parameters
-    ----------
-    matrix : np.ndarray
-        Confusion matrix of shape (2, 2).
-    output_path : Path
-        Output image path.
-    title : str
-        Figure title.
-    value_format : str
-        Formatting string for cell values.
-    normalized : bool, optional
-        Whether the matrix is normalized. Defaults to False.
-    """
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    figure, axis = plt.subplots(figsize=(6.5, 5.5))
-    image = axis.imshow(matrix, cmap="Blues", interpolation="nearest")
-
-    class_labels = ["Visible (0)", "Invisible (1)"]
-
-    axis.set_xticks([0, 1])
-    axis.set_yticks([0, 1])
-    axis.set_xticklabels(class_labels, fontsize=11)
-    axis.set_yticklabels(class_labels, fontsize=11)
-    axis.set_xlabel("Predicted label", fontsize=12)
-    axis.set_ylabel("Ground-truth label", fontsize=12)
-    axis.set_title(title, fontsize=14, fontweight="bold", pad=12)
-
-    threshold = float(matrix.max()) * 0.55 if matrix.size > 0 else 0.0
-
-    for row_index in range(matrix.shape[0]):
-        for column_index in range(matrix.shape[1]):
-            value = matrix[row_index, column_index]
-            text_color = "white" if value >= threshold else "black"
-
-            axis.text(
-                column_index,
-                row_index,
-                format(value, value_format),
-                ha="center",
-                va="center",
-                color=text_color,
-                fontsize=13,
-                fontweight="bold",
-            )
-
-    colorbar = figure.colorbar(image, ax=axis, fraction=0.046, pad=0.04)
-    colorbar.ax.tick_params(labelsize=10)
-
-    for spine in axis.spines.values():
-        spine.set_linewidth(1.2)
-
-    plt.tight_layout()
-    figure.savefig(output_path, dpi=180, bbox_inches="tight")
-    plt.close(figure)
-
-
-def plot_per_landmark_boxplot(
-    per_landmark_errors: list[list[float]],
-    output_path: Path,
-    use_landmark_names: bool = True,
-    title: str = "Per-landmark NME distribution",
-) -> None:
-    """
-    Plot one boxplot per landmark using semantic region colors.
-
-    Parameters
-    ----------
-    per_landmark_errors : list[list[float]]
-        Error values grouped per landmark.
-    output_path : Path
-        Output image path.
-    use_landmark_names : bool, optional
-        Whether to use landmark abbreviations on the x-axis. Defaults to True.
-    title : str, optional
-        Figure title. Defaults to "Per-landmark NME distribution".
-    """
-    landmark_names = get_default_landmark_names()
-    number_of_landmarks = len(per_landmark_errors)
-    landmark_colors = get_landmark_region_colors(number_of_landmarks)
-
-    safe_errors: list[list[float]] = []
-    for landmark_values in per_landmark_errors:
-        safe_landmark_values = [max(float(value), 1e-8) for value in landmark_values]
-        safe_errors.append(safe_landmark_values)
-
-    figure_width = max(20.0, number_of_landmarks * 0.34)
-    figure, axis = plt.subplots(figsize=(figure_width, 7))
-
-    boxplot = axis.boxplot(
-        safe_errors,
-        showfliers=True,
-        showmeans=True,
-        patch_artist=True,
-        medianprops={"color": "#8B0000", "linewidth": 2.0},
-        meanprops={
-            "marker": "D",
-            "markerfacecolor": "#003366",
-            "markeredgecolor": "white",
-            "markersize": 4.5,
-        },
-        flierprops={
-            "marker": "o",
-            "markerfacecolor": "#4B0082",
-            "markeredgecolor": "#4B0082",
-            "markersize": 2.8,
-            "alpha": 0.35,
-        },
-        whiskerprops={"color": "#4d4d4d", "linewidth": 1.1},
-        capprops={"color": "#4d4d4d", "linewidth": 1.1},
-    )
-
-    for patch, color in zip(boxplot["boxes"], landmark_colors):
-        patch.set_facecolor(color)
-        patch.set_alpha(0.65)
-        patch.set_edgecolor("#333333")
-        patch.set_linewidth(1.0)
-
-    axis.set_yscale("log")
-
-    axis.set_xticks(np.arange(1, number_of_landmarks + 1))
-    if use_landmark_names:
-        axis.set_xticklabels(landmark_names, rotation=90, fontsize=8)
-    else:
-        axis.set_xticklabels(
-            [str(index) for index in range(number_of_landmarks)],
-            rotation=90,
-            fontsize=8,
-        )
-
-    axis.set_xlabel("Landmark", fontsize=12)
-    axis.set_ylabel("Normalized error (log scale)", fontsize=12)
-    axis.set_title(title, fontsize=15, fontweight="bold", pad=12)
-    axis.grid(True, axis="y", linestyle="--", alpha=0.35)
-
-    from matplotlib.lines import Line2D
-    from matplotlib.patches import Patch
-
-    region_legend_handles = [
-        Patch(facecolor=color, edgecolor="#333333", alpha=0.65, label=region_name)
-        for region_name, _, color in get_landmark_region_definitions()
-    ]
-
-    stats_legend_handles = [
-        Line2D([0], [0], color="#8B0000", lw=2.0, label="Median"),
-        Line2D(
-            [0], [0],
-            marker="D",
-            color="w",
-            markerfacecolor="#003366",
-            markeredgecolor="white",
-            markersize=6,
-            label="Mean",
-        ),
-        Line2D(
-            [0], [0],
-            marker="o",
-            color="w",
-            markerfacecolor="#4B0082",
-            markeredgecolor="#4B0082",
-            markersize=5,
-            label="Outlier",
-        ),
-    ]
-
-    axis.legend(
-        handles=region_legend_handles + stats_legend_handles,
-        loc="upper right",
-        fontsize=9,
-        frameon=True,
-        ncol=2,
-    )
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.tight_layout()
-    figure.savefig(output_path, dpi=180, bbox_inches="tight")
-    plt.close(figure)
 
 
 def save_per_landmark_nme_csv(
@@ -669,53 +288,7 @@ def extract_face_orientation(sample_id: str) -> str:
         if normalized_name.endswith(suffix):
             return orientation
 
-    raise ValueError(
-        f"Could not infer orientation from sample_id='{sample_id}'."
-    )
-
-
-def plot_yaw_view_boxplots(
-    orientation_to_errors: dict[str, list[list[float]]],
-    output_dir: Path,
-    use_landmark_names: bool = True,
-) -> None:
-    """
-    Generate one per-landmark boxplot for each face orientation.
-
-    Parameters
-    ----------
-    orientation_to_errors : dict[str, list[list[float]]]
-        Mapping from orientation name to per-landmark error lists.
-    output_dir : Path
-        Directory where the plots will be saved.
-    use_landmark_names : bool, optional
-        Whether to use landmark names on the x-axis. Defaults to True.
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    ordered_orientations = [
-        "left",
-        "quarter_left",
-        "frontal",
-        "quarter_right",
-        "right",
-    ]
-
-    for orientation in ordered_orientations:
-        if orientation not in orientation_to_errors:
-            continue
-
-        current_errors = orientation_to_errors[orientation]
-
-        if all(len(values) == 0 for values in current_errors):
-            continue
-
-        plot_per_landmark_boxplot(
-            per_landmark_errors=current_errors,
-            output_path=output_dir / f"boxplot_nme_per_landmark_{orientation}.png",
-            use_landmark_names=use_landmark_names,
-            title=f"Per-landmark NME distribution - {orientation.replace('_', ' ').title()}",
-        )
+    raise ValueError(f"Could not infer orientation from sample_id='{sample_id}'.")
 
 
 def evaluate_checkpoint(
@@ -724,6 +297,7 @@ def evaluate_checkpoint(
     device: torch.device,
     output_dir: str | Path,
     visibility_threshold: float = 0.5,
+    save_predictions: bool = False,
     save_overlays: bool = True,
     show_indices: bool = False,
     use_landmark_names_in_boxplot: bool = True,
@@ -757,15 +331,18 @@ def evaluate_checkpoint(
     """
     output_dir = Path(output_dir)
     figures_dir = output_dir / "figures"
-    predictions_dir = output_dir / "predictions"
-    prediction_overlays_dir = predictions_dir / "overlays"
-    prediction_labels_dir = predictions_dir / "labels"
-
     output_dir.mkdir(parents=True, exist_ok=True)
     figures_dir.mkdir(parents=True, exist_ok=True)
-    predictions_dir.mkdir(parents=True, exist_ok=True)
-    prediction_overlays_dir.mkdir(parents=True, exist_ok=True)
-    prediction_labels_dir.mkdir(parents=True, exist_ok=True)
+
+    predictions_dir = output_dir / "predictions" if save_predictions else None
+    prediction_overlays_dir = predictions_dir / "images" if predictions_dir else None
+    prediction_labels_dir = predictions_dir / "labels" if predictions_dir else None
+    if predictions_dir is not None:
+        predictions_dir.mkdir(parents=True, exist_ok=True)
+        assert prediction_overlays_dir is not None
+        assert prediction_labels_dir is not None
+        prediction_overlays_dir.mkdir(parents=True, exist_ok=True)
+        prediction_labels_dir.mkdir(parents=True, exist_ok=True)
 
     model.eval()
     model.to(device)
@@ -827,11 +404,11 @@ def evaluate_checkpoint(
                 orientation = extract_face_orientation(sample_id)
                 orientation_sample_counts[orientation] += 1
 
-                original_size = _extract_batched_size(
+                original_size = extract_batched_size(
                     batched_size=metadata_batch["original_size"],
                     sample_index=sample_index,
                 )
-                transformed_size = _extract_batched_size(
+                transformed_size = extract_batched_size(
                     batched_size=metadata_batch["transformed_size"],
                     sample_index=sample_index,
                 )
@@ -854,20 +431,20 @@ def evaluate_checkpoint(
                     target_visibility_batch[sample_index].numpy().astype(np.int64)
                 )
 
-                save_prediction_file(
-                    output_path=prediction_labels_dir / f"{sample_id}.txt",
-                    landmarks=predicted_landmarks_original,
-                    visibility=predicted_visibility,
-                )
-
-                if save_overlays:
-                    save_overlay_image(
-                        image_path=image_path,
-                        output_path=prediction_overlays_dir / f"{sample_id}.png",
-                        predicted_landmarks=predicted_landmarks_original,
-                        predicted_visibility=predicted_visibility,
-                        show_indices=show_indices,
+                if prediction_labels_dir is not None:
+                    save_prediction_file(
+                        output_path=prediction_labels_dir / f"{sample_id}.txt",
+                        landmarks=predicted_landmarks_original,
+                        visibility=predicted_visibility,
                     )
+                    if save_overlays and prediction_overlays_dir is not None:
+                        save_landmark_overlay_image(
+                            image_path=image_path,
+                            output_path=prediction_overlays_dir / f"{sample_id}.png",
+                            predicted_landmarks=predicted_landmarks_original,
+                            predicted_visibility=predicted_visibility,
+                            show_indices=show_indices,
+                        )
 
                 current_errors = compute_per_landmark_nme(
                     predicted_landmarks=predicted_landmarks_original,
@@ -898,17 +475,22 @@ def evaluate_checkpoint(
         per_image_nme=per_image_nme,
         output_path=output_dir / "per_image_nme.csv",
     )
+    all_grouped_errors = [per_landmark_errors] + list(orientation_to_errors.values())
+    global_y_limits = compute_global_log_y_limits(all_grouped_errors)
+
     plot_per_landmark_boxplot(
         per_landmark_errors=per_landmark_errors,
         output_path=figures_dir / "boxplot_nme_per_landmark_global.png",
         use_landmark_names=use_landmark_names_in_boxplot,
         title="Per-landmark NME distribution - Global",
+        y_limits=global_y_limits,
     )
 
     plot_yaw_view_boxplots(
         orientation_to_errors=orientation_to_errors,
         output_dir=figures_dir,
         use_landmark_names=use_landmark_names_in_boxplot,
+        y_limits=global_y_limits,
     )
 
     visibility_targets = np.concatenate(all_visibility_targets, axis=0)
@@ -925,14 +507,12 @@ def evaluate_checkpoint(
         output_path=figures_dir / "confusion_matrix_raw.png",
         title="Visibility confusion matrix",
         value_format="d",
-        normalized=False,
     )
     plot_confusion_matrix(
         matrix=confusion_matrix_normalized,
         output_path=figures_dir / "confusion_matrix_normalized.png",
         title="Visibility confusion matrix normalized",
         value_format=".3f",
-        normalized=True,
     )
 
     summary = {
@@ -946,9 +526,15 @@ def evaluate_checkpoint(
         "visibility_threshold": float(visibility_threshold),
         "confusion_matrix_raw": confusion_matrix_raw.tolist(),
         "confusion_matrix_normalized": confusion_matrix_normalized.tolist(),
-        "predictions_dir": str(predictions_dir),
-        "prediction_labels_dir": str(prediction_labels_dir),
-        "prediction_overlays_dir": str(prediction_overlays_dir),
+        "predictions_dir": str(predictions_dir)
+        if predictions_dir is not None
+        else None,
+        "prediction_labels_dir": str(prediction_labels_dir)
+        if prediction_labels_dir is not None
+        else None,
+        "prediction_overlays_dir": str(prediction_overlays_dir)
+        if prediction_overlays_dir is not None
+        else None,
         "orientation_sample_counts": orientation_sample_counts,
     }
 
@@ -963,75 +549,3 @@ def evaluate_checkpoint(
     )
 
     return summary
-
-
-def _extract_batched_size(
-    batched_size: Any,
-    sample_index: int,
-) -> tuple[int, int]:
-    """
-    Extract one `(height, width)` pair from a collated metadata size field.
-
-    PyTorch's default collation may transform a per-sample tuple like
-    `(height, width)` into one of several batched structures:
-    - list[tuple[int, int]]
-    - tuple[list[int], list[int]]
-    - tuple[torch.Tensor, torch.Tensor]
-    - list[torch.Tensor]
-    - torch.Tensor with shape (B, 2)
-
-    Parameters
-    ----------
-    batched_size : Any
-        Collated metadata field corresponding to `original_size` or
-        `transformed_size`.
-    sample_index : int
-        Batch sample index.
-
-    Returns
-    -------
-    tuple[int, int]
-        Size pair as `(height, width)`.
-
-    Raises
-    ------
-    ValueError
-        If the input structure cannot be interpreted as a batched size field.
-    """
-    if isinstance(batched_size, torch.Tensor):
-        if batched_size.ndim == 2 and batched_size.shape[1] == 2:
-            return int(batched_size[sample_index, 0].item()), int(
-                batched_size[sample_index, 1].item()
-            )
-        raise ValueError(
-            f"Unsupported tensor shape for batched size: {tuple(batched_size.shape)}."
-        )
-
-    if isinstance(batched_size, Sequence) and not isinstance(
-        batched_size, (str, bytes)
-    ):
-        if len(batched_size) == 2:
-            first, second = batched_size
-
-            if isinstance(first, torch.Tensor) and isinstance(second, torch.Tensor):
-                if first.ndim == 1 and second.ndim == 1:
-                    return int(first[sample_index].item()), int(
-                        second[sample_index].item()
-                    )
-
-            if isinstance(first, Sequence) and isinstance(second, Sequence):
-                return int(first[sample_index]), int(second[sample_index])
-
-        current_value = batched_size[sample_index]
-
-        if isinstance(current_value, torch.Tensor):
-            if current_value.numel() == 2:
-                flat_value = current_value.view(-1)
-                return int(flat_value[0].item()), int(flat_value[1].item())
-
-        if isinstance(current_value, Sequence) and len(current_value) == 2:
-            return int(current_value[0]), int(current_value[1])
-
-    raise ValueError(
-        f"Could not parse batched size field of type {type(batched_size)}."
-    )

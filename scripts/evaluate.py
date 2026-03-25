@@ -40,9 +40,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--visibility-threshold", type=float, default=None)
-    parser.add_argument("--disable-overlays", action="store_true")
-    parser.add_argument("--show-indices", action="store_true")
-    parser.add_argument("--disable-landmark-names", action="store_true")
+    parser.add_argument("--use-landmark-names", action="store_true")
     parser.add_argument("--save-config", action="store_true")
     return parser.parse_args()
 
@@ -79,12 +77,8 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
         config.seed = args.seed
     if args.visibility_threshold is not None:
         config.visibility_threshold = args.visibility_threshold
-    if args.disable_overlays:
-        config.save_evaluation_overlays = False
-    if args.show_indices:
-        config.show_landmark_indices = True
-    if args.disable_landmark_names:
-        config.use_landmark_names_in_boxplot = False
+    if args.use_landmark_names:
+        config.use_landmark_names_in_boxplot = True
 
     if args.output_dir is None:
         checkpoint_stem = args.checkpoint.stem
@@ -176,8 +170,9 @@ def main() -> None:
         device=device,
         output_dir=output_dir,
         visibility_threshold=config.visibility_threshold,
-        save_overlays=config.save_evaluation_overlays,
-        show_indices=config.show_landmark_indices,
+        save_predictions=False,
+        save_overlays=False,
+        show_indices=False,
         use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
     )
 
