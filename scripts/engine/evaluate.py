@@ -373,7 +373,7 @@ def evaluate_checkpoint(
                 heatmaps=outputs["heatmaps"],
                 image_height=images.shape[2],
                 image_width=images.shape[3],
-                use_subpixel=False,
+                use_subpixel=True,
             ).cpu()
 
             predicted_visibility_logits = outputs["visibility_logits"].cpu()

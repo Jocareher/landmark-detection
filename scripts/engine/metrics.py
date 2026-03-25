@@ -49,7 +49,7 @@ def decode_heatmaps_to_image_coords(
     heatmaps: torch.Tensor,
     image_height: int,
     image_width: int,
-    use_subpixel: bool = False,
+    use_subpixel: bool = True,
 ) -> torch.Tensor:
     """Map heatmap-space coordinates back into image-space pixel coordinates."""
     preds = get_preds_from_heatmaps(heatmaps)
