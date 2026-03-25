@@ -1,5 +1,6 @@
 """Utility helpers for experiments."""
 
+from .logging import tee_terminal_output
 from .model_summary import save_model_summary
 from .reproducibility import save_reproducibility_metadata
 from .runtime import get_default_device, seed_worker, set_seed
@@ -10,4 +11,5 @@ __all__ = [
     "save_reproducibility_metadata",
     "seed_worker",
     "set_seed",
+    "tee_terminal_output",
 ]
