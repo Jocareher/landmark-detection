@@ -10,7 +10,12 @@ import torch
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.config import ExperimentConfig
+from scripts.config import (
+    ExperimentConfig,
+    build_config,
+    config_to_serializable_dict,
+    resolve_evaluation_output_dir,
+)
 from scripts.dataset import build_dataloaders
 from scripts.engine.evaluate import evaluate_checkpoint
 from scripts.models import HRNetLandmarkVisibility
@@ -26,22 +31,77 @@ def parse_args() -> argparse.Namespace:
     argparse.Namespace
         Parsed CLI arguments.
     """
+    defaults = build_config()
     parser = argparse.ArgumentParser(
         description="Evaluate a trained landmark detection checkpoint on the test split.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--checkpoint", type=Path, required=True)
-    parser.add_argument("--dataset-root", type=Path, default=None)
-    parser.add_argument("--output-dir", type=Path, default=None)
-    parser.add_argument("--cache-dir", type=Path, default=None)
-    parser.add_argument("--batch-size", type=int, default=None)
-    parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument(
-        "--device", choices=["auto", "cpu", "cuda", "mps"], default=None
+        "--checkpoint",
+        type=Path,
+        required=True,
+        help="Checkpoint to evaluate on the test split.",
     )
-    parser.add_argument("--seed", type=int, default=None)
-    parser.add_argument("--visibility-threshold", type=float, default=None)
-    parser.add_argument("--use-landmark-names", action="store_true")
-    parser.add_argument("--save-config", action="store_true")
+    parser.add_argument(
+        "--dataset-root",
+        type=Path,
+        default=defaults.dataset_root,
+        help="Root directory that contains the dataset splits.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory where evaluation metrics and figures will be written. If omitted, it is derived from the checkpoint name.",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=defaults.cache_dir,
+        help="Directory used to store cached dataset files.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=defaults.eval_batch_size,
+        help="Mini-batch size for the test dataloader. If omitted, the training batch size from config is reused.",
+    )
+    parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=defaults.num_workers,
+        help="Number of worker processes for the dataloader.",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "cuda", "mps"],
+        default=defaults.device,
+        help="Device used to run evaluation.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=defaults.seed,
+        help="Random seed used for deterministic evaluation.",
+    )
+    parser.add_argument(
+        "--visibility-threshold",
+        type=float,
+        default=defaults.visibility_threshold,
+        help="Threshold applied to visibility logits to obtain binary predictions.",
+    )
+    parser.add_argument(
+        "--use-landmark-names",
+        action="store_true",
+        default=defaults.use_landmark_names_in_boxplot,
+        help="Use landmark names instead of indices on evaluation boxplots.",
+    )
+    parser.add_argument(
+        "--save-config",
+        action="store_true",
+        default=False,
+        help="Save the resolved configuration JSON next to the evaluation outputs.",
+    )
     return parser.parse_args()
 
 
@@ -59,32 +119,20 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     ExperimentConfig
         Resolved config object.
     """
-    config = ExperimentConfig()
-
-    if args.dataset_root is not None:
-        config.dataset_root = args.dataset_root
-    if args.output_dir is not None:
-        config.output_dir = args.output_dir
-    if args.cache_dir is not None:
-        config.cache_dir = args.cache_dir
-    if args.batch_size is not None:
-        config.eval_batch_size = args.batch_size
-    if args.num_workers is not None:
-        config.num_workers = args.num_workers
-    if args.device is not None:
-        config.device = args.device
-    if args.seed is not None:
-        config.seed = args.seed
-    if args.visibility_threshold is not None:
-        config.visibility_threshold = args.visibility_threshold
-    if args.use_landmark_names:
-        config.use_landmark_names_in_boxplot = True
+    config = build_config()
+    config.dataset_root = args.dataset_root
+    config.cache_dir = args.cache_dir
+    config.eval_batch_size = args.batch_size
+    config.num_workers = args.num_workers
+    config.device = args.device
+    config.seed = args.seed
+    config.visibility_threshold = args.visibility_threshold
+    config.use_landmark_names_in_boxplot = args.use_landmark_names
 
     if args.output_dir is None:
-        checkpoint_stem = args.checkpoint.stem
-        config.output_dir = (
-            args.checkpoint.parent / f"{checkpoint_stem}_{config.evaluation_dirname}"
-        )
+        resolve_evaluation_output_dir(config, args.checkpoint)
+    else:
+        config.output_dir = args.output_dir
 
     return config
 
@@ -103,17 +151,8 @@ def maybe_save_config(
     output_dir : Path
         Evaluation output directory.
     """
-    serialized = {
-        key: str(value)
-        if isinstance(value, Path)
-        else list(value)
-        if isinstance(value, tuple)
-        else value
-        for key, value in config.to_dict().items()
-    }
-
     (output_dir / "resolved_config.json").write_text(
-        json.dumps(serialized, indent=2),
+        json.dumps(config_to_serializable_dict(config), indent=2),
         encoding="utf-8",
     )
 
@@ -170,9 +209,9 @@ def main() -> None:
         device=device,
         output_dir=output_dir,
         visibility_threshold=config.visibility_threshold,
-        save_predictions=False,
-        save_overlays=False,
-        show_indices=False,
+        save_predictions=config.save_evaluation_predictions,
+        save_overlays=config.save_evaluation_overlays,
+        show_indices=config.show_landmark_indices,
         use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
     )
 

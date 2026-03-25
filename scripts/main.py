@@ -10,7 +10,12 @@ import torch
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.config import ExperimentConfig
+from scripts.config import (
+    ExperimentConfig,
+    build_config,
+    config_to_serializable_dict,
+    resolve_output_dir,
+)
 from scripts.dataset import build_dataloaders
 from scripts.models import HRNetLandmarkVisibility
 from scripts.utils import (
@@ -24,36 +29,145 @@ from scripts.utils import (
 
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments for the end-to-end training pipeline."""
+    defaults = build_config()
     parser = argparse.ArgumentParser(
-        description="Run the full landmark detection pipeline: train, validate, and test."
+        description="Train the model on train/val and then evaluate the best checkpoint on test.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--dataset-root", type=Path)
-    parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--cache-dir", type=Path)
-    parser.add_argument("--pretrained-weights", type=Path)
     parser.add_argument(
-        "--checkpoint", type=Path, help="Checkpoint to load before continuing training."
+        "--dataset-root",
+        type=Path,
+        default=defaults.dataset_root,
+        help="Root directory that contains the dataset splits.",
     )
-    parser.add_argument("--batch-size", type=int)
-    parser.add_argument("--eval-batch-size", type=int)
-    parser.add_argument("--epochs", type=int)
-    parser.add_argument("--lr", type=float)
-    parser.add_argument("--lambda-heatmap", type=float)
-    parser.add_argument("--lambda-visibility", type=float)
-    parser.add_argument("--seed", type=int)
-    parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"])
-    parser.add_argument("--transfer-mode", choices=["feature_extractor", "fine_tuning"])
-    parser.add_argument("--num-unfrozen-stages", type=int)
-    parser.add_argument("--unfreeze-stem", action="store_true")
-    parser.add_argument("--use-wandb", action="store_true")
-    parser.add_argument("--wandb-project")
-    parser.add_argument("--wandb-run-name")
-    parser.add_argument("--disable-amp", action="store_true")
-    parser.add_argument("--disable-cache", action="store_true")
-    parser.add_argument("--smoke-test", action="store_true")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=defaults.runs_dir,
+        help="Base directory where training runs will be created.",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=defaults.cache_dir,
+        help="Directory used to store cached dataset files.",
+    )
+    parser.add_argument(
+        "--pretrained-weights",
+        type=Path,
+        default=defaults.pretrained_weights,
+        help="Path to the pretrained HRNet weights loaded before training.",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        type=Path,
+        default=None,
+        help="Optional checkpoint to load before continuing training.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=defaults.batch_size,
+        help="Mini-batch size for the training split.",
+    )
+    parser.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=defaults.eval_batch_size,
+        help="Mini-batch size for validation and test. If omitted, training batch size is used.",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=defaults.num_epochs,
+        help="Number of training epochs.",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=defaults.learning_rate,
+        help="Learning rate for the optimizer.",
+    )
+    parser.add_argument(
+        "--lambda-heatmap",
+        type=float,
+        default=defaults.lambda_heatmap,
+        help="Weight assigned to the heatmap loss term.",
+    )
+    parser.add_argument(
+        "--lambda-visibility",
+        type=float,
+        default=defaults.lambda_visibility,
+        help="Weight assigned to the visibility loss term.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=defaults.seed,
+        help="Random seed used for reproducibility.",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "cuda", "mps"],
+        default=defaults.device,
+        help="Device where the model will run.",
+    )
+    parser.add_argument(
+        "--transfer-mode",
+        choices=["feature_extractor", "fine_tuning"],
+        default=defaults.transfer_mode,
+        help="Transfer learning strategy applied to the HRNet backbone.",
+    )
+    parser.add_argument(
+        "--num-unfrozen-stages",
+        type=int,
+        default=defaults.num_unfrozen_stages,
+        help="Number of backbone stages to unfreeze in fine-tuning mode.",
+    )
+    parser.add_argument(
+        "--unfreeze-stem",
+        action="store_true",
+        default=defaults.unfreeze_stem,
+        help="Unfreeze the HRNet stem layers as part of transfer learning.",
+    )
+    parser.add_argument(
+        "--use-wandb",
+        action="store_true",
+        default=defaults.use_wandb,
+        help="Enable Weights & Biases experiment tracking.",
+    )
+    parser.add_argument(
+        "--wandb-project",
+        default=defaults.wandb_project,
+        help="Weights & Biases project name.",
+    )
+    parser.add_argument(
+        "--wandb-run-name",
+        default=defaults.wandb_run_name,
+        help="Explicit run name. If omitted, one is generated automatically.",
+    )
+    parser.add_argument(
+        "--disable-amp",
+        action="store_true",
+        default=not defaults.use_amp,
+        help="Disable automatic mixed precision training.",
+    )
+    parser.add_argument(
+        "--disable-cache",
+        action="store_true",
+        default=not defaults.use_cache,
+        help="Disable dataset cache loading and writing.",
+    )
+    parser.add_argument(
+        "--smoke-test",
+        action="store_true",
+        default=defaults.run_smoke_test,
+        help="Run a single optimization step before full training.",
+    )
     parser.add_argument(
         "--save-config",
         action="store_true",
+        default=False,
         help="Save resolved config JSON into output dir.",
     )
     return parser.parse_args()
@@ -61,72 +175,38 @@ def parse_args() -> argparse.Namespace:
 
 def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     """Merge CLI overrides into the default experiment configuration."""
-    config = ExperimentConfig()
-    if args.dataset_root is not None:
-        config.dataset_root = args.dataset_root
-    if args.output_dir is not None:
-        config.runs_dir = args.output_dir
-    if args.cache_dir is not None:
-        config.cache_dir = args.cache_dir
-    if args.pretrained_weights is not None:
-        config.pretrained_weights = args.pretrained_weights
-    if args.batch_size is not None:
-        config.batch_size = args.batch_size
-    if args.eval_batch_size is not None:
-        config.eval_batch_size = args.eval_batch_size
-    if args.epochs is not None:
-        config.num_epochs = args.epochs
-    if args.lr is not None:
-        config.learning_rate = args.lr
-    if args.lambda_heatmap is not None:
-        config.lambda_heatmap = args.lambda_heatmap
-    if args.lambda_visibility is not None:
-        config.lambda_visibility = args.lambda_visibility
-    if args.seed is not None:
-        config.seed = args.seed
-    if args.device is not None:
-        config.device = args.device
-    if args.transfer_mode is not None:
-        config.transfer_mode = args.transfer_mode
-    if args.num_unfrozen_stages is not None:
-        config.num_unfrozen_stages = args.num_unfrozen_stages
-    if args.unfreeze_stem:
-        config.unfreeze_stem = True
-    if args.use_wandb:
-        config.use_wandb = True
-    if args.wandb_project is not None:
-        config.wandb_project = args.wandb_project
-    if args.wandb_run_name is not None:
-        config.wandb_run_name = args.wandb_run_name
-    if args.disable_amp:
-        config.use_amp = False
-    if args.disable_cache:
-        config.use_cache = False
-    if args.smoke_test:
-        config.run_smoke_test = True
+    config = build_config()
+    config.dataset_root = args.dataset_root
+    config.runs_dir = args.output_dir
+    config.cache_dir = args.cache_dir
+    config.pretrained_weights = args.pretrained_weights
+    config.batch_size = args.batch_size
+    config.eval_batch_size = args.eval_batch_size
+    config.num_epochs = args.epochs
+    config.learning_rate = args.lr
+    config.lambda_heatmap = args.lambda_heatmap
+    config.lambda_visibility = args.lambda_visibility
+    config.seed = args.seed
+    config.device = args.device
+    config.transfer_mode = args.transfer_mode
+    config.num_unfrozen_stages = args.num_unfrozen_stages
+    config.unfreeze_stem = args.unfreeze_stem
+    config.use_wandb = args.use_wandb
+    config.wandb_project = args.wandb_project
+    config.wandb_run_name = args.wandb_run_name
+    config.use_amp = not args.disable_amp
+    config.use_cache = not args.disable_cache
+    config.run_smoke_test = args.smoke_test
     return config
 
 
 def maybe_save_config(config: ExperimentConfig) -> None:
     """Persist the resolved configuration inside the active run directory."""
     config.output_dir.mkdir(parents=True, exist_ok=True)
-    serialized = serialize_config(config)
+    serialized = config_to_serializable_dict(config)
     (config.output_dir / "resolved_config.json").write_text(
         json.dumps(serialized, indent=2), encoding="utf-8"
     )
-
-
-def serialize_config(config: ExperimentConfig) -> dict[str, object]:
-    """Convert the resolved experiment config into JSON-serializable values."""
-    serialized = {
-        key: str(value)
-        if isinstance(value, Path)
-        else list(value)
-        if isinstance(value, tuple)
-        else value
-        for key, value in config.to_dict().items()
-    }
-    return serialized
 
 
 def build_model(config: ExperimentConfig) -> HRNetLandmarkVisibility:
@@ -153,7 +233,7 @@ def main() -> None:
     from scripts.engine import evaluate_checkpoint, smoke_test_single_batch, train_model
 
     config = build_config_from_args(args)
-    config.resolve_output_dir()
+    resolve_output_dir(config)
     config.output_dir.mkdir(parents=True, exist_ok=True)
     with tee_terminal_output(config.output_dir / "train.log") as train_log_path:
         print("[INFO] Parsing CLI arguments...")
@@ -205,7 +285,7 @@ def main() -> None:
         save_reproducibility_metadata(
             output_dir=config.output_dir,
             parsed_args=vars(args),
-            resolved_config=serialize_config(config),
+            resolved_config=config_to_serializable_dict(config),
             include_git_diff=config.include_git_diff,
             include_pip_freeze=config.include_pip_freeze,
         )
@@ -297,8 +377,8 @@ def main() -> None:
             device=device,
             output_dir=test_output_dir,
             visibility_threshold=config.visibility_threshold,
-            save_predictions=True,
-            save_overlays=config.save_evaluation_overlays,
+            save_predictions=config.save_test_predictions_after_training,
+            save_overlays=config.save_test_overlays_after_training,
             show_indices=config.show_landmark_indices,
             use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
         )
