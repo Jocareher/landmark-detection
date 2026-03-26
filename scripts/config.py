@@ -97,6 +97,7 @@ VISUALIZE_EVERY_N_EPOCHS = 5
 NUM_VISUALIZATION_IMAGES = 5
 OVERLAY_POINT_RADIUS = 10
 OVERLAY_LINE_WIDTH = 4
+OVERLAY_CONNECTION_COLOR = "#FFD400"
 
 
 DEFAULT_CONFIG_VALUES: dict[str, Any] = {
@@ -153,6 +154,7 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "num_visualization_images": NUM_VISUALIZATION_IMAGES,
     "overlay_point_radius": OVERLAY_POINT_RADIUS,
     "overlay_line_width": OVERLAY_LINE_WIDTH,
+    "overlay_connection_color": OVERLAY_CONNECTION_COLOR,
 }
 
 

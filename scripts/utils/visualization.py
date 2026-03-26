@@ -218,26 +218,23 @@ def save_landmark_overlay_image(
     show_indices: bool = False,
     point_radius: int = 10,
     line_width: int = 4,
+    line_color: str = "#FFD400",
 ) -> None:
     """Render predicted landmarks on top of the original image and save it."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     image = Image.open(image_path).convert("RGB")
     draw = ImageDraw.Draw(image)
-    landmark_colors = get_landmark_region_colors(len(predicted_landmarks))
 
     for landmark_range, close_loop in get_landmark_connection_definitions():
         connected_points = []
-        line_color = None
         for landmark_index in landmark_range:
             if landmark_index >= len(predicted_landmarks):
                 continue
             x_coord, y_coord = predicted_landmarks[landmark_index]
             connected_points.append((float(x_coord), float(y_coord)))
-            if line_color is None:
-                line_color = landmark_colors[landmark_index]
 
-        if len(connected_points) >= 2 and line_color is not None:
+        if len(connected_points) >= 2:
             draw.line(
                 connected_points, fill=line_color, width=line_width, joint="curve"
             )
@@ -251,7 +248,7 @@ def save_landmark_overlay_image(
 
     for landmark_index, (x_coord, y_coord) in enumerate(predicted_landmarks):
         visibility_value = int(predicted_visibility[landmark_index])
-        color = landmark_colors[landmark_index]
+        color = "blue" if visibility_value == 0 else "red"
         outline_color = "white" if visibility_value == 1 else "black"
 
         left = x_coord - point_radius

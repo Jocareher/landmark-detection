@@ -381,6 +381,9 @@ def main() -> None:
             save_overlays=config.save_test_overlays_after_training,
             show_indices=config.show_landmark_indices,
             use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
+            point_radius=config.overlay_point_radius,
+            line_width=config.overlay_line_width,
+            line_color=config.overlay_connection_color,
         )
         print("[INFO] Test evaluation finished.")
         print(f"[INFO] Test mean NME: {test_summary['mean_nme']:.6f}")

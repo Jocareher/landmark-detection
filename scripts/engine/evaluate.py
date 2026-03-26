@@ -301,6 +301,9 @@ def evaluate_checkpoint(
     save_overlays: bool = True,
     show_indices: bool = False,
     use_landmark_names_in_boxplot: bool = True,
+    point_radius: int = 10,
+    line_width: int = 4,
+    line_color: str = "#FFD400",
 ) -> dict[str, Any]:
     """
     Evaluate a trained checkpoint on a dataset and save all requested artifacts.
@@ -444,6 +447,9 @@ def evaluate_checkpoint(
                             predicted_landmarks=predicted_landmarks_original,
                             predicted_visibility=predicted_visibility,
                             show_indices=show_indices,
+                            point_radius=point_radius,
+                            line_width=line_width,
+                            line_color=line_color,
                         )
 
                 current_errors = compute_per_landmark_nme(

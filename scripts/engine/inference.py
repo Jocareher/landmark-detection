@@ -57,6 +57,9 @@ def export_inference_outputs(
     visibility_threshold: float = 0.5,
     save_overlays: bool = True,
     show_indices: bool = False,
+    point_radius: int = 10,
+    line_width: int = 4,
+    line_color: str = "#FFD400",
 ) -> dict[str, Any]:
     """Run inference and persist predicted labels and optional overlays."""
     output_dir = Path(output_dir)
@@ -132,6 +135,9 @@ def export_inference_outputs(
                         predicted_landmarks=predicted_landmarks_original,
                         predicted_visibility=predicted_visibility,
                         show_indices=show_indices,
+                        point_radius=point_radius,
+                        line_width=line_width,
+                        line_color=line_color,
                     )
 
                 saved_samples += 1
