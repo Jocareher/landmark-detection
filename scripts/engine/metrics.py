@@ -44,27 +44,52 @@ def get_preds_from_heatmaps(heatmaps: torch.Tensor) -> torch.Tensor:
     pred_y = torch.div(max_indices, heatmap_width, rounding_mode="floor").float()
     return torch.stack([pred_x, pred_y], dim=-1)
 
-
 def decode_heatmaps_to_image_coords(
     heatmaps: torch.Tensor,
     image_height: int,
     image_width: int,
     use_subpixel: bool = True,
 ) -> torch.Tensor:
-    """Map heatmap-space coordinates back into image-space pixel coordinates."""
+    """Convert heatmap-space landmark coordinates to image-space pixel coordinates.
+    
+    This function transforms predicted landmark positions from heatmap coordinates
+    back to the original image coordinate system. It optionally applies subpixel
+    refinement using gradient information to improve localization accuracy.
+    
+    Args:
+        heatmaps: Tensor of shape (B, K, H, W) containing predicted heatmaps,
+                    where B is batch size, K is number of landmarks, H and W are
+                    heatmap spatial dimensions.
+        image_height: Height of the original input image in pixels.
+        image_width: Width of the original input image in pixels.
+        use_subpixel: If True, refine predictions using local gradient information
+                        for improved subpixel accuracy. Default is True.
+    
+    Returns:
+        Tensor of shape (B, K, 2) with landmark coordinates in image space,
+        where coordinates are (x, y) format.
+    """
+    # Extract integer argmax coordinates from heatmaps
     preds = get_preds_from_heatmaps(heatmaps)
     batch_size, num_landmarks, heatmap_height, heatmap_width = heatmaps.shape
 
+    # Apply subpixel refinement if enabled
     if use_subpixel:
         refined_preds = preds.clone()
+        # Iterate over each sample and landmark in the batch
         for batch_index in range(batch_size):
             for landmark_index in range(num_landmarks):
+                # Get integer peak position
                 px = int(preds[batch_index, landmark_index, 0].item())
                 py = int(preds[batch_index, landmark_index, 1].item())
+                
+                # Only refine if peak is not at heatmap boundary
                 if 1 <= px < heatmap_width - 1 and 1 <= py < heatmap_height - 1:
                     current_map = heatmaps[batch_index, landmark_index]
+                    # Compute gradients using finite differences
                     diff_x = current_map[py, px + 1] - current_map[py, px - 1]
                     diff_y = current_map[py + 1, px] - current_map[py - 1, px]
+                    # Apply small offset in gradient direction for refinement
                     refined_preds[batch_index, landmark_index, 0] += (
                         diff_x.sign() * 0.25
                     )
@@ -73,6 +98,7 @@ def decode_heatmaps_to_image_coords(
                     )
         preds = refined_preds
 
+    # Scale from heatmap coordinates to image coordinates
     scale_x = image_width / float(heatmap_width)
     scale_y = image_height / float(heatmap_height)
     preds_image = preds.clone()
