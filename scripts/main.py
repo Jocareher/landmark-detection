@@ -386,8 +386,12 @@ def main() -> None:
             line_color=config.overlay_connection_color,
         )
         print("[INFO] Test evaluation finished.")
-        print(f"[INFO] Test mean NME: {test_summary['mean_nme']:.6f}")
-        print(f"[INFO] Test median NME: {test_summary['median_nme']:.6f}")
+        print(f"[INFO] Test mean NME box: {test_summary['mean_nme_box']:.6f}")
+        print(f"[INFO] Test median NME box: {test_summary['median_nme_box']:.6f}")
+        if test_summary["mean_nme_interocular"] is not None:
+            print(
+                f"[INFO] Test mean NME interocular: {test_summary['mean_nme_interocular']:.6f}"
+            )
         print(
             f"[INFO] Test visibility accuracy: {test_summary['visibility_accuracy']:.6f}"
         )

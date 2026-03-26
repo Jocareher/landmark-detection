@@ -100,7 +100,6 @@ OVERLAY_LINE_WIDTH = 10
 OVERLAY_CONNECTION_COLOR = "#A9A9A9"
 
 
-
 DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "dataset_root": DATASET_ROOT,
     "runs_dir": RUNS_DIR,

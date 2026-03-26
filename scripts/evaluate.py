@@ -219,8 +219,10 @@ def main() -> None:
     )
 
     print("[INFO] Evaluation finished.")
-    print(f"[INFO] Mean NME: {summary['mean_nme']:.6f}")
-    print(f"[INFO] Median NME: {summary['median_nme']:.6f}")
+    print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.6f}")
+    print(f"[INFO] Median NME box: {summary['median_nme_box']:.6f}")
+    if summary["mean_nme_interocular"] is not None:
+        print(f"[INFO] Mean NME interocular: {summary['mean_nme_interocular']:.6f}")
     print(f"[INFO] Visibility accuracy: {summary['visibility_accuracy']:.6f}")
     print(f"[INFO] Labels dir: {summary['prediction_labels_dir']}")
     if summary["prediction_overlays_dir"] is not None:

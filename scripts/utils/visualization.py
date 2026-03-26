@@ -460,6 +460,7 @@ def plot_yaw_view_boxplots(
     output_dir: Path,
     use_landmark_names: bool = True,
     y_limits: tuple[float, float] | None = None,
+    orientation_metrics: dict[str, dict[str, float | None]] | None = None,
 ) -> None:
     """Generate one per-landmark NME boxplot for each face orientation."""
     ordered_orientations = [
@@ -478,10 +479,26 @@ def plot_yaw_view_boxplots(
         if all(len(values) == 0 for values in current_errors):
             continue
 
+        current_metrics = (
+            orientation_metrics.get(orientation, {}) if orientation_metrics else {}
+        )
+        title = (
+            f"Per-landmark NME distribution - {orientation.replace('_', ' ').title()}"
+        )
+        summary_parts = []
+        if current_metrics.get("mean_nme_box") is not None:
+            summary_parts.append(f"Mean NME box: {current_metrics['mean_nme_box']:.6f}")
+        if current_metrics.get("mean_nme_interocular") is not None:
+            summary_parts.append(
+                f"Mean NME interocular: {current_metrics['mean_nme_interocular']:.6f}"
+            )
+        if summary_parts:
+            title = f"{title}\n" + " | ".join(summary_parts)
+
         plot_per_landmark_boxplot(
             per_landmark_errors=current_errors,
             output_path=output_dir / f"boxplot_nme_per_landmark_{orientation}.png",
             use_landmark_names=use_landmark_names,
-            title=f"Per-landmark NME distribution - {orientation.replace('_', ' ').title()}",
+            title=title,
             y_limits=y_limits,
         )

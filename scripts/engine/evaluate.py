@@ -77,6 +77,32 @@ def compute_per_landmark_nme(
     return point_errors / normalization
 
 
+def compute_interocular_normalization_factor(
+    target_landmarks: np.ndarray,
+    left_eye_corner_index: int = 36,
+    right_eye_corner_index: int = 45,
+    eps: float = 1e-6,
+) -> float:
+    """Compute the interocular distance using the outer eye corners."""
+    left_corner = target_landmarks[left_eye_corner_index]
+    right_corner = target_landmarks[right_eye_corner_index]
+    return float(max(np.linalg.norm(right_corner - left_corner), eps))
+
+
+def compute_per_landmark_interocular_nme(
+    predicted_landmarks: np.ndarray,
+    target_landmarks: np.ndarray,
+    eps: float = 1e-6,
+) -> np.ndarray:
+    """Compute per-landmark NME normalized by interocular distance."""
+    normalization = compute_interocular_normalization_factor(
+        target_landmarks=target_landmarks,
+        eps=eps,
+    )
+    point_errors = np.linalg.norm(predicted_landmarks - target_landmarks, axis=1)
+    return point_errors / normalization
+
+
 def compute_binary_confusion_matrix(
     targets: np.ndarray,
     predictions: np.ndarray,
@@ -151,8 +177,9 @@ def save_metrics_summary_csv(
     rows: list[tuple[str, Any]] = [
         ("num_samples", summary.get("num_samples")),
         ("num_landmarks", summary.get("num_landmarks")),
-        ("mean_nme", summary.get("mean_nme")),
-        ("median_nme", summary.get("median_nme")),
+        ("mean_nme_box", summary.get("mean_nme_box")),
+        ("median_nme_box", summary.get("median_nme_box")),
+        ("mean_nme_interocular", summary.get("mean_nme_interocular")),
         ("visibility_accuracy", summary.get("visibility_accuracy")),
         ("visibility_threshold", summary.get("visibility_threshold")),
     ]
@@ -184,6 +211,19 @@ def save_metrics_summary_csv(
     if orientation_sample_counts is not None:
         for orientation_name, count in orientation_sample_counts.items():
             rows.append((f"samples_{orientation_name}", count))
+
+    orientation_metrics = summary.get("orientation_metrics")
+    if orientation_metrics is not None:
+        for orientation_name, metrics in orientation_metrics.items():
+            rows.append(
+                (f"mean_nme_box_{orientation_name}", metrics.get("mean_nme_box"))
+            )
+            rows.append(
+                (
+                    f"mean_nme_interocular_{orientation_name}",
+                    metrics.get("mean_nme_interocular"),
+                )
+            )
 
     with output_path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
@@ -226,7 +266,7 @@ def save_per_landmark_nme_csv(
 
 
 def save_per_image_nme_csv(
-    per_image_nme: list[tuple[str, float]],
+    per_image_nme: list[dict[str, Any]],
     output_path: Path,
 ) -> None:
     """
@@ -234,8 +274,8 @@ def save_per_image_nme_csv(
 
     Parameters
     ----------
-    per_image_nme : list[tuple[str, float]]
-        List of (sample_id, mean_nme).
+    per_image_nme : list[dict[str, Any]]
+        Per-image NME metrics.
     output_path : Path
         Destination CSV path.
     """
@@ -243,9 +283,23 @@ def save_per_image_nme_csv(
 
     with output_path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
-        writer.writerow(["sample_id", "mean_nme"])
-        for sample_id, mean_nme in per_image_nme:
-            writer.writerow([sample_id, float(mean_nme)])
+        writer.writerow(
+            [
+                "sample_id",
+                "orientation",
+                "mean_nme_box",
+                "mean_nme_interocular",
+            ]
+        )
+        for row in per_image_nme:
+            writer.writerow(
+                [
+                    row["sample_id"],
+                    row["orientation"],
+                    float(row["mean_nme_box"]),
+                    row["mean_nme_interocular"],
+                ]
+            )
 
 
 def extract_face_orientation(sample_id: str) -> str:
@@ -289,6 +343,23 @@ def extract_face_orientation(sample_id: str) -> str:
             return orientation
 
     raise ValueError(f"Could not infer orientation from sample_id='{sample_id}'.")
+
+
+def _build_boxplot_title(
+    label: str,
+    mean_nme_box: float | None,
+    mean_nme_interocular: float | None = None,
+) -> str:
+    """Build a boxplot title that includes the requested mean NME summaries."""
+    title = f"Per-landmark NME distribution - {label}"
+    summary_parts = []
+    if mean_nme_box is not None:
+        summary_parts.append(f"Mean NME box: {mean_nme_box:.6f}")
+    if mean_nme_interocular is not None:
+        summary_parts.append(f"Mean NME interocular: {mean_nme_interocular:.6f}")
+    if summary_parts:
+        title = f"{title}\n" + " | ".join(summary_parts)
+    return title
 
 
 def evaluate_checkpoint(
@@ -351,13 +422,20 @@ def evaluate_checkpoint(
     model.to(device)
 
     per_landmark_errors: list[list[float]] | None = None
-    per_image_nme: list[tuple[str, float]] = []
+    per_image_nme: list[dict[str, Any]] = []
     all_visibility_targets: list[np.ndarray] = []
     all_visibility_predictions: list[np.ndarray] = []
 
     orientation_names = ["left", "quarter_left", "frontal", "quarter_right", "right"]
 
     orientation_to_errors: dict[str, list[list[float]]] = {}
+    orientation_to_box_nme_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
+    orientation_to_interocular_nme_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
+    global_interocular_nme_values: list[float] = []
 
     orientation_sample_counts = {
         "left": 0,
@@ -456,6 +534,21 @@ def evaluate_checkpoint(
                     predicted_landmarks=predicted_landmarks_original,
                     target_landmarks=target_landmarks_original,
                 )
+                current_mean_box_nme = float(current_errors.mean())
+
+                current_mean_interocular_nme: float | None = None
+                if orientation in {"frontal", "quarter_left", "quarter_right"}:
+                    current_interocular_errors = compute_per_landmark_interocular_nme(
+                        predicted_landmarks=predicted_landmarks_original,
+                        target_landmarks=target_landmarks_original,
+                    )
+                    current_mean_interocular_nme = float(
+                        current_interocular_errors.mean()
+                    )
+                    orientation_to_interocular_nme_values[orientation].append(
+                        current_mean_interocular_nme
+                    )
+                    global_interocular_nme_values.append(current_mean_interocular_nme)
 
                 for landmark_index, error_value in enumerate(current_errors):
                     per_landmark_errors[landmark_index].append(float(error_value))
@@ -465,7 +558,15 @@ def evaluate_checkpoint(
                         float(error_value)
                     )
 
-                per_image_nme.append((sample_id, float(current_errors.mean())))
+                orientation_to_box_nme_values[orientation].append(current_mean_box_nme)
+                per_image_nme.append(
+                    {
+                        "sample_id": sample_id,
+                        "orientation": orientation,
+                        "mean_nme_box": current_mean_box_nme,
+                        "mean_nme_interocular": current_mean_interocular_nme,
+                    }
+                )
 
                 all_visibility_targets.append(target_visibility.reshape(-1))
                 all_visibility_predictions.append(predicted_visibility.reshape(-1))
@@ -488,7 +589,15 @@ def evaluate_checkpoint(
         per_landmark_errors=per_landmark_errors,
         output_path=figures_dir / "boxplot_nme_per_landmark_global.png",
         use_landmark_names=use_landmark_names_in_boxplot,
-        title="Per-landmark NME distribution - Global",
+        title=_build_boxplot_title(
+            label="Global",
+            mean_nme_box=float(np.mean([row["mean_nme_box"] for row in per_image_nme])),
+            mean_nme_interocular=(
+                float(np.mean(global_interocular_nme_values))
+                if global_interocular_nme_values
+                else None
+            ),
+        ),
         y_limits=global_y_limits,
     )
 
@@ -497,6 +606,17 @@ def evaluate_checkpoint(
         output_dir=figures_dir,
         use_landmark_names=use_landmark_names_in_boxplot,
         y_limits=global_y_limits,
+        orientation_metrics={
+            orientation: {
+                "mean_nme_box": (float(np.mean(values)) if values else None),
+                "mean_nme_interocular": (
+                    float(np.mean(orientation_to_interocular_nme_values[orientation]))
+                    if orientation_to_interocular_nme_values[orientation]
+                    else None
+                ),
+            }
+            for orientation, values in orientation_to_box_nme_values.items()
+        },
     )
 
     visibility_targets = np.concatenate(all_visibility_targets, axis=0)
@@ -524,8 +644,15 @@ def evaluate_checkpoint(
     summary = {
         "num_samples": int(len(per_image_nme)),
         "num_landmarks": int(len(per_landmark_errors)),
-        "mean_nme": float(np.mean([value for _, value in per_image_nme])),
-        "median_nme": float(np.median([value for _, value in per_image_nme])),
+        "mean_nme_box": float(np.mean([row["mean_nme_box"] for row in per_image_nme])),
+        "median_nme_box": float(
+            np.median([row["mean_nme_box"] for row in per_image_nme])
+        ),
+        "mean_nme_interocular": (
+            float(np.mean(global_interocular_nme_values))
+            if global_interocular_nme_values
+            else None
+        ),
         "visibility_accuracy": float(
             (visibility_targets == visibility_predictions).mean()
         ),
@@ -542,6 +669,17 @@ def evaluate_checkpoint(
         if prediction_overlays_dir is not None
         else None,
         "orientation_sample_counts": orientation_sample_counts,
+        "orientation_metrics": {
+            orientation: {
+                "mean_nme_box": float(np.mean(box_values)) if box_values else None,
+                "mean_nme_interocular": (
+                    float(np.mean(orientation_to_interocular_nme_values[orientation]))
+                    if orientation_to_interocular_nme_values[orientation]
+                    else None
+                ),
+            }
+            for orientation, box_values in orientation_to_box_nme_values.items()
+        },
     }
 
     save_metrics_summary_csv(
