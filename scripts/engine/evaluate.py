@@ -13,6 +13,7 @@ from .metrics import decode_heatmaps_to_image_coords
 from .postprocessing import extract_batched_size, project_landmarks_to_original_size
 from ..utils.predictions import save_prediction_file
 from ..utils.visualization import (
+    compute_global_linear_y_limits,
     compute_global_log_y_limits,
     get_default_landmark_names,
     plot_confusion_matrix,
@@ -600,10 +601,11 @@ def evaluate_checkpoint(
     )
     all_grouped_errors = [per_landmark_errors] + list(orientation_to_errors.values())
     global_y_limits = compute_global_log_y_limits(all_grouped_errors)
+    global_linear_y_limits = compute_global_linear_y_limits(all_grouped_errors)
 
     plot_per_landmark_boxplot(
         per_landmark_errors=per_landmark_errors,
-        output_path=figures_dir / "boxplot_nme_per_landmark_global.png",
+        output_path=figures_dir / "boxplot_nme_per_landmark_global_log.png",
         use_landmark_names=use_landmark_names_in_boxplot,
         title=_build_boxplot_title(
             label="Global",
@@ -615,6 +617,23 @@ def evaluate_checkpoint(
             ),
         ),
         y_limits=global_y_limits,
+        y_scale="log",
+    )
+    plot_per_landmark_boxplot(
+        per_landmark_errors=per_landmark_errors,
+        output_path=figures_dir / "boxplot_nme_per_landmark_global_linear.png",
+        use_landmark_names=use_landmark_names_in_boxplot,
+        title=_build_boxplot_title(
+            label="Global",
+            mean_nme_box=float(np.mean([row["mean_nme_box"] for row in per_image_nme])),
+            mean_nme_interocular=(
+                float(np.mean(global_interocular_nme_values))
+                if global_interocular_nme_values
+                else None
+            ),
+        ),
+        y_limits=global_linear_y_limits,
+        y_scale="linear",
     )
 
     plot_yaw_view_boxplots(
@@ -622,6 +641,27 @@ def evaluate_checkpoint(
         output_dir=figures_dir,
         use_landmark_names=use_landmark_names_in_boxplot,
         y_limits=global_y_limits,
+        y_scale="log",
+        filename_suffix="log",
+        orientation_metrics={
+            orientation: {
+                "mean_nme_box": (float(np.mean(values)) if values else None),
+                "mean_nme_interocular": (
+                    float(np.mean(orientation_to_interocular_nme_values[orientation]))
+                    if orientation_to_interocular_nme_values[orientation]
+                    else None
+                ),
+            }
+            for orientation, values in orientation_to_box_nme_values.items()
+        },
+    )
+    plot_yaw_view_boxplots(
+        orientation_to_errors=orientation_to_errors,
+        output_dir=figures_dir,
+        use_landmark_names=use_landmark_names_in_boxplot,
+        y_limits=global_linear_y_limits,
+        y_scale="linear",
+        filename_suffix="linear",
         orientation_metrics={
             orientation: {
                 "mean_nme_box": (float(np.mean(values)) if values else None),

@@ -24,6 +24,7 @@ from .postprocessing import (
 )
 from ..utils.predictions import save_prediction_file
 from ..utils.visualization import (
+    compute_global_linear_y_limits,
     compute_global_log_y_limits,
     plot_confusion_matrix,
     plot_per_landmark_boxplot,
@@ -225,12 +226,22 @@ def evaluate_natural_checkpoint(
 
     if any(len(values) > 0 for values in per_landmark_errors):
         global_y_limits = compute_global_log_y_limits([per_landmark_errors])
+        global_linear_y_limits = compute_global_linear_y_limits([per_landmark_errors])
         plot_per_landmark_boxplot(
             per_landmark_errors=per_landmark_errors,
-            output_path=figures_dir / "boxplot_nme_per_landmark_global.png",
+            output_path=figures_dir / "boxplot_nme_per_landmark_global_log.png",
             use_landmark_names=use_landmark_names_in_boxplot,
             title="Per-landmark NME distribution - Natural mode",
             y_limits=global_y_limits,
+            y_scale="log",
+        )
+        plot_per_landmark_boxplot(
+            per_landmark_errors=per_landmark_errors,
+            output_path=figures_dir / "boxplot_nme_per_landmark_global_linear.png",
+            use_landmark_names=use_landmark_names_in_boxplot,
+            title="Per-landmark NME distribution - Natural mode",
+            y_limits=global_linear_y_limits,
+            y_scale="linear",
         )
 
     visibility_targets = np.concatenate(all_visibility_targets, axis=0)

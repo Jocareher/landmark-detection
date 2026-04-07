@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -76,6 +77,132 @@ class InferenceImageFolderDataset(Dataset):
         }
 
 
+class DetectorExportInferenceDataset(Dataset):
+    """Inference dataset for detector-export crops with optional reprojection metadata."""
+
+    def __init__(
+        self,
+        export_root: str | Path,
+        config: ExperimentConfig,
+        source_root: str | Path | None = None,
+    ) -> None:
+        self.export_root = Path(export_root)
+        self.images_dir = self.export_root / "images"
+        self.metadata_dir = self.export_root / "metadata"
+        self.source_root = Path(source_root) if source_root is not None else None
+        self.config = config
+
+        if not self.images_dir.exists():
+            raise FileNotFoundError(
+                f"Detector export images directory not found: {self.images_dir}"
+            )
+        if not self.metadata_dir.exists():
+            raise FileNotFoundError(
+                f"Detector export metadata directory not found: {self.metadata_dir}"
+            )
+
+        self.image_paths = sorted(
+            path
+            for path in self.images_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in VALID_IMAGE_EXTENSIONS
+        )
+        if not self.image_paths:
+            raise RuntimeError(
+                f"No detector-export crop images found under {self.images_dir}."
+            )
+
+        self.mean = torch.tensor(config.normalization_mean, dtype=torch.float32).view(
+            3, 1, 1
+        )
+        self.std = torch.tensor(config.normalization_std, dtype=torch.float32).view(
+            3, 1, 1
+        )
+
+    def __len__(self) -> int:
+        return len(self.image_paths)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        image_path = self.image_paths[index]
+        metadata_path = self.metadata_dir / f"{image_path.stem}.json"
+        if not metadata_path.exists():
+            raise FileNotFoundError(
+                f"Metadata file not found for crop '{image_path.name}'."
+            )
+
+        with metadata_path.open("r", encoding="utf-8") as file:
+            metadata_json = json.load(file)
+        if not isinstance(metadata_json, dict):
+            raise ValueError(f"Expected a JSON object in {metadata_path}.")
+
+        image = Image.open(image_path).convert("RGB")
+        crop_width, crop_height = image.size
+        target_height, target_width = self.config.image_size
+        resized_image = image.resize((target_width, target_height), Image.BILINEAR)
+        image_np = np.asarray(resized_image, dtype=np.float32) / 255.0
+        image_tensor = torch.from_numpy(image_np).permute(2, 0, 1).contiguous()
+        image_tensor = (image_tensor - self.mean) / self.std
+
+        source_image_path = self._resolve_source_image_path(
+            metadata=metadata_json,
+            metadata_path=metadata_path,
+        )
+        original_width, original_height = self._load_image_size(source_image_path)
+        crop_id = str(metadata_json.get("crop_id") or image_path.stem)
+
+        metadata = {
+            "sample_id": crop_id,
+            "image_path": str(image_path),
+            "crop_image_path": str(image_path),
+            "source_image_path": str(source_image_path),
+            "original_size": (original_height, original_width),
+            "crop_size": (crop_height, crop_width),
+            "transformed_size": (target_height, target_width),
+            "transform_crop_to_orig": torch.tensor(
+                np.asarray(
+                    metadata_json.get("transform_crop_to_orig"), dtype=np.float32
+                ),
+                dtype=torch.float32,
+            ),
+        }
+        return {
+            "image": image_tensor,
+            "metadata": metadata,
+        }
+
+    def _resolve_source_image_path(
+        self,
+        metadata: dict[str, Any],
+        metadata_path: Path,
+    ) -> Path:
+        """Resolve a source image path stored in detector-export metadata."""
+        raw_path = metadata.get("source_image_path")
+        if not raw_path:
+            raise KeyError(f"Missing 'source_image_path' in {metadata_path}.")
+
+        source_path = Path(str(raw_path))
+        candidate_paths = []
+        if source_path.is_absolute():
+            candidate_paths.append(source_path)
+        else:
+            if self.source_root is not None:
+                candidate_paths.append(self.source_root / source_path)
+            candidate_paths.append(self.export_root / source_path)
+            candidate_paths.append(metadata_path.parent / source_path)
+
+        for candidate_path in candidate_paths:
+            if candidate_path.exists():
+                return candidate_path.resolve()
+
+        raise FileNotFoundError(
+            f"Could not resolve source image path '{raw_path}' from {metadata_path}."
+        )
+
+    @staticmethod
+    def _load_image_size(image_path: Path) -> tuple[int, int]:
+        with Image.open(image_path) as image:
+            return image.size
+
+
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments for folder-based standalone inference."""
     defaults = build_config()
@@ -144,6 +271,18 @@ def parse_args() -> argparse.Namespace:
         help="Draw landmark indices next to each predicted point.",
     )
     parser.add_argument(
+        "--project-to-original",
+        action="store_true",
+        default=False,
+        help="When detector-export metadata is available, reproject predictions to original-image coordinates and draw overlays on the original source image.",
+    )
+    parser.add_argument(
+        "--source-root",
+        type=Path,
+        default=None,
+        help="Optional root used to resolve relative source_image_path values from detector-export metadata.",
+    )
+    parser.add_argument(
         "--save-config",
         action="store_true",
         default=False,
@@ -162,6 +301,8 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.visibility_threshold = args.visibility_threshold
     config.save_inference_overlays = not args.disable_overlays
     config.show_landmark_indices = args.show_indices
+    config.project_to_original = args.project_to_original
+    config.source_root = args.source_root
 
     if args.output_dir is None:
         resolve_inference_output_dir(config, args.checkpoint)
@@ -192,7 +333,18 @@ def build_inference_dataloader(
     config: ExperimentConfig,
 ) -> DataLoader:
     """Create a dataloader for arbitrary image folders."""
-    dataset = InferenceImageFolderDataset(input_dir=input_dir, config=config)
+    metadata_dir = input_dir / "metadata"
+    images_dir = input_dir / "images"
+
+    if config.project_to_original and metadata_dir.exists() and images_dir.exists():
+        dataset: Dataset = DetectorExportInferenceDataset(
+            export_root=input_dir,
+            config=config,
+            source_root=config.source_root,
+        )
+    else:
+        dataset = InferenceImageFolderDataset(input_dir=input_dir, config=config)
+
     return DataLoader(
         dataset,
         batch_size=config.eval_batch_size or config.batch_size,
@@ -238,6 +390,7 @@ def main() -> None:
         point_radius=config.overlay_point_radius,
         line_width=config.overlay_line_width,
         line_color=config.overlay_connection_color,
+        project_to_original=config.project_to_original,
     )
 
     print("[INFO] Inference finished.")

@@ -8,7 +8,12 @@ import torch
 from tqdm import tqdm
 
 from .metrics import compute_box_normalized_nme, decode_heatmaps_to_image_coords
-from .postprocessing import extract_batched_size, project_landmarks_to_original_size
+from .postprocessing import (
+    apply_homogeneous_transform,
+    extract_batched_size,
+    project_landmarks_between_sizes,
+    project_landmarks_to_original_size,
+)
 from ..utils.predictions import save_prediction_file
 from ..utils.visualization import save_landmark_overlay_image
 
@@ -60,6 +65,7 @@ def export_inference_outputs(
     point_radius: int = 10,
     line_width: int = 4,
     line_color: str = "#FFD400",
+    project_to_original: bool = False,
 ) -> dict[str, Any]:
     """Run inference and persist predicted labels and optional overlays."""
     output_dir = Path(output_dir)
@@ -104,35 +110,63 @@ def export_inference_outputs(
             for sample_index in range(batch_size):
                 sample_id = str(metadata_batch["sample_id"][sample_index])
                 image_path = Path(metadata_batch["image_path"][sample_index])
-                original_size = extract_batched_size(
-                    batched_size=metadata_batch["original_size"],
-                    sample_index=sample_index,
-                )
                 transformed_size = extract_batched_size(
                     batched_size=metadata_batch["transformed_size"],
                     sample_index=sample_index,
                 )
+                original_size = extract_batched_size(
+                    batched_size=metadata_batch["original_size"],
+                    sample_index=sample_index,
+                )
 
-                predicted_landmarks_original = project_landmarks_to_original_size(
-                    landmarks=predicted_landmarks_batch[sample_index],
-                    transformed_size=transformed_size,
-                    original_size=original_size,
-                ).numpy()
                 predicted_visibility = (
                     predicted_visibility_batch[sample_index].numpy().astype(np.int64)
                 )
 
+                if (
+                    project_to_original
+                    and "crop_size" in metadata_batch
+                    and "transform_crop_to_orig" in metadata_batch
+                    and "source_image_path" in metadata_batch
+                ):
+                    crop_size = extract_batched_size(
+                        batched_size=metadata_batch["crop_size"],
+                        sample_index=sample_index,
+                    )
+                    transform_crop_to_orig = metadata_batch["transform_crop_to_orig"][
+                        sample_index
+                    ]
+                    predicted_landmarks_crop = project_landmarks_between_sizes(
+                        landmarks=predicted_landmarks_batch[sample_index],
+                        source_size=transformed_size,
+                        target_size=crop_size,
+                    )
+                    predicted_landmarks_output = apply_homogeneous_transform(
+                        landmarks=predicted_landmarks_crop,
+                        transform_matrix=transform_crop_to_orig,
+                    )
+                    overlay_image_path = Path(
+                        metadata_batch["source_image_path"][sample_index]
+                    )
+                else:
+                    predicted_landmarks_output = project_landmarks_to_original_size(
+                        landmarks=predicted_landmarks_batch[sample_index],
+                        transformed_size=transformed_size,
+                        original_size=original_size,
+                    ).numpy()
+                    overlay_image_path = image_path
+
                 save_prediction_file(
                     output_path=prediction_labels_dir / f"{sample_id}.txt",
-                    landmarks=predicted_landmarks_original,
+                    landmarks=predicted_landmarks_output,
                     visibility=predicted_visibility,
                 )
 
                 if save_overlays:
                     save_landmark_overlay_image(
-                        image_path=image_path,
+                        image_path=overlay_image_path,
                         output_path=prediction_overlays_dir / f"{sample_id}.png",
-                        predicted_landmarks=predicted_landmarks_original,
+                        predicted_landmarks=predicted_landmarks_output,
                         predicted_visibility=predicted_visibility,
                         show_indices=show_indices,
                         point_radius=point_radius,

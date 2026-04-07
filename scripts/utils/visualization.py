@@ -297,15 +297,20 @@ def save_landmark_comparison_overlay_image(
 
     def draw_connections(
         landmarks: np.ndarray,
-        visibility: np.ndarray,
+        visibility: np.ndarray | None,
         color: str,
+        draw_all_connections: bool,
     ) -> None:
         for landmark_range, close_loop in get_landmark_connection_definitions():
             connected_points = []
             for landmark_index in landmark_range:
                 if landmark_index >= len(landmarks):
                     continue
-                if int(visibility[landmark_index]) != 1:
+                if (
+                    not draw_all_connections
+                    and visibility is not None
+                    and int(visibility[landmark_index]) != 1
+                ):
                     continue
                 x_coord, y_coord = landmarks[landmark_index]
                 connected_points.append((float(x_coord), float(y_coord)))
@@ -329,11 +334,13 @@ def save_landmark_comparison_overlay_image(
         landmarks=target_landmarks,
         visibility=target_visibility,
         color=target_line_color,
+        draw_all_connections=False,
     )
     draw_connections(
         landmarks=predicted_landmarks,
         visibility=predicted_visibility,
         color=predicted_line_color,
+        draw_all_connections=True,
     )
 
     for landmark_index, (x_coord, y_coord) in enumerate(target_landmarks):
@@ -434,21 +441,28 @@ def plot_per_landmark_boxplot(
     use_landmark_names: bool = True,
     title: str = "Per-landmark NME distribution",
     y_limits: tuple[float, float] | None = None,
+    y_scale: str = "log",
 ) -> None:
     """Plot a per-landmark NME boxplot using semantic region colors."""
     landmark_names = get_default_landmark_names()
     number_of_landmarks = len(per_landmark_errors)
     landmark_colors = get_landmark_region_colors(number_of_landmarks)
 
-    safe_errors: list[list[float]] = []
+    if y_scale not in {"log", "linear"}:
+        raise ValueError(f"Unsupported y_scale '{y_scale}'.")
+
+    plotted_errors: list[list[float]] = []
     for landmark_values in per_landmark_errors:
-        safe_errors.append([max(float(value), 1e-8) for value in landmark_values])
+        current_values = [float(value) for value in landmark_values]
+        if y_scale == "log":
+            current_values = [max(value, 1e-8) for value in current_values]
+        plotted_errors.append(current_values)
 
     figure_width = max(20.0, number_of_landmarks * 0.34)
     figure, axis = plt.subplots(figsize=(figure_width, 7))
 
     boxplot = axis.boxplot(
-        safe_errors,
+        plotted_errors,
         showfliers=True,
         showmeans=True,
         patch_artist=True,
@@ -476,7 +490,7 @@ def plot_per_landmark_boxplot(
         patch.set_edgecolor("#333333")
         patch.set_linewidth(1.0)
 
-    axis.set_yscale("log")
+    axis.set_yscale(y_scale)
     if y_limits is not None:
         axis.set_ylim(y_limits)
 
@@ -491,7 +505,11 @@ def plot_per_landmark_boxplot(
         )
 
     axis.set_xlabel("Landmark", fontsize=16, fontweight="bold")
-    axis.set_ylabel("Normalized error (log scale)", fontsize=16, fontweight="bold")
+    axis.set_ylabel(
+        f"Normalized error ({y_scale} scale)",
+        fontsize=16,
+        fontweight="bold",
+    )
     axis.set_title(title, fontsize=17, fontweight="bold", pad=12)
     axis.tick_params(axis="y", labelsize=11)
     axis.grid(True, axis="y", linestyle="--", alpha=0.35)
@@ -563,12 +581,35 @@ def compute_global_log_y_limits(
     return y_min, y_max
 
 
+def compute_global_linear_y_limits(
+    grouped_errors_collection: list[list[list[float]]],
+    upper_margin_factor: float = 1.05,
+) -> tuple[float, float]:
+    """Compute shared linear-scale y limits across several error groupings."""
+    all_values: list[float] = []
+    for grouped_errors in grouped_errors_collection:
+        for landmark_values in grouped_errors:
+            for value in landmark_values:
+                all_values.append(float(value))
+
+    if not all_values:
+        return 0.0, 1.0
+
+    global_min = min(all_values)
+    global_max = max(all_values)
+    y_min = min(0.0, global_min)
+    y_max = max(global_max * upper_margin_factor, y_min + 1e-6)
+    return y_min, y_max
+
+
 def plot_yaw_view_boxplots(
     orientation_to_errors: dict[str, list[list[float]]],
     output_dir: Path,
     use_landmark_names: bool = True,
     y_limits: tuple[float, float] | None = None,
     orientation_metrics: dict[str, dict[str, float | None]] | None = None,
+    y_scale: str = "log",
+    filename_suffix: str = "log",
 ) -> None:
     """Generate one per-landmark NME boxplot for each face orientation."""
     ordered_orientations = [
@@ -605,8 +646,10 @@ def plot_yaw_view_boxplots(
 
         plot_per_landmark_boxplot(
             per_landmark_errors=current_errors,
-            output_path=output_dir / f"boxplot_nme_per_landmark_{orientation}.png",
+            output_path=output_dir
+            / f"boxplot_nme_per_landmark_{orientation}_{filename_suffix}.png",
             use_landmark_names=use_landmark_names,
             title=title,
             y_limits=y_limits,
+            y_scale=y_scale,
         )
