@@ -1,6 +1,7 @@
 """Engine modules for training and inference."""
 
 from .evaluate import evaluate_checkpoint
+from .evaluate_natural import evaluate_natural_checkpoint
 from .inference import export_inference_outputs, run_inference
 from .losses import compute_multitask_loss
 from .metrics import (
@@ -16,6 +17,7 @@ __all__ = [
     "compute_multitask_loss",
     "decode_heatmaps_to_image_coords",
     "evaluate_checkpoint",
+    "evaluate_natural_checkpoint",
     "export_inference_outputs",
     "run_epoch",
     "run_inference",

@@ -3,7 +3,26 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+import numpy as np
 import torch
+
+
+def project_landmarks_between_sizes(
+    landmarks: torch.Tensor,
+    source_size: tuple[int, int],
+    target_size: tuple[int, int],
+) -> torch.Tensor:
+    """Project landmark coordinates between two image spaces using size scaling."""
+    source_height, source_width = source_size
+    target_height, target_width = target_size
+
+    scale_x = target_width / float(source_width)
+    scale_y = target_height / float(source_height)
+
+    projected_landmarks = landmarks.clone()
+    projected_landmarks[:, 0] *= scale_x
+    projected_landmarks[:, 1] *= scale_y
+    return projected_landmarks
 
 
 def project_landmarks_to_original_size(
@@ -12,16 +31,49 @@ def project_landmarks_to_original_size(
     original_size: tuple[int, int],
 ) -> torch.Tensor:
     """Project landmark coordinates from transformed image space back to original size."""
-    transformed_height, transformed_width = transformed_size
-    original_height, original_width = original_size
+    return project_landmarks_between_sizes(
+        landmarks=landmarks,
+        source_size=transformed_size,
+        target_size=original_size,
+    )
 
-    scale_x = original_width / float(transformed_width)
-    scale_y = original_height / float(transformed_height)
 
-    projected_landmarks = landmarks.clone()
-    projected_landmarks[:, 0] *= scale_x
-    projected_landmarks[:, 1] *= scale_y
-    return projected_landmarks
+def apply_homogeneous_transform(
+    landmarks: np.ndarray | torch.Tensor,
+    transform_matrix: np.ndarray | torch.Tensor,
+) -> np.ndarray:
+    """Apply a 3x3 homogeneous transform to a set of `(x, y)` landmark coordinates."""
+    landmarks_np = (
+        landmarks.detach().cpu().numpy()
+        if isinstance(landmarks, torch.Tensor)
+        else np.asarray(landmarks, dtype=np.float32)
+    )
+    transform_np = (
+        transform_matrix.detach().cpu().numpy()
+        if isinstance(transform_matrix, torch.Tensor)
+        else np.asarray(transform_matrix, dtype=np.float32)
+    )
+
+    if landmarks_np.ndim != 2 or landmarks_np.shape[1] != 2:
+        raise ValueError(
+            f"Expected landmarks with shape (N, 2), got {landmarks_np.shape}."
+        )
+    if transform_np.shape != (3, 3):
+        raise ValueError(
+            f"Expected transform matrix with shape (3, 3), got {transform_np.shape}."
+        )
+
+    homogeneous_landmarks = np.concatenate(
+        [
+            landmarks_np.astype(np.float32, copy=False),
+            np.ones((landmarks_np.shape[0], 1), dtype=np.float32),
+        ],
+        axis=1,
+    )
+    transformed = homogeneous_landmarks @ transform_np.T
+    scale = transformed[:, 2:3]
+    scale[scale == 0.0] = 1.0
+    return transformed[:, :2] / scale
 
 
 def extract_batched_size(

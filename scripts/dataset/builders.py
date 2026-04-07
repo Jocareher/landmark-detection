@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
+
 import torch
 from torch.utils.data import DataLoader
 
 from ..config import ExperimentConfig
 from ..utils import seed_worker
+from .natural_dataset import NaturalLandmarkEvaluationDataset
 from .dataset import SyntheticLandmarkDataset
 from .transforms import Compose, Normalize, Resize, ToTensor
 
@@ -103,3 +106,27 @@ def build_dataloaders(config: ExperimentConfig) -> dict[str, DataLoader]:
             generator=generator,
         ),
     }
+
+
+def build_natural_evaluation_dataloader(
+    export_root: str | os.PathLike[str],
+    gt_root: str | os.PathLike[str],
+    config: ExperimentConfig,
+    source_root: str | os.PathLike[str] | None = None,
+) -> DataLoader:
+    """Create a dataloader for natural-image evaluation on detector exports."""
+    dataset = NaturalLandmarkEvaluationDataset(
+        export_root=export_root,
+        gt_root=gt_root,
+        source_root=source_root,
+        config=config,
+        show_progress=config.show_dataset_progress,
+    )
+    return DataLoader(
+        dataset,
+        batch_size=config.eval_batch_size or config.batch_size,
+        shuffle=False,
+        num_workers=config.num_workers,
+        pin_memory=config.pin_memory and config.device in {"cuda", "auto"},
+        worker_init_fn=seed_worker,
+    )

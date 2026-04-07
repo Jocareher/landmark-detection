@@ -176,6 +176,14 @@ def save_metrics_summary_csv(
 
     rows: list[tuple[str, Any]] = [
         ("num_samples", summary.get("num_samples")),
+        (
+            "num_samples_with_geometric_metrics",
+            summary.get("num_samples_with_geometric_metrics"),
+        ),
+        (
+            "num_visible_visible_landmarks",
+            summary.get("num_visible_visible_landmarks"),
+        ),
         ("num_landmarks", summary.get("num_landmarks")),
         ("mean_nme_box", summary.get("mean_nme_box")),
         ("median_nme_box", summary.get("median_nme_box")),
@@ -296,8 +304,16 @@ def save_per_image_nme_csv(
                 [
                     row["sample_id"],
                     row["orientation"],
-                    float(row["mean_nme_box"]),
-                    row["mean_nme_interocular"],
+                    (
+                        float(row["mean_nme_box"])
+                        if row["mean_nme_box"] is not None
+                        else None
+                    ),
+                    (
+                        float(row["mean_nme_interocular"])
+                        if row["mean_nme_interocular"] is not None
+                        else None
+                    ),
                 ]
             )
 

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Sequence
 
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
@@ -269,6 +270,111 @@ def save_landmark_overlay_image(
             draw.text(
                 (x_coord + point_radius + 2, y_coord + point_radius + 2),
                 str(landmark_index),
+                fill=color,
+            )
+
+    image.save(output_path)
+
+
+def save_landmark_comparison_overlay_image(
+    image_path: Path,
+    output_path: Path,
+    predicted_landmarks: np.ndarray,
+    predicted_visibility: np.ndarray,
+    target_landmarks: np.ndarray,
+    target_visibility: np.ndarray,
+    show_indices: bool = False,
+    point_radius: int = 10,
+    line_width: int = 4,
+    predicted_line_color: str = "#FFD400",
+    target_line_color: str = "#00C853",
+) -> None:
+    """Render GT and predicted landmarks together on top of one source image."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    image = Image.open(image_path).convert("RGB")
+    draw = ImageDraw.Draw(image)
+
+    def draw_connections(
+        landmarks: np.ndarray,
+        visibility: np.ndarray,
+        color: str,
+    ) -> None:
+        for landmark_range, close_loop in get_landmark_connection_definitions():
+            connected_points = []
+            for landmark_index in landmark_range:
+                if landmark_index >= len(landmarks):
+                    continue
+                if int(visibility[landmark_index]) != 1:
+                    continue
+                x_coord, y_coord = landmarks[landmark_index]
+                connected_points.append((float(x_coord), float(y_coord)))
+
+            if len(connected_points) >= 2:
+                draw.line(
+                    connected_points,
+                    fill=color,
+                    width=line_width,
+                    joint="curve",
+                )
+                if close_loop:
+                    draw.line(
+                        [connected_points[-1], connected_points[0]],
+                        fill=color,
+                        width=line_width,
+                        joint="curve",
+                    )
+
+    draw_connections(
+        landmarks=target_landmarks,
+        visibility=target_visibility,
+        color=target_line_color,
+    )
+    draw_connections(
+        landmarks=predicted_landmarks,
+        visibility=predicted_visibility,
+        color=predicted_line_color,
+    )
+
+    for landmark_index, (x_coord, y_coord) in enumerate(target_landmarks):
+        visibility_value = int(target_visibility[landmark_index])
+        if visibility_value != 1:
+            continue
+        left = x_coord - point_radius
+        top = y_coord - point_radius
+        right = x_coord + point_radius
+        bottom = y_coord + point_radius
+        draw.ellipse(
+            (left, top, right, bottom),
+            fill="#00C853",
+            outline="white",
+            width=max(2, line_width // 2),
+        )
+        if show_indices:
+            draw.text(
+                (x_coord + point_radius + 2, y_coord - point_radius - 2),
+                f"gt:{landmark_index}",
+                fill="#00C853",
+            )
+
+    for landmark_index, (x_coord, y_coord) in enumerate(predicted_landmarks):
+        visibility_value = int(predicted_visibility[landmark_index])
+        color = "#FF3D00" if visibility_value == 1 else "#2962FF"
+        outline_color = "white" if visibility_value == 1 else "black"
+        left = x_coord - point_radius
+        top = y_coord - point_radius
+        right = x_coord + point_radius
+        bottom = y_coord + point_radius
+        draw.rectangle(
+            (left, top, right, bottom),
+            fill=color,
+            outline=outline_color,
+            width=max(2, line_width // 2),
+        )
+        if show_indices:
+            draw.text(
+                (x_coord + point_radius + 2, y_coord + point_radius + 2),
+                f"pr:{landmark_index}",
                 fill=color,
             )
 

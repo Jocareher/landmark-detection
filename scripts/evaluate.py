@@ -16,8 +16,9 @@ from scripts.config import (
     config_to_serializable_dict,
     resolve_evaluation_output_dir,
 )
-from scripts.dataset import build_dataloaders
+from scripts.dataset import build_dataloaders, build_natural_evaluation_dataloader
 from scripts.engine.evaluate import evaluate_checkpoint
+from scripts.engine.evaluate_natural import evaluate_natural_checkpoint
 from scripts.models import HRNetLandmarkVisibility
 from scripts.utils import get_default_device, set_seed
 
@@ -37,6 +38,12 @@ def parse_args() -> argparse.Namespace:
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
+        "--eval-mode",
+        choices=["synthetic", "natural"],
+        default="synthetic",
+        help="Evaluation mode. Synthetic expects the repository split layout, while natural expects a detector-export root with images/metadata.",
+    )
+    parser.add_argument(
         "--checkpoint",
         type=Path,
         required=True,
@@ -46,7 +53,19 @@ def parse_args() -> argparse.Namespace:
         "--dataset-root",
         type=Path,
         default=defaults.dataset_root,
-        help="Root directory that contains the dataset splits.",
+        help="Synthetic dataset root in synthetic mode, or detector-export root in natural mode.",
+    )
+    parser.add_argument(
+        "--natural-gt-root",
+        type=Path,
+        default=None,
+        help="Directory that contains GT txt files for the original natural images. Required in natural mode.",
+    )
+    parser.add_argument(
+        "--natural-source-root",
+        type=Path,
+        default=None,
+        help="Optional root used to resolve relative source_image_path values from natural detector metadata.",
     )
     parser.add_argument(
         "--output-dir",
@@ -121,6 +140,9 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     """
     config = build_config()
     config.dataset_root = args.dataset_root
+    config.eval_mode = args.eval_mode
+    config.natural_gt_root = args.natural_gt_root
+    config.natural_source_root = args.natural_source_root
     config.cache_dir = args.cache_dir
     config.eval_batch_size = args.batch_size
     config.num_workers = args.num_workers
@@ -188,12 +210,16 @@ def main() -> None:
     set_seed(config.seed)
     device = get_default_device(config.device)
 
+    if args.eval_mode == "natural" and args.natural_gt_root is None:
+        raise ValueError(
+            "--natural-gt-root is required when --eval-mode natural is used."
+        )
+
     print(f"[INFO] Device: {device}")
+    print(f"[INFO] Eval mode: {args.eval_mode}")
     print(f"[INFO] Dataset root: {config.dataset_root}")
     print(f"[INFO] Checkpoint: {args.checkpoint}")
     print(f"[INFO] Output dir: {output_dir}")
-
-    dataloaders = build_dataloaders(config)
 
     model = build_model(config)
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -203,24 +229,53 @@ def main() -> None:
     if args.save_config:
         maybe_save_config(config, output_dir)
 
-    summary = evaluate_checkpoint(
-        model=model,
-        dataloader=dataloaders["test"],
-        device=device,
-        output_dir=output_dir,
-        visibility_threshold=config.visibility_threshold,
-        save_predictions=config.save_evaluation_predictions,
-        save_overlays=config.save_evaluation_overlays,
-        show_indices=config.show_landmark_indices,
-        use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
-        point_radius=config.overlay_point_radius,
-        line_width=config.overlay_line_width,
-        line_color=config.overlay_connection_color,
-    )
+    if args.eval_mode == "synthetic":
+        dataloaders = build_dataloaders(config)
+        summary = evaluate_checkpoint(
+            model=model,
+            dataloader=dataloaders["test"],
+            device=device,
+            output_dir=output_dir,
+            visibility_threshold=config.visibility_threshold,
+            save_predictions=config.save_evaluation_predictions,
+            save_overlays=config.save_evaluation_overlays,
+            show_indices=config.show_landmark_indices,
+            use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
+            point_radius=config.overlay_point_radius,
+            line_width=config.overlay_line_width,
+            line_color=config.overlay_connection_color,
+        )
+    else:
+        dataloader = build_natural_evaluation_dataloader(
+            export_root=config.dataset_root,
+            gt_root=args.natural_gt_root,
+            source_root=args.natural_source_root,
+            config=config,
+        )
+        summary = evaluate_natural_checkpoint(
+            model=model,
+            dataloader=dataloader,
+            device=device,
+            output_dir=output_dir,
+            visibility_threshold=config.visibility_threshold,
+            save_predictions=config.save_evaluation_predictions,
+            save_overlays=config.save_evaluation_overlays,
+            show_indices=config.show_landmark_indices,
+            use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
+            point_radius=config.overlay_point_radius,
+            line_width=config.overlay_line_width,
+            line_color=config.overlay_connection_color,
+        )
 
     print("[INFO] Evaluation finished.")
-    print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.6f}")
-    print(f"[INFO] Median NME box: {summary['median_nme_box']:.6f}")
+    if summary["mean_nme_box"] is not None:
+        print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.6f}")
+    else:
+        print("[INFO] Mean NME box: n/a")
+    if summary["median_nme_box"] is not None:
+        print(f"[INFO] Median NME box: {summary['median_nme_box']:.6f}")
+    else:
+        print("[INFO] Median NME box: n/a")
     if summary["mean_nme_interocular"] is not None:
         print(f"[INFO] Mean NME interocular: {summary['mean_nme_interocular']:.6f}")
     print(f"[INFO] Visibility accuracy: {summary['visibility_accuracy']:.6f}")

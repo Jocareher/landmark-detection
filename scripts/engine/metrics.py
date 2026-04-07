@@ -44,6 +44,7 @@ def get_preds_from_heatmaps(heatmaps: torch.Tensor) -> torch.Tensor:
     pred_y = torch.div(max_indices, heatmap_width, rounding_mode="floor").float()
     return torch.stack([pred_x, pred_y], dim=-1)
 
+
 def decode_heatmaps_to_image_coords(
     heatmaps: torch.Tensor,
     image_height: int,
@@ -51,11 +52,11 @@ def decode_heatmaps_to_image_coords(
     use_subpixel: bool = True,
 ) -> torch.Tensor:
     """Convert heatmap-space landmark coordinates to image-space pixel coordinates.
-    
+
     This function transforms predicted landmark positions from heatmap coordinates
     back to the original image coordinate system. It optionally applies subpixel
     refinement using gradient information to improve localization accuracy.
-    
+
     Args:
         heatmaps: Tensor of shape (B, K, H, W) containing predicted heatmaps,
                     where B is batch size, K is number of landmarks, H and W are
@@ -64,7 +65,7 @@ def decode_heatmaps_to_image_coords(
         image_width: Width of the original input image in pixels.
         use_subpixel: If True, refine predictions using local gradient information
                         for improved subpixel accuracy. Default is True.
-    
+
     Returns:
         Tensor of shape (B, K, 2) with landmark coordinates in image space,
         where coordinates are (x, y) format.
@@ -82,7 +83,7 @@ def decode_heatmaps_to_image_coords(
                 # Get integer peak position
                 px = int(preds[batch_index, landmark_index, 0].item())
                 py = int(preds[batch_index, landmark_index, 1].item())
-                
+
                 # Only refine if peak is not at heatmap boundary
                 if 1 <= px < heatmap_width - 1 and 1 <= py < heatmap_height - 1:
                     current_map = heatmaps[batch_index, landmark_index]
