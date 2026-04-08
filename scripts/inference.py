@@ -398,6 +398,8 @@ def main() -> None:
     print(f"[INFO] Labels dir: {summary['prediction_labels_dir']}")
     if summary["prediction_overlays_dir"] is not None:
         print(f"[INFO] Overlays dir: {summary['prediction_overlays_dir']}")
+    if summary.get("prediction_crop_overlays_dir") is not None:
+        print(f"[INFO] Crop overlays dir: {summary['prediction_crop_overlays_dir']}")
 
 
 if __name__ == "__main__":

@@ -26,6 +26,27 @@ TARGET_MODE = "both"
 VALIDATE_LABELS = False
 USE_CACHE = True
 SHOW_DATASET_PROGRESS = True
+ENABLE_PHOTOMETRIC_AUGMENTATIONS = False
+ENABLE_GEOMETRIC_AUGMENTATIONS = False
+COLOR_JITTER_BRIGHTNESS = 0.15
+COLOR_JITTER_CONTRAST = 0.15
+COLOR_JITTER_SATURATION = 0.10
+COLOR_JITTER_PROBABILITY = 0.5
+BLUR_PROBABILITY = 0.20
+BLUR_RADIUS_MIN = 0.1
+BLUR_RADIUS_MAX = 1.2
+NOISE_PROBABILITY = 0.20
+NOISE_STD = 0.02
+JPEG_PROBABILITY = 0.15
+JPEG_QUALITY_MIN = 60
+JPEG_QUALITY_MAX = 95
+RGB_SHIFT_PROBABILITY = 0.15
+RGB_SHIFT_LIMIT = 0.04
+GEOMETRIC_PROBABILITY = 0.50
+GEOMETRIC_MAX_TRANSLATION = 0.05
+GEOMETRIC_SCALE_MIN = 0.95
+GEOMETRIC_SCALE_MAX = 1.05
+GEOMETRIC_MAX_ROTATION_DEG = 8.0
 
 
 # ---------------------------------------------------------------------------
@@ -56,6 +77,8 @@ LAMBDA_VISIBILITY = 1.0
 PATIENCE = 15
 USE_AMP = True
 RUN_SMOKE_TEST = False
+SAVE_PREVIEW_BATCHES = True
+PREVIEW_SEED = 12345
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +136,27 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "validate_labels": VALIDATE_LABELS,
     "use_cache": USE_CACHE,
     "show_dataset_progress": SHOW_DATASET_PROGRESS,
+    "enable_photometric_augmentations": ENABLE_PHOTOMETRIC_AUGMENTATIONS,
+    "enable_geometric_augmentations": ENABLE_GEOMETRIC_AUGMENTATIONS,
+    "color_jitter_brightness": COLOR_JITTER_BRIGHTNESS,
+    "color_jitter_contrast": COLOR_JITTER_CONTRAST,
+    "color_jitter_saturation": COLOR_JITTER_SATURATION,
+    "color_jitter_probability": COLOR_JITTER_PROBABILITY,
+    "blur_probability": BLUR_PROBABILITY,
+    "blur_radius_min": BLUR_RADIUS_MIN,
+    "blur_radius_max": BLUR_RADIUS_MAX,
+    "noise_probability": NOISE_PROBABILITY,
+    "noise_std": NOISE_STD,
+    "jpeg_probability": JPEG_PROBABILITY,
+    "jpeg_quality_min": JPEG_QUALITY_MIN,
+    "jpeg_quality_max": JPEG_QUALITY_MAX,
+    "rgb_shift_probability": RGB_SHIFT_PROBABILITY,
+    "rgb_shift_limit": RGB_SHIFT_LIMIT,
+    "geometric_probability": GEOMETRIC_PROBABILITY,
+    "geometric_max_translation": GEOMETRIC_MAX_TRANSLATION,
+    "geometric_scale_min": GEOMETRIC_SCALE_MIN,
+    "geometric_scale_max": GEOMETRIC_SCALE_MAX,
+    "geometric_max_rotation_deg": GEOMETRIC_MAX_ROTATION_DEG,
     "pretrained_weights": PRETRAINED_WEIGHTS,
     "num_landmarks": NUM_LANDMARKS,
     "image_size": IMAGE_SIZE,
@@ -133,6 +177,8 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "patience": PATIENCE,
     "use_amp": USE_AMP,
     "run_smoke_test": RUN_SMOKE_TEST,
+    "save_preview_batches": SAVE_PREVIEW_BATCHES,
+    "preview_seed": PREVIEW_SEED,
     "seed": SEED,
     "device": DEVICE,
     "use_wandb": USE_WANDB,

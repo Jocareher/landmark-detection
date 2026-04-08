@@ -9,6 +9,7 @@ import torch
 from tqdm import tqdm
 
 from .evaluate import (
+    _build_boxplot_title,
     compute_binary_confusion_matrix,
     compute_box_normalization_factor,
     normalize_confusion_matrix,
@@ -29,6 +30,7 @@ from ..utils.visualization import (
     plot_confusion_matrix,
     plot_per_landmark_boxplot,
     save_landmark_comparison_overlay_image,
+    save_landmark_overlay_image,
 )
 
 
@@ -86,12 +88,15 @@ def evaluate_natural_checkpoint(
     predictions_dir = output_dir / "predictions" if save_predictions else None
     prediction_overlays_dir = predictions_dir / "images" if predictions_dir else None
     prediction_labels_dir = predictions_dir / "labels" if predictions_dir else None
+    prediction_crops_dir = predictions_dir / "crops" if predictions_dir else None
     if predictions_dir is not None:
         predictions_dir.mkdir(parents=True, exist_ok=True)
         assert prediction_overlays_dir is not None
         assert prediction_labels_dir is not None
+        assert prediction_crops_dir is not None
         prediction_overlays_dir.mkdir(parents=True, exist_ok=True)
         prediction_labels_dir.mkdir(parents=True, exist_ok=True)
+        prediction_crops_dir.mkdir(parents=True, exist_ok=True)
 
     model.eval()
     model.to(device)
@@ -135,6 +140,7 @@ def evaluate_natural_checkpoint(
                 source_image_path = Path(
                     metadata_batch["source_image_path"][sample_index]
                 )
+                crop_image_path = Path(metadata_batch["crop_image_path"][sample_index])
 
                 network_input_size = extract_batched_size(
                     batched_size=metadata_batch["transformed_size"],
@@ -187,6 +193,17 @@ def evaluate_natural_checkpoint(
                             line_width=line_width,
                             predicted_line_color=line_color,
                         )
+                        if prediction_crops_dir is not None:
+                            save_landmark_overlay_image(
+                                image_path=crop_image_path,
+                                output_path=prediction_crops_dir / f"{sample_id}.png",
+                                predicted_landmarks=predicted_landmarks_crop.numpy(),
+                                predicted_visibility=predicted_visibility,
+                                show_indices=show_indices,
+                                point_radius=point_radius,
+                                line_width=line_width,
+                                line_color=line_color,
+                            )
 
                 visible_errors, mean_box_nme = compute_visible_only_per_landmark_nme(
                     predicted_landmarks=predicted_landmarks_original,
@@ -224,14 +241,26 @@ def evaluate_natural_checkpoint(
         output_path=output_dir / "per_image_nme.csv",
     )
 
+    valid_image_nme_values = [
+        row["mean_nme_box"] for row in per_image_nme if row["mean_nme_box"] is not None
+    ]
+
     if any(len(values) > 0 for values in per_landmark_errors):
         global_y_limits = compute_global_log_y_limits([per_landmark_errors])
         global_linear_y_limits = compute_global_linear_y_limits([per_landmark_errors])
+        title = _build_boxplot_title(
+            label="Natural mode",
+            mean_nme_box=(
+                float(np.mean(valid_image_nme_values))
+                if valid_image_nme_values
+                else None
+            ),
+        )
         plot_per_landmark_boxplot(
             per_landmark_errors=per_landmark_errors,
             output_path=figures_dir / "boxplot_nme_per_landmark_global_log.png",
             use_landmark_names=use_landmark_names_in_boxplot,
-            title="Per-landmark NME distribution - Natural mode",
+            title=title,
             y_limits=global_y_limits,
             y_scale="log",
         )
@@ -239,7 +268,7 @@ def evaluate_natural_checkpoint(
             per_landmark_errors=per_landmark_errors,
             output_path=figures_dir / "boxplot_nme_per_landmark_global_linear.png",
             use_landmark_names=use_landmark_names_in_boxplot,
-            title="Per-landmark NME distribution - Natural mode",
+            title=title,
             y_limits=global_linear_y_limits,
             y_scale="linear",
         )
@@ -265,10 +294,6 @@ def evaluate_natural_checkpoint(
         title="Visibility confusion matrix normalized",
         value_format=".3f",
     )
-
-    valid_image_nme_values = [
-        row["mean_nme_box"] for row in per_image_nme if row["mean_nme_box"] is not None
-    ]
 
     summary = {
         "num_samples": int(len(per_image_nme)),
@@ -296,6 +321,9 @@ def evaluate_natural_checkpoint(
         else None,
         "prediction_overlays_dir": str(prediction_overlays_dir)
         if prediction_overlays_dir is not None
+        else None,
+        "prediction_crop_overlays_dir": str(prediction_crops_dir)
+        if prediction_crops_dir is not None
         else None,
         "orientation_sample_counts": None,
         "orientation_metrics": None,

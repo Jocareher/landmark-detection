@@ -9,17 +9,80 @@ from ..config import ExperimentConfig
 from ..utils import seed_worker
 from .natural_dataset import NaturalLandmarkEvaluationDataset
 from .dataset import SyntheticLandmarkDataset
-from .transforms import Compose, Normalize, Resize, ToTensor
+from .transforms import (
+    Compose,
+    Normalize,
+    RandomAffineLandmarks,
+    RandomColorJitter,
+    RandomGaussianBlur,
+    RandomGaussianNoise,
+    RandomJpegCompression,
+    RandomRGBShift,
+    Resize,
+    ToTensor,
+)
 
 
 def build_transforms(config: ExperimentConfig) -> tuple[Compose, Compose]:
     """Build the train and evaluation transform pipelines from the config."""
-    common = [
+    train_transforms = []
+
+    if config.enable_geometric_augmentations:
+        train_transforms.append(
+            RandomAffineLandmarks(
+                probability=config.geometric_probability,
+                max_translation=config.geometric_max_translation,
+                scale_min=config.geometric_scale_min,
+                scale_max=config.geometric_scale_max,
+                max_rotation_deg=config.geometric_max_rotation_deg,
+            )
+        )
+
+    train_transforms.append(Resize(size=config.image_size))
+
+    if config.enable_photometric_augmentations:
+        train_transforms.extend(
+            [
+                RandomColorJitter(
+                    brightness=config.color_jitter_brightness,
+                    contrast=config.color_jitter_contrast,
+                    saturation=config.color_jitter_saturation,
+                    probability=config.color_jitter_probability,
+                ),
+                RandomGaussianBlur(
+                    probability=config.blur_probability,
+                    radius_min=config.blur_radius_min,
+                    radius_max=config.blur_radius_max,
+                ),
+                RandomGaussianNoise(
+                    probability=config.noise_probability,
+                    std=config.noise_std,
+                ),
+                RandomJpegCompression(
+                    probability=config.jpeg_probability,
+                    quality_min=config.jpeg_quality_min,
+                    quality_max=config.jpeg_quality_max,
+                ),
+                RandomRGBShift(
+                    probability=config.rgb_shift_probability,
+                    shift_limit=config.rgb_shift_limit,
+                ),
+            ]
+        )
+
+    train_transforms.extend(
+        [
+            ToTensor(),
+            Normalize(mean=config.normalization_mean, std=config.normalization_std),
+        ]
+    )
+
+    eval_transforms = [
         Resize(size=config.image_size),
         ToTensor(),
         Normalize(mean=config.normalization_mean, std=config.normalization_std),
     ]
-    return Compose(common), Compose(common.copy())
+    return Compose(train_transforms), Compose(eval_transforms)
 
 
 def build_datasets(config: ExperimentConfig) -> dict[str, SyntheticLandmarkDataset]:

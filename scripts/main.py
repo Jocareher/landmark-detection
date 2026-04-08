@@ -25,6 +25,7 @@ from scripts.utils import (
     set_seed,
     tee_terminal_output,
 )
+from scripts.utils.visualization import save_dataset_preview_grid
 
 
 def parse_args() -> argparse.Namespace:
@@ -170,6 +171,132 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Save resolved config JSON into output dir.",
     )
+    parser.add_argument(
+        "--enable-photometric-augmentations",
+        action="store_true",
+        default=defaults.enable_photometric_augmentations,
+        help="Enable photometric training augmentations.",
+    )
+    parser.add_argument(
+        "--enable-geometric-augmentations",
+        action="store_true",
+        default=defaults.enable_geometric_augmentations,
+        help="Enable geometric training augmentations that also transform landmarks.",
+    )
+    parser.add_argument(
+        "--brightness-jitter",
+        type=float,
+        default=defaults.color_jitter_brightness,
+        help="Maximum relative brightness jitter strength.",
+    )
+    parser.add_argument(
+        "--contrast-jitter",
+        type=float,
+        default=defaults.color_jitter_contrast,
+        help="Maximum relative contrast jitter strength.",
+    )
+    parser.add_argument(
+        "--saturation-jitter",
+        type=float,
+        default=defaults.color_jitter_saturation,
+        help="Maximum relative saturation jitter strength.",
+    )
+    parser.add_argument(
+        "--color-jitter-probability",
+        type=float,
+        default=defaults.color_jitter_probability,
+        help="Application probability for color jitter.",
+    )
+    parser.add_argument(
+        "--blur-probability",
+        type=float,
+        default=defaults.blur_probability,
+        help="Application probability for Gaussian blur.",
+    )
+    parser.add_argument(
+        "--blur-radius-min",
+        type=float,
+        default=defaults.blur_radius_min,
+        help="Minimum Gaussian blur radius.",
+    )
+    parser.add_argument(
+        "--blur-radius-max",
+        type=float,
+        default=defaults.blur_radius_max,
+        help="Maximum Gaussian blur radius.",
+    )
+    parser.add_argument(
+        "--noise-probability",
+        type=float,
+        default=defaults.noise_probability,
+        help="Application probability for Gaussian noise.",
+    )
+    parser.add_argument(
+        "--noise-std",
+        type=float,
+        default=defaults.noise_std,
+        help="Gaussian noise standard deviation in normalized [0, 1] image space.",
+    )
+    parser.add_argument(
+        "--jpeg-probability",
+        type=float,
+        default=defaults.jpeg_probability,
+        help="Application probability for JPEG compression simulation.",
+    )
+    parser.add_argument(
+        "--jpeg-quality-min",
+        type=int,
+        default=defaults.jpeg_quality_min,
+        help="Minimum JPEG quality used during compression simulation.",
+    )
+    parser.add_argument(
+        "--jpeg-quality-max",
+        type=int,
+        default=defaults.jpeg_quality_max,
+        help="Maximum JPEG quality used during compression simulation.",
+    )
+    parser.add_argument(
+        "--rgb-shift-probability",
+        type=float,
+        default=defaults.rgb_shift_probability,
+        help="Application probability for additive RGB channel perturbations.",
+    )
+    parser.add_argument(
+        "--rgb-shift-limit",
+        type=float,
+        default=defaults.rgb_shift_limit,
+        help="Maximum additive RGB channel shift in normalized [0, 1] image space.",
+    )
+    parser.add_argument(
+        "--geometric-probability",
+        type=float,
+        default=defaults.geometric_probability,
+        help="Application probability for geometric training augmentation.",
+    )
+    parser.add_argument(
+        "--geometric-max-translation",
+        type=float,
+        default=defaults.geometric_max_translation,
+        help="Maximum translation as a fraction of image width and height.",
+    )
+    parser.add_argument(
+        "--geometric-scale-min",
+        type=float,
+        default=defaults.geometric_scale_min,
+        help="Minimum isotropic scale factor for geometric augmentation.",
+    )
+    parser.add_argument(
+        "--geometric-scale-max",
+        type=float,
+        default=defaults.geometric_scale_max,
+        help="Maximum isotropic scale factor for geometric augmentation.",
+    )
+    parser.add_argument(
+        "--geometric-max-rotation-deg",
+        type=float,
+        default=defaults.geometric_max_rotation_deg,
+        help="Maximum absolute rotation in degrees for geometric augmentation.",
+    )
     return parser.parse_args()
 
 
@@ -197,6 +324,27 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.use_amp = not args.disable_amp
     config.use_cache = not args.disable_cache
     config.run_smoke_test = args.smoke_test
+    config.enable_photometric_augmentations = args.enable_photometric_augmentations
+    config.enable_geometric_augmentations = args.enable_geometric_augmentations
+    config.color_jitter_brightness = args.brightness_jitter
+    config.color_jitter_contrast = args.contrast_jitter
+    config.color_jitter_saturation = args.saturation_jitter
+    config.color_jitter_probability = args.color_jitter_probability
+    config.blur_probability = args.blur_probability
+    config.blur_radius_min = args.blur_radius_min
+    config.blur_radius_max = args.blur_radius_max
+    config.noise_probability = args.noise_probability
+    config.noise_std = args.noise_std
+    config.jpeg_probability = args.jpeg_probability
+    config.jpeg_quality_min = args.jpeg_quality_min
+    config.jpeg_quality_max = args.jpeg_quality_max
+    config.rgb_shift_probability = args.rgb_shift_probability
+    config.rgb_shift_limit = args.rgb_shift_limit
+    config.geometric_probability = args.geometric_probability
+    config.geometric_max_translation = args.geometric_max_translation
+    config.geometric_scale_min = args.geometric_scale_min
+    config.geometric_scale_max = args.geometric_scale_max
+    config.geometric_max_rotation_deg = args.geometric_max_rotation_deg
     return config
 
 
@@ -254,6 +402,37 @@ def main() -> None:
             f"val={len(dataloaders['val'].dataset)} "
             f"test={len(dataloaders['test'].dataset)}"
         )
+        if config.save_preview_batches:
+            preview_dir = config.output_dir / "previews"
+            print(f"[INFO] Saving deterministic dataset previews into {preview_dir}...")
+            save_dataset_preview_grid(
+                dataset=dataloaders["train"].dataset,
+                output_path=preview_dir / "train_preview.png",
+                title="Train Preview",
+                num_samples=dataloaders["train"].batch_size or config.batch_size,
+                seed=config.preview_seed,
+                show_indices=config.show_landmark_indices,
+                point_radius=max(3, config.overlay_point_radius // 2),
+                line_width=max(2, config.overlay_line_width // 4),
+                line_color=config.overlay_connection_color,
+                mean=config.normalization_mean,
+                std=config.normalization_std,
+            )
+            save_dataset_preview_grid(
+                dataset=dataloaders["val"].dataset,
+                output_path=preview_dir / "val_preview.png",
+                title="Validation Preview",
+                num_samples=dataloaders["val"].batch_size
+                or config.eval_batch_size
+                or config.batch_size,
+                seed=config.preview_seed,
+                show_indices=config.show_landmark_indices,
+                point_radius=max(3, config.overlay_point_radius // 2),
+                line_width=max(2, config.overlay_line_width // 4),
+                line_color=config.overlay_connection_color,
+                mean=config.normalization_mean,
+                std=config.normalization_std,
+            )
         print("[INFO] Building model...")
         model = build_model(config)
         trainable_parameters = [

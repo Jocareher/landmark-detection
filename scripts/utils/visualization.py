@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import random
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Sequence
 
@@ -274,6 +276,158 @@ def save_landmark_overlay_image(
             )
 
     image.save(output_path)
+
+
+@contextmanager
+def fixed_visualization_seed(seed: int):
+    """Temporarily fix RNG states so preview generation stays reproducible."""
+    random_state = random.getstate()
+    numpy_state = np.random.get_state()
+    torch_state = torch.random.get_rng_state()
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    try:
+        yield
+    finally:
+        random.setstate(random_state)
+        np.random.set_state(numpy_state)
+        torch.random.set_rng_state(torch_state)
+
+
+def render_landmark_preview_image(
+    image: torch.Tensor | np.ndarray | Image.Image,
+    landmarks: np.ndarray,
+    visibility: np.ndarray,
+    show_indices: bool = False,
+    point_radius: int = 6,
+    line_width: int = 2,
+    line_color: str = "#00C853",
+    draw_all_connections: bool = False,
+    mean: Sequence[float] = (0.485, 0.456, 0.406),
+    std: Sequence[float] = (0.229, 0.224, 0.225),
+) -> Image.Image:
+    """Render one landmark preview image from a tensor or array sample."""
+    if isinstance(image, torch.Tensor):
+        if image.ndim != 3:
+            raise ValueError(f"Expected CHW image tensor, got {tuple(image.shape)}.")
+        image_tensor = denormalize_image_tensor(
+            image.detach().cpu(), mean=mean, std=std
+        )
+        image_np = image_tensor.permute(1, 2, 0).clamp(0, 1).numpy()
+        rendered_image = Image.fromarray((image_np * 255.0).astype(np.uint8))
+    elif isinstance(image, np.ndarray):
+        rendered_image = Image.fromarray(image.astype(np.uint8))
+    elif isinstance(image, Image.Image):
+        rendered_image = image.copy()
+    else:
+        raise TypeError(f"Unsupported image type: {type(image)}.")
+
+    draw = ImageDraw.Draw(rendered_image)
+
+    for landmark_range, close_loop in get_landmark_connection_definitions():
+        connected_points = []
+        for landmark_index in landmark_range:
+            if landmark_index >= len(landmarks):
+                continue
+            if not draw_all_connections and int(visibility[landmark_index]) != 1:
+                continue
+            x_coord, y_coord = landmarks[landmark_index]
+            connected_points.append((float(x_coord), float(y_coord)))
+
+        if len(connected_points) >= 2:
+            draw.line(
+                connected_points, fill=line_color, width=line_width, joint="curve"
+            )
+            if close_loop:
+                draw.line(
+                    [connected_points[-1], connected_points[0]],
+                    fill=line_color,
+                    width=line_width,
+                    joint="curve",
+                )
+
+    for landmark_index, (x_coord, y_coord) in enumerate(landmarks):
+        visibility_value = int(visibility[landmark_index])
+        if visibility_value != 1:
+            continue
+        left = x_coord - point_radius
+        top = y_coord - point_radius
+        right = x_coord + point_radius
+        bottom = y_coord + point_radius
+        draw.ellipse(
+            (left, top, right, bottom),
+            fill="#00C853",
+            outline="white",
+            width=max(1, line_width // 2),
+        )
+        if show_indices:
+            draw.text(
+                (x_coord + point_radius + 2, y_coord + point_radius + 2),
+                str(landmark_index),
+                fill="#00C853",
+            )
+
+    return rendered_image
+
+
+def save_dataset_preview_grid(
+    dataset,
+    output_path: Path,
+    title: str,
+    num_samples: int,
+    seed: int,
+    show_indices: bool = False,
+    point_radius: int = 6,
+    line_width: int = 2,
+    line_color: str = "#00C853",
+    mean: Sequence[float] = (0.485, 0.456, 0.406),
+    std: Sequence[float] = (0.229, 0.224, 0.225),
+) -> Path:
+    """Save a deterministic preview grid for a fixed subset of one dataset split."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    preview_count = min(len(dataset), max(1, int(num_samples)))
+    sample_indices = list(range(preview_count))
+
+    with fixed_visualization_seed(seed):
+        samples = [dataset[index] for index in sample_indices]
+
+    grid_cols = min(4, preview_count)
+    grid_rows = math.ceil(preview_count / grid_cols)
+    figure, axes = plt.subplots(
+        grid_rows,
+        grid_cols,
+        figsize=(grid_cols * 4.0, grid_rows * 4.0),
+    )
+    axes = axes.flatten() if isinstance(axes, np.ndarray) else np.array([axes])
+
+    for axis, sample, sample_index in zip(axes, samples, sample_indices):
+        rendered_image = render_landmark_preview_image(
+            image=sample["image"],
+            landmarks=np.asarray(sample["landmarks"]),
+            visibility=np.asarray(sample["visibility"]),
+            show_indices=show_indices,
+            point_radius=point_radius,
+            line_width=line_width,
+            line_color=line_color,
+            mean=mean,
+            std=std,
+        )
+        axis.imshow(np.asarray(rendered_image))
+        axis.axis("off")
+        sample_id = sample.get("metadata", {}).get(
+            "sample_id", f"sample_{sample_index}"
+        )
+        axis.set_title(str(sample_id), fontsize=10)
+
+    for axis in axes[len(samples) :]:
+        axis.axis("off")
+
+    figure.suptitle(title, fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    figure.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(figure)
+    return output_path
 
 
 def save_landmark_comparison_overlay_image(

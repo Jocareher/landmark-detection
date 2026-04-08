@@ -72,12 +72,15 @@ def export_inference_outputs(
     predictions_dir = output_dir / "predictions"
     prediction_labels_dir = predictions_dir / "labels"
     prediction_overlays_dir = predictions_dir / "images"
+    prediction_crops_dir = predictions_dir / "crops"
 
     output_dir.mkdir(parents=True, exist_ok=True)
     predictions_dir.mkdir(parents=True, exist_ok=True)
     prediction_labels_dir.mkdir(parents=True, exist_ok=True)
     if save_overlays:
         prediction_overlays_dir.mkdir(parents=True, exist_ok=True)
+        if project_to_original:
+            prediction_crops_dir.mkdir(parents=True, exist_ok=True)
 
     model.eval()
     model.to(device)
@@ -129,6 +132,9 @@ def export_inference_outputs(
                     and "transform_crop_to_orig" in metadata_batch
                     and "source_image_path" in metadata_batch
                 ):
+                    crop_image_path = Path(
+                        metadata_batch["crop_image_path"][sample_index]
+                    )
                     crop_size = extract_batched_size(
                         batched_size=metadata_batch["crop_size"],
                         sample_index=sample_index,
@@ -173,6 +179,22 @@ def export_inference_outputs(
                         line_width=line_width,
                         line_color=line_color,
                     )
+                    if (
+                        project_to_original
+                        and "crop_size" in metadata_batch
+                        and "transform_crop_to_orig" in metadata_batch
+                        and prediction_crops_dir is not None
+                    ):
+                        save_landmark_overlay_image(
+                            image_path=crop_image_path,
+                            output_path=prediction_crops_dir / f"{sample_id}.png",
+                            predicted_landmarks=predicted_landmarks_crop.numpy(),
+                            predicted_visibility=predicted_visibility,
+                            show_indices=show_indices,
+                            point_radius=point_radius,
+                            line_width=line_width,
+                            line_color=line_color,
+                        )
 
                 saved_samples += 1
 
@@ -186,5 +208,8 @@ def export_inference_outputs(
         "prediction_labels_dir": str(prediction_labels_dir),
         "prediction_overlays_dir": str(prediction_overlays_dir)
         if save_overlays
+        else None,
+        "prediction_crop_overlays_dir": str(prediction_crops_dir)
+        if save_overlays and project_to_original
         else None,
     }
