@@ -142,6 +142,12 @@ class SyntheticLandmarkDataset(Dataset):
             "transformed_size": (original_height, original_width),
             "split": self.split,
             "num_landmarks": self.num_landmarks,
+            "geometric_augmentation": {
+                "applied": False,
+                "rotation_deg": 0.0,
+                "scale": 1.0,
+                "translation_xy": (0.0, 0.0),
+            },
         }
         sample: SampleDict = {
             "image": image,

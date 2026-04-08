@@ -224,13 +224,21 @@ class RandomAffineLandmarks:
 
     def __call__(self, sample: SampleDict) -> SampleDict:
         """Transform the image and visible landmarks using one shared affine matrix."""
+        metadata = dict(sample.get("metadata", {}))
+        metadata["geometric_augmentation"] = {
+            "applied": False,
+            "rotation_deg": 0.0,
+            "scale": 1.0,
+            "translation_xy": (0.0, 0.0),
+        }
+
         if random.random() > self.probability:
+            sample["metadata"] = metadata
             return sample
 
         image = sample["image"]
         landmarks = np.asarray(sample["landmarks"], dtype=np.float32).copy()
         visibility = np.asarray(sample["visibility"], dtype=np.float32).copy()
-        metadata = dict(sample.get("metadata", {}))
 
         if isinstance(image, np.ndarray):
             image = Image.fromarray(image)
@@ -298,6 +306,7 @@ class RandomAffineLandmarks:
                 transformed_landmarks[outside_indices] = 0.0
 
         metadata["geometric_augmentation"] = {
+            "applied": True,
             "rotation_deg": rotation_deg,
             "scale": scale,
             "translation_xy": (tx, ty),

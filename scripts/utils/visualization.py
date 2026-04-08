@@ -307,7 +307,7 @@ def render_landmark_preview_image(
     mean: Sequence[float] = (0.485, 0.456, 0.406),
     std: Sequence[float] = (0.229, 0.224, 0.225),
 ) -> Image.Image:
-    """Render one landmark preview image from a tensor or array sample."""
+    """Render one landmark preview image using the repository visibility colors."""
     if isinstance(image, torch.Tensor):
         if image.ndim != 3:
             raise ValueError(f"Expected CHW image tensor, got {tuple(image.shape)}.")
@@ -349,23 +349,23 @@ def render_landmark_preview_image(
 
     for landmark_index, (x_coord, y_coord) in enumerate(landmarks):
         visibility_value = int(visibility[landmark_index])
-        if visibility_value != 1:
-            continue
+        color = "red" if visibility_value == 1 else "blue"
+        outline_color = "white" if visibility_value == 1 else "black"
         left = x_coord - point_radius
         top = y_coord - point_radius
         right = x_coord + point_radius
         bottom = y_coord + point_radius
         draw.ellipse(
             (left, top, right, bottom),
-            fill="#00C853",
-            outline="white",
+            fill=color,
+            outline=outline_color,
             width=max(1, line_width // 2),
         )
         if show_indices:
             draw.text(
                 (x_coord + point_radius + 2, y_coord + point_radius + 2),
                 str(landmark_index),
-                fill="#00C853",
+                fill=color,
             )
 
     return rendered_image
