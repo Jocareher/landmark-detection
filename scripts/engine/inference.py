@@ -66,6 +66,7 @@ def export_inference_outputs(
     line_width: int = 4,
     line_color: str = "#FFD400",
     project_to_original: bool = False,
+    save_crop_overlays: bool = False,
 ) -> dict[str, Any]:
     """Run inference and persist predicted labels and optional overlays."""
     output_dir = Path(output_dir)
@@ -79,7 +80,7 @@ def export_inference_outputs(
     prediction_labels_dir.mkdir(parents=True, exist_ok=True)
     if save_overlays:
         prediction_overlays_dir.mkdir(parents=True, exist_ok=True)
-        if project_to_original:
+        if project_to_original and save_crop_overlays:
             prediction_crops_dir.mkdir(parents=True, exist_ok=True)
 
     model.eval()
@@ -183,6 +184,7 @@ def export_inference_outputs(
                         project_to_original
                         and "crop_size" in metadata_batch
                         and "transform_crop_to_orig" in metadata_batch
+                        and save_crop_overlays
                         and prediction_crops_dir is not None
                     ):
                         save_landmark_overlay_image(
@@ -210,6 +212,6 @@ def export_inference_outputs(
         if save_overlays
         else None,
         "prediction_crop_overlays_dir": str(prediction_crops_dir)
-        if save_overlays and project_to_original
+        if save_overlays and project_to_original and save_crop_overlays
         else None,
     }

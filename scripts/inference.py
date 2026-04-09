@@ -283,6 +283,12 @@ def parse_args() -> argparse.Namespace:
         help="Optional root used to resolve relative source_image_path values from detector-export metadata.",
     )
     parser.add_argument(
+        "--save-crop-overlays",
+        action="store_true",
+        default=defaults.save_natural_crop_overlays,
+        help="When combined with --project-to-original, also save qualitative crop-space overlays under predictions/crops/.",
+    )
+    parser.add_argument(
         "--save-config",
         action="store_true",
         default=False,
@@ -303,6 +309,7 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.show_landmark_indices = args.show_indices
     config.project_to_original = args.project_to_original
     config.source_root = args.source_root
+    config.save_natural_crop_overlays = args.save_crop_overlays
 
     if args.output_dir is None:
         resolve_inference_output_dir(config, args.checkpoint)
@@ -391,6 +398,7 @@ def main() -> None:
         line_width=config.overlay_line_width,
         line_color=config.overlay_connection_color,
         project_to_original=config.project_to_original,
+        save_crop_overlays=config.save_natural_crop_overlays,
     )
 
     print("[INFO] Inference finished.")

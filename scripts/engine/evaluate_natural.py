@@ -78,6 +78,7 @@ def evaluate_natural_checkpoint(
     point_radius: int = 10,
     line_width: int = 4,
     line_color: str = "#FFD400",
+    save_crop_overlays: bool = False,
 ) -> dict[str, Any]:
     """Evaluate a checkpoint on detector-export crops and original-image GT."""
     output_dir = Path(output_dir)
@@ -88,15 +89,19 @@ def evaluate_natural_checkpoint(
     predictions_dir = output_dir / "predictions" if save_predictions else None
     prediction_overlays_dir = predictions_dir / "images" if predictions_dir else None
     prediction_labels_dir = predictions_dir / "labels" if predictions_dir else None
-    prediction_crops_dir = predictions_dir / "crops" if predictions_dir else None
+    prediction_crops_dir = (
+        predictions_dir / "crops"
+        if predictions_dir is not None and save_crop_overlays
+        else None
+    )
     if predictions_dir is not None:
         predictions_dir.mkdir(parents=True, exist_ok=True)
         assert prediction_overlays_dir is not None
         assert prediction_labels_dir is not None
-        assert prediction_crops_dir is not None
         prediction_overlays_dir.mkdir(parents=True, exist_ok=True)
         prediction_labels_dir.mkdir(parents=True, exist_ok=True)
-        prediction_crops_dir.mkdir(parents=True, exist_ok=True)
+        if prediction_crops_dir is not None:
+            prediction_crops_dir.mkdir(parents=True, exist_ok=True)
 
     model.eval()
     model.to(device)

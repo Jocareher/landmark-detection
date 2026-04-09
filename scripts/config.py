@@ -107,6 +107,7 @@ VISIBILITY_THRESHOLD = 0.5
 SAVE_EVALUATION_PREDICTIONS = True
 SAVE_EVALUATION_OVERLAYS = True
 SAVE_INFERENCE_OVERLAYS = True
+SAVE_NATURAL_CROP_OVERLAYS = False
 SAVE_TEST_PREDICTIONS_AFTER_TRAINING = True
 SAVE_TEST_OVERLAYS_AFTER_TRAINING = True
 SHOW_LANDMARK_INDICES = False
@@ -192,6 +193,7 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "save_evaluation_predictions": SAVE_EVALUATION_PREDICTIONS,
     "save_evaluation_overlays": SAVE_EVALUATION_OVERLAYS,
     "save_inference_overlays": SAVE_INFERENCE_OVERLAYS,
+    "save_natural_crop_overlays": SAVE_NATURAL_CROP_OVERLAYS,
     "save_test_predictions_after_training": SAVE_TEST_PREDICTIONS_AFTER_TRAINING,
     "save_test_overlays_after_training": SAVE_TEST_OVERLAYS_AFTER_TRAINING,
     "show_landmark_indices": SHOW_LANDMARK_INDICES,

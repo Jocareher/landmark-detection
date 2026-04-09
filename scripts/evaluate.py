@@ -121,6 +121,12 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Save the resolved configuration JSON next to the evaluation outputs.",
     )
+    parser.add_argument(
+        "--save-crop-overlays",
+        action="store_true",
+        default=defaults.save_natural_crop_overlays,
+        help="In natural mode, additionally save qualitative overlays on the detector crops under predictions/crops/.",
+    )
     return parser.parse_args()
 
 
@@ -150,6 +156,7 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.seed = args.seed
     config.visibility_threshold = args.visibility_threshold
     config.use_landmark_names_in_boxplot = args.use_landmark_names
+    config.save_natural_crop_overlays = args.save_crop_overlays
 
     if args.output_dir is None:
         resolve_evaluation_output_dir(config, args.checkpoint)
@@ -244,6 +251,7 @@ def main() -> None:
             point_radius=config.overlay_point_radius,
             line_width=config.overlay_line_width,
             line_color=config.overlay_connection_color,
+            save_crop_overlays=config.save_natural_crop_overlays,
         )
     else:
         dataloader = build_natural_evaluation_dataloader(

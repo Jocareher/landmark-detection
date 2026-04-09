@@ -601,6 +601,7 @@ def plot_per_landmark_boxplot(
     landmark_names = get_default_landmark_names()
     number_of_landmarks = len(per_landmark_errors)
     landmark_colors = get_landmark_region_colors(number_of_landmarks)
+    displayed_landmark_names = landmark_names[:number_of_landmarks]
 
     if y_scale not in {"log", "linear"}:
         raise ValueError(f"Unsupported y_scale '{y_scale}'.")
@@ -650,7 +651,7 @@ def plot_per_landmark_boxplot(
 
     axis.set_xticks(np.arange(1, number_of_landmarks + 1))
     if use_landmark_names:
-        axis.set_xticklabels(landmark_names, rotation=90, fontsize=8)
+        axis.set_xticklabels(displayed_landmark_names, rotation=90, fontsize=8)
     else:
         axis.set_xticklabels(
             [str(index) for index in range(number_of_landmarks)],
