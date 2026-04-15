@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+from .geometry_metrics import compute_per_landmark_point_to_line_distances
 from .metrics import decode_heatmaps_to_image_coords
 from .postprocessing import extract_batched_size, project_landmarks_to_original_size
 from ..utils.predictions import save_prediction_file
@@ -76,6 +77,20 @@ def compute_per_landmark_nme(
     normalization = compute_box_normalization_factor(target_landmarks, eps=eps)
     point_errors = np.linalg.norm(predicted_landmarks - target_landmarks, axis=1)
     return point_errors / normalization
+
+
+def compute_per_landmark_point_to_line_nme(
+    predicted_landmarks: np.ndarray,
+    target_landmarks: np.ndarray,
+    eps: float = 1e-6,
+) -> np.ndarray:
+    """Compute normalized point-to-line error per landmark for one sample."""
+    normalization = compute_box_normalization_factor(target_landmarks, eps=eps)
+    point_to_line_errors = compute_per_landmark_point_to_line_distances(
+        predicted_landmarks=predicted_landmarks,
+        target_landmarks=target_landmarks,
+    )
+    return point_to_line_errors / normalization
 
 
 def compute_interocular_normalization_factor(
@@ -188,6 +203,11 @@ def save_metrics_summary_csv(
         ("num_landmarks", summary.get("num_landmarks")),
         ("mean_nme_box", summary.get("mean_nme_box")),
         ("median_nme_box", summary.get("median_nme_box")),
+        ("mean_nme_box_point_to_line", summary.get("mean_nme_box_point_to_line")),
+        (
+            "median_nme_box_point_to_line",
+            summary.get("median_nme_box_point_to_line"),
+        ),
         ("mean_nme_interocular", summary.get("mean_nme_interocular")),
         ("visibility_accuracy", summary.get("visibility_accuracy")),
         ("visibility_threshold", summary.get("visibility_threshold")),
@@ -226,6 +246,12 @@ def save_metrics_summary_csv(
         for orientation_name, metrics in orientation_metrics.items():
             rows.append(
                 (f"mean_nme_box_{orientation_name}", metrics.get("mean_nme_box"))
+            )
+            rows.append(
+                (
+                    f"mean_nme_box_point_to_line_{orientation_name}",
+                    metrics.get("mean_nme_box_point_to_line"),
+                )
             )
             rows.append(
                 (
@@ -297,6 +323,7 @@ def save_per_image_nme_csv(
                 "sample_id",
                 "orientation",
                 "mean_nme_box",
+                "mean_nme_box_point_to_line",
                 "mean_nme_interocular",
             ]
         )
@@ -308,6 +335,11 @@ def save_per_image_nme_csv(
                     (
                         float(row["mean_nme_box"])
                         if row["mean_nme_box"] is not None
+                        else None
+                    ),
+                    (
+                        float(row["mean_nme_box_point_to_line"])
+                        if row.get("mean_nme_box_point_to_line") is not None
                         else None
                     ),
                     (
@@ -439,6 +471,7 @@ def evaluate_checkpoint(
     model.to(device)
 
     per_landmark_errors: list[list[float]] | None = None
+    per_landmark_point_to_line_errors: list[list[float]] | None = None
     per_image_nme: list[dict[str, Any]] = []
     all_visibility_targets: list[np.ndarray] = []
     all_visibility_predictions: list[np.ndarray] = []
@@ -447,6 +480,9 @@ def evaluate_checkpoint(
 
     orientation_to_errors: dict[str, list[list[float]]] = {}
     orientation_to_box_nme_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
+    orientation_to_box_nme_point_to_line_values: dict[str, list[float]] = {
         orientation: [] for orientation in orientation_names
     }
     orientation_to_interocular_nme_values: dict[str, list[float]] = {
@@ -489,6 +525,9 @@ def evaluate_checkpoint(
             if per_landmark_errors is None:
                 number_of_landmarks = predicted_landmarks_batch.shape[1]
                 per_landmark_errors = [[] for _ in range(number_of_landmarks)]
+                per_landmark_point_to_line_errors = [
+                    [] for _ in range(number_of_landmarks)
+                ]
 
                 orientation_to_errors = {
                     orientation: [[] for _ in range(number_of_landmarks)]
@@ -552,6 +591,13 @@ def evaluate_checkpoint(
                     target_landmarks=target_landmarks_original,
                 )
                 current_mean_box_nme = float(current_errors.mean())
+                current_point_to_line_errors = compute_per_landmark_point_to_line_nme(
+                    predicted_landmarks=predicted_landmarks_original,
+                    target_landmarks=target_landmarks_original,
+                )
+                current_mean_box_nme_point_to_line = float(
+                    current_point_to_line_errors.mean()
+                )
 
                 current_mean_interocular_nme: float | None = None
                 if orientation in {"frontal", "quarter_left", "quarter_right"}:
@@ -569,6 +615,13 @@ def evaluate_checkpoint(
 
                 for landmark_index, error_value in enumerate(current_errors):
                     per_landmark_errors[landmark_index].append(float(error_value))
+                assert per_landmark_point_to_line_errors is not None
+                for landmark_index, error_value in enumerate(
+                    current_point_to_line_errors
+                ):
+                    per_landmark_point_to_line_errors[landmark_index].append(
+                        float(error_value)
+                    )
 
                 for landmark_index, error_value in enumerate(current_errors):
                     orientation_to_errors[orientation][landmark_index].append(
@@ -576,11 +629,15 @@ def evaluate_checkpoint(
                     )
 
                 orientation_to_box_nme_values[orientation].append(current_mean_box_nme)
+                orientation_to_box_nme_point_to_line_values[orientation].append(
+                    current_mean_box_nme_point_to_line
+                )
                 per_image_nme.append(
                     {
                         "sample_id": sample_id,
                         "orientation": orientation,
                         "mean_nme_box": current_mean_box_nme,
+                        "mean_nme_box_point_to_line": current_mean_box_nme_point_to_line,
                         "mean_nme_interocular": current_mean_interocular_nme,
                     }
                 )
@@ -588,12 +645,16 @@ def evaluate_checkpoint(
                 all_visibility_targets.append(target_visibility.reshape(-1))
                 all_visibility_predictions.append(predicted_visibility.reshape(-1))
 
-    if per_landmark_errors is None:
+    if per_landmark_errors is None or per_landmark_point_to_line_errors is None:
         raise RuntimeError("No evaluation samples were processed.")
 
     save_per_landmark_nme_csv(
         per_landmark_errors=per_landmark_errors,
         output_path=output_dir / "per_landmark_nme.csv",
+    )
+    save_per_landmark_nme_csv(
+        per_landmark_errors=per_landmark_point_to_line_errors,
+        output_path=output_dir / "per_landmark_nme_point_to_line.csv",
     )
     save_per_image_nme_csv(
         per_image_nme=per_image_nme,
@@ -646,6 +707,15 @@ def evaluate_checkpoint(
         orientation_metrics={
             orientation: {
                 "mean_nme_box": (float(np.mean(values)) if values else None),
+                "mean_nme_box_point_to_line": (
+                    float(
+                        np.mean(
+                            orientation_to_box_nme_point_to_line_values[orientation]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_values[orientation]
+                    else None
+                ),
                 "mean_nme_interocular": (
                     float(np.mean(orientation_to_interocular_nme_values[orientation]))
                     if orientation_to_interocular_nme_values[orientation]
@@ -665,6 +735,15 @@ def evaluate_checkpoint(
         orientation_metrics={
             orientation: {
                 "mean_nme_box": (float(np.mean(values)) if values else None),
+                "mean_nme_box_point_to_line": (
+                    float(
+                        np.mean(
+                            orientation_to_box_nme_point_to_line_values[orientation]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_values[orientation]
+                    else None
+                ),
                 "mean_nme_interocular": (
                     float(np.mean(orientation_to_interocular_nme_values[orientation]))
                     if orientation_to_interocular_nme_values[orientation]
@@ -704,6 +783,12 @@ def evaluate_checkpoint(
         "median_nme_box": float(
             np.median([row["mean_nme_box"] for row in per_image_nme])
         ),
+        "mean_nme_box_point_to_line": float(
+            np.mean([row["mean_nme_box_point_to_line"] for row in per_image_nme])
+        ),
+        "median_nme_box_point_to_line": float(
+            np.median([row["mean_nme_box_point_to_line"] for row in per_image_nme])
+        ),
         "mean_nme_interocular": (
             float(np.mean(global_interocular_nme_values))
             if global_interocular_nme_values
@@ -728,6 +813,15 @@ def evaluate_checkpoint(
         "orientation_metrics": {
             orientation: {
                 "mean_nme_box": float(np.mean(box_values)) if box_values else None,
+                "mean_nme_box_point_to_line": (
+                    float(
+                        np.mean(
+                            orientation_to_box_nme_point_to_line_values[orientation]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_values[orientation]
+                    else None
+                ),
                 "mean_nme_interocular": (
                     float(np.mean(orientation_to_interocular_nme_values[orientation]))
                     if orientation_to_interocular_nme_values[orientation]

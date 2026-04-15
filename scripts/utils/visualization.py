@@ -215,6 +215,28 @@ def get_landmark_region_colors(num_landmarks: int) -> list[str]:
     return colors
 
 
+def save_overlay_image(image: Image.Image, output_path: Path) -> None:
+    """Save an overlay image with sensible compression based on file extension."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    suffix = output_path.suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        image.convert("RGB").save(
+            output_path,
+            format="JPEG",
+            quality=90,
+            optimize=True,
+            subsampling=0,
+        )
+        return
+
+    image.save(
+        output_path,
+        format="PNG",
+        optimize=True,
+        compress_level=6,
+    )
+
+
 def save_landmark_overlay_image(
     image_path: Path,
     output_path: Path,
@@ -275,7 +297,7 @@ def save_landmark_overlay_image(
                 fill=color,
             )
 
-    image.save(output_path)
+    save_overlay_image(image, output_path)
 
 
 @contextmanager
@@ -539,7 +561,7 @@ def save_landmark_comparison_overlay_image(
                 fill=color,
             )
 
-    image.save(output_path)
+    save_overlay_image(image, output_path)
 
 
 def plot_confusion_matrix(

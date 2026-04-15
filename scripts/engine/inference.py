@@ -155,6 +155,7 @@ def export_inference_outputs(
                     overlay_image_path = Path(
                         metadata_batch["source_image_path"][sample_index]
                     )
+                    overlay_output_path = prediction_overlays_dir / f"{sample_id}.jpg"
                 else:
                     predicted_landmarks_output = project_landmarks_to_original_size(
                         landmarks=predicted_landmarks_batch[sample_index],
@@ -162,6 +163,7 @@ def export_inference_outputs(
                         original_size=original_size,
                     ).numpy()
                     overlay_image_path = image_path
+                    overlay_output_path = prediction_overlays_dir / f"{sample_id}.png"
 
                 save_prediction_file(
                     output_path=prediction_labels_dir / f"{sample_id}.txt",
@@ -172,7 +174,7 @@ def export_inference_outputs(
                 if save_overlays:
                     save_landmark_overlay_image(
                         image_path=overlay_image_path,
-                        output_path=prediction_overlays_dir / f"{sample_id}.png",
+                        output_path=overlay_output_path,
                         predicted_landmarks=predicted_landmarks_output,
                         predicted_visibility=predicted_visibility,
                         show_indices=show_indices,

@@ -102,6 +102,12 @@ def parse_args() -> argparse.Namespace:
         help="Weight assigned to the visibility loss term.",
     )
     parser.add_argument(
+        "--invisible-landmark-weight",
+        type=float,
+        default=defaults.invisible_landmark_weight,
+        help="Relative heatmap-loss weight assigned to GT-invisible landmarks. Visible landmarks always keep weight 1.0.",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=defaults.seed,
@@ -313,6 +319,7 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.learning_rate = args.lr
     config.lambda_heatmap = args.lambda_heatmap
     config.lambda_visibility = args.lambda_visibility
+    config.invisible_landmark_weight = args.invisible_landmark_weight
     config.seed = args.seed
     config.device = args.device
     config.transfer_mode = args.transfer_mode
@@ -494,7 +501,8 @@ def main() -> None:
             f"batch_size={config.batch_size} "
             f"lr={config.learning_rate} "
             f"lambda_heatmap={config.lambda_heatmap} "
-            f"lambda_visibility={config.lambda_visibility}"
+            f"lambda_visibility={config.lambda_visibility} "
+            f"invisible_landmark_weight={config.invisible_landmark_weight}"
         )
 
         if config.run_smoke_test:
@@ -509,6 +517,7 @@ def main() -> None:
                 optimizer=optimizer,
                 lambda_heatmap=config.lambda_heatmap,
                 lambda_visibility=config.lambda_visibility,
+                invisible_landmark_weight=config.invisible_landmark_weight,
             )
 
         print("[INFO] Starting training loop...")
@@ -525,6 +534,7 @@ def main() -> None:
             output_dir=config.output_dir,
             lambda_heatmap=config.lambda_heatmap,
             lambda_visibility=config.lambda_visibility,
+            invisible_landmark_weight=config.invisible_landmark_weight,
             patience=config.patience,
             project_name=config.wandb_project,
             run_name=config.wandb_run_name,
@@ -567,6 +577,16 @@ def main() -> None:
         print("[INFO] Test evaluation finished.")
         print(f"[INFO] Test mean NME box: {test_summary['mean_nme_box']:.6f}")
         print(f"[INFO] Test median NME box: {test_summary['median_nme_box']:.6f}")
+        if test_summary.get("mean_nme_box_point_to_line") is not None:
+            print(
+                "[INFO] Test mean NME box point-to-line: "
+                f"{test_summary['mean_nme_box_point_to_line']:.6f}"
+            )
+        if test_summary.get("median_nme_box_point_to_line") is not None:
+            print(
+                "[INFO] Test median NME box point-to-line: "
+                f"{test_summary['median_nme_box_point_to_line']:.6f}"
+            )
         if test_summary["mean_nme_interocular"] is not None:
             print(
                 f"[INFO] Test mean NME interocular: {test_summary['mean_nme_interocular']:.6f}"
