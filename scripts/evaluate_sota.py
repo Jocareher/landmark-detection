@@ -115,6 +115,11 @@ def main() -> None:
             "[INFO] Invalid prediction files treated as missing: "
             f"{summary['images_with_invalid_prediction']}"
         )
+    if summary.get("unmatched_prediction_files_count", 0) > 0:
+        print(
+            "[INFO] Prediction files without resolved GT match: "
+            f"{summary['unmatched_prediction_files_count']}"
+        )
 
 
 if __name__ == "__main__":

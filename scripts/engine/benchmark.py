@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from ..utils.visualization import (
 )
 
 VALID_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
+DETECTOR_EXPORT_SUFFIX_PATTERN = re.compile(r"^(?P<base>.+)__det_(?P<index>\d+)$")
 
 
 @dataclass
@@ -33,6 +35,29 @@ class ParsedPrediction:
     visibility: np.ndarray | None
     num_landmarks: int
     parse_mode: str
+
+
+def strip_detector_export_suffix(prediction_stem: str) -> str | None:
+    """Strip one trailing detector-export suffix like ``__det_000`` when present."""
+    match = DETECTOR_EXPORT_SUFFIX_PATTERN.match(prediction_stem)
+    if match is None:
+        return None
+    return str(match.group("base"))
+
+
+def resolve_gt_stem_for_prediction(
+    prediction_stem: str,
+    available_gt_stems: set[str],
+) -> str | None:
+    """Resolve the GT stem for one prediction stem using exact match then suffix fallback."""
+    if prediction_stem in available_gt_stems:
+        return prediction_stem
+
+    stripped_base_stem = strip_detector_export_suffix(prediction_stem)
+    if stripped_base_stem is not None and stripped_base_stem in available_gt_stems:
+        return stripped_base_stem
+
+    return None
 
 
 def resolve_text_labels_dir(
@@ -277,6 +302,10 @@ def save_benchmark_summary_csv(output_path: Path, summary: dict[str, Any]) -> No
             "images_with_invalid_prediction",
             summary.get("images_with_invalid_prediction"),
         ),
+        (
+            "unmatched_prediction_files_count",
+            summary.get("unmatched_prediction_files_count"),
+        ),
         ("detection_rate", summary.get("detection_rate")),
         ("mean_nme_box", summary.get("mean_nme_box")),
         ("median_nme_box", summary.get("median_nme_box")),
@@ -312,6 +341,35 @@ def benchmark_prediction_directory(
     figures_dir.mkdir(parents=True, exist_ok=True)
 
     samples = iter_dataset_samples(dataset_root)
+    sample_by_id = {str(sample["sample_id"]): sample for sample in samples}
+    available_gt_stems = set(sample_by_id)
+    prediction_paths = sorted(prediction_labels_dir.glob("*.txt"))
+    prediction_paths_by_gt_stem: dict[str, list[Path]] = {
+        sample_id: [] for sample_id in sample_by_id
+    }
+    unmatched_prediction_files: list[str] = []
+
+    for prediction_path in prediction_paths:
+        resolved_gt_stem = resolve_gt_stem_for_prediction(
+            prediction_stem=prediction_path.stem,
+            available_gt_stems=available_gt_stems,
+        )
+        if resolved_gt_stem is None:
+            unmatched_prediction_files.append(
+                f"{prediction_path.name}: could not resolve a GT file by exact stem "
+                "or by stripping a trailing '__det_<index>' suffix."
+            )
+            continue
+        prediction_paths_by_gt_stem[resolved_gt_stem].append(prediction_path)
+
+    for current_prediction_paths in prediction_paths_by_gt_stem.values():
+        current_prediction_paths.sort(
+            key=lambda path: (
+                1 if strip_detector_export_suffix(path.stem) is not None else 0,
+                path.name,
+            )
+        )
+
     per_landmark_errors_68: list[list[float]] = [[] for _ in range(68)]
     per_landmark_errors_72: list[list[float]] = [[] for _ in range(72)]
     per_landmark_point_to_line_errors_68: list[list[float]] = [[] for _ in range(68)]
@@ -326,8 +384,8 @@ def benchmark_prediction_directory(
 
     for sample in samples:
         sample_id = sample["sample_id"]
-        prediction_path = prediction_labels_dir / f"{sample_id}.txt"
-        if not prediction_path.exists():
+        candidate_prediction_paths = prediction_paths_by_gt_stem.get(sample_id, [])
+        if not candidate_prediction_paths:
             images_without_prediction += 1
             per_image_nme.append(
                 {
@@ -340,15 +398,77 @@ def benchmark_prediction_directory(
             )
             continue
 
-        try:
-            parsed_prediction = load_prediction_file(
-                prediction_path=prediction_path,
-                expected_num_landmarks=inferred_num_landmarks,
+        sample_has_valid_prediction = False
+        for prediction_path in candidate_prediction_paths:
+            try:
+                parsed_prediction = load_prediction_file(
+                    prediction_path=prediction_path,
+                    expected_num_landmarks=inferred_num_landmarks,
+                )
+            except Exception as error:
+                images_with_invalid_prediction += 1
+                invalid_prediction_files.append(
+                    f"{prediction_path.stem} -> {sample_id}: {error}"
+                )
+                continue
+
+            inferred_num_landmarks = parsed_prediction.num_landmarks
+            sample_has_valid_prediction = True
+
+            with Image.open(sample["image_path"]) as image:
+                image_width, image_height = image.size
+
+            gt_landmarks_all, gt_visibility_all = load_ground_truth_landmarks(
+                label_path=sample["label_path"],
+                image_width=image_width,
+                image_height=image_height,
             )
-        except Exception as error:
+
+            landmark_count = parsed_prediction.num_landmarks
+            gt_landmarks = gt_landmarks_all[:landmark_count]
+            gt_visibility = gt_visibility_all[:landmark_count]
+            valid_mask = gt_visibility == 1
+            per_landmark_errors = (
+                per_landmark_errors_68
+                if landmark_count == 68
+                else per_landmark_errors_72
+            )
+            per_landmark_point_to_line_errors = (
+                per_landmark_point_to_line_errors_68
+                if landmark_count == 68
+                else per_landmark_point_to_line_errors_72
+            )
+
+            (
+                visible_errors,
+                visible_point_to_line_errors,
+                mean_box_nme,
+                mean_box_nme_point_to_line,
+            ) = compute_masked_per_landmark_metrics(
+                predicted_landmarks=parsed_prediction.landmarks,
+                target_landmarks=gt_landmarks,
+                valid_mask=valid_mask,
+            )
+            valid_landmarks_used += len(visible_errors)
+            for landmark_index, error_value in visible_errors.items():
+                per_landmark_errors[landmark_index].append(error_value)
+            for landmark_index, error_value in visible_point_to_line_errors.items():
+                per_landmark_point_to_line_errors[landmark_index].append(error_value)
+
+            per_image_nme.append(
+                {
+                    "sample_id": prediction_path.stem,
+                    "orientation": "benchmark",
+                    "mean_nme_box": mean_box_nme,
+                    "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
+                    "mean_nme_interocular": None,
+                }
+            )
+
+        if sample_has_valid_prediction:
+            images_with_prediction += 1
+        else:
             images_without_prediction += 1
-            images_with_invalid_prediction += 1
-            invalid_prediction_files.append(f"{sample_id}: {error}")
             per_image_nme.append(
                 {
                     "sample_id": sample_id,
@@ -358,58 +478,6 @@ def benchmark_prediction_directory(
                     "mean_nme_interocular": None,
                 }
             )
-            continue
-
-        inferred_num_landmarks = parsed_prediction.num_landmarks
-        images_with_prediction += 1
-
-        with Image.open(sample["image_path"]) as image:
-            image_width, image_height = image.size
-
-        gt_landmarks_all, gt_visibility_all = load_ground_truth_landmarks(
-            label_path=sample["label_path"],
-            image_width=image_width,
-            image_height=image_height,
-        )
-
-        landmark_count = parsed_prediction.num_landmarks
-        gt_landmarks = gt_landmarks_all[:landmark_count]
-        gt_visibility = gt_visibility_all[:landmark_count]
-        valid_mask = gt_visibility == 1
-        per_landmark_errors = (
-            per_landmark_errors_68 if landmark_count == 68 else per_landmark_errors_72
-        )
-        per_landmark_point_to_line_errors = (
-            per_landmark_point_to_line_errors_68
-            if landmark_count == 68
-            else per_landmark_point_to_line_errors_72
-        )
-
-        (
-            visible_errors,
-            visible_point_to_line_errors,
-            mean_box_nme,
-            mean_box_nme_point_to_line,
-        ) = compute_masked_per_landmark_metrics(
-            predicted_landmarks=parsed_prediction.landmarks,
-            target_landmarks=gt_landmarks,
-            valid_mask=valid_mask,
-        )
-        valid_landmarks_used += len(visible_errors)
-        for landmark_index, error_value in visible_errors.items():
-            per_landmark_errors[landmark_index].append(error_value)
-        for landmark_index, error_value in visible_point_to_line_errors.items():
-            per_landmark_point_to_line_errors[landmark_index].append(error_value)
-
-        per_image_nme.append(
-            {
-                "sample_id": sample_id,
-                "orientation": "benchmark",
-                "mean_nme_box": mean_box_nme,
-                "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
-                "mean_nme_interocular": None,
-            }
-        )
 
     if inferred_num_landmarks is None:
         raise RuntimeError(
@@ -491,6 +559,7 @@ def benchmark_prediction_directory(
         "images_with_prediction": int(images_with_prediction),
         "images_without_prediction": int(images_without_prediction),
         "images_with_invalid_prediction": int(images_with_invalid_prediction),
+        "unmatched_prediction_files_count": int(len(unmatched_prediction_files)),
         "detection_rate": float(images_with_prediction / max(len(samples), 1)),
         "mean_nme_box": (
             float(np.mean(valid_image_nme_values)) if valid_image_nme_values else None
@@ -510,6 +579,7 @@ def benchmark_prediction_directory(
         ),
         "valid_landmarks_used": int(valid_landmarks_used),
         "invalid_prediction_files": invalid_prediction_files,
+        "unmatched_prediction_files": unmatched_prediction_files,
     }
 
     save_benchmark_summary_csv(
@@ -545,6 +615,35 @@ def benchmark_infantface_prediction_directory(
     if not gt_paths:
         raise RuntimeError(f"No InfantFace GT txt files found under {gt_labels_dir}.")
 
+    gt_paths_by_stem = {gt_path.stem: gt_path for gt_path in gt_paths}
+    available_gt_stems = set(gt_paths_by_stem)
+    prediction_paths = sorted(prediction_labels_dir.glob("*.txt"))
+    prediction_paths_by_gt_stem: dict[str, list[Path]] = {
+        gt_stem: [] for gt_stem in gt_paths_by_stem
+    }
+    unmatched_prediction_files: list[str] = []
+
+    for prediction_path in prediction_paths:
+        resolved_gt_stem = resolve_gt_stem_for_prediction(
+            prediction_stem=prediction_path.stem,
+            available_gt_stems=available_gt_stems,
+        )
+        if resolved_gt_stem is None:
+            unmatched_prediction_files.append(
+                f"{prediction_path.name}: could not resolve a GT file by exact stem "
+                "or by stripping a trailing '__det_<index>' suffix."
+            )
+            continue
+        prediction_paths_by_gt_stem[resolved_gt_stem].append(prediction_path)
+
+    for current_prediction_paths in prediction_paths_by_gt_stem.values():
+        current_prediction_paths.sort(
+            key=lambda path: (
+                1 if strip_detector_export_suffix(path.stem) is not None else 0,
+                path.name,
+            )
+        )
+
     per_landmark_errors: list[list[float]] = [[] for _ in range(68)]
     per_landmark_point_to_line_errors: list[list[float]] = [[] for _ in range(68)]
     per_image_nme: list[dict[str, Any]] = []
@@ -557,8 +656,8 @@ def benchmark_infantface_prediction_directory(
 
     for gt_path in gt_paths:
         sample_id = gt_path.stem
-        prediction_path = prediction_labels_dir / f"{sample_id}.txt"
-        if not prediction_path.exists():
+        candidate_prediction_paths = prediction_paths_by_gt_stem.get(sample_id, [])
+        if not candidate_prediction_paths:
             images_without_prediction += 1
             per_image_nme.append(
                 {
@@ -571,15 +670,57 @@ def benchmark_infantface_prediction_directory(
             )
             continue
 
-        try:
-            parsed_prediction = load_prediction_file(
-                prediction_path=prediction_path,
-                expected_num_landmarks=inferred_num_landmarks,
+        sample_has_valid_prediction = False
+        for prediction_path in candidate_prediction_paths:
+            try:
+                parsed_prediction = load_prediction_file(
+                    prediction_path=prediction_path,
+                    expected_num_landmarks=inferred_num_landmarks,
+                )
+            except Exception as error:
+                images_with_invalid_prediction += 1
+                invalid_prediction_files.append(
+                    f"{prediction_path.stem} -> {sample_id}: {error}"
+                )
+                continue
+
+            inferred_num_landmarks = parsed_prediction.num_landmarks
+            sample_has_valid_prediction = True
+
+            gt_landmarks = load_infantface_ground_truth_landmarks(gt_path)
+            predicted_landmarks = parsed_prediction.landmarks[:68].astype(np.float32)
+            valid_mask = np.ones(68, dtype=bool)
+
+            (
+                current_errors,
+                current_point_to_line_errors,
+                mean_box_nme,
+                mean_box_nme_point_to_line,
+            ) = compute_masked_per_landmark_metrics(
+                predicted_landmarks=predicted_landmarks,
+                target_landmarks=gt_landmarks,
+                valid_mask=valid_mask,
             )
-        except Exception as error:
+            valid_landmarks_used += len(current_errors)
+            for landmark_index, error_value in current_errors.items():
+                per_landmark_errors[landmark_index].append(error_value)
+            for landmark_index, error_value in current_point_to_line_errors.items():
+                per_landmark_point_to_line_errors[landmark_index].append(error_value)
+
+            per_image_nme.append(
+                {
+                    "sample_id": prediction_path.stem,
+                    "orientation": "infantface",
+                    "mean_nme_box": mean_box_nme,
+                    "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
+                    "mean_nme_interocular": None,
+                }
+            )
+
+        if sample_has_valid_prediction:
+            images_with_prediction += 1
+        else:
             images_without_prediction += 1
-            images_with_invalid_prediction += 1
-            invalid_prediction_files.append(f"{sample_id}: {error}")
             per_image_nme.append(
                 {
                     "sample_id": sample_id,
@@ -589,40 +730,6 @@ def benchmark_infantface_prediction_directory(
                     "mean_nme_interocular": None,
                 }
             )
-            continue
-
-        inferred_num_landmarks = parsed_prediction.num_landmarks
-        images_with_prediction += 1
-
-        gt_landmarks = load_infantface_ground_truth_landmarks(gt_path)
-        predicted_landmarks = parsed_prediction.landmarks[:68].astype(np.float32)
-        valid_mask = np.ones(68, dtype=bool)
-
-        (
-            current_errors,
-            current_point_to_line_errors,
-            mean_box_nme,
-            mean_box_nme_point_to_line,
-        ) = compute_masked_per_landmark_metrics(
-            predicted_landmarks=predicted_landmarks,
-            target_landmarks=gt_landmarks,
-            valid_mask=valid_mask,
-        )
-        valid_landmarks_used += len(current_errors)
-        for landmark_index, error_value in current_errors.items():
-            per_landmark_errors[landmark_index].append(error_value)
-        for landmark_index, error_value in current_point_to_line_errors.items():
-            per_landmark_point_to_line_errors[landmark_index].append(error_value)
-
-        per_image_nme.append(
-            {
-                "sample_id": sample_id,
-                "orientation": "infantface",
-                "mean_nme_box": mean_box_nme,
-                "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
-                "mean_nme_interocular": None,
-            }
-        )
 
     if inferred_num_landmarks is None:
         raise RuntimeError(
@@ -688,6 +795,7 @@ def benchmark_infantface_prediction_directory(
         "images_with_prediction": int(images_with_prediction),
         "images_without_prediction": int(images_without_prediction),
         "images_with_invalid_prediction": int(images_with_invalid_prediction),
+        "unmatched_prediction_files_count": int(len(unmatched_prediction_files)),
         "detection_rate": float(images_with_prediction / max(len(gt_paths), 1)),
         "mean_nme_box": (
             float(np.mean(valid_image_nme_values)) if valid_image_nme_values else None
@@ -707,6 +815,7 @@ def benchmark_infantface_prediction_directory(
         ),
         "valid_landmarks_used": int(valid_landmarks_used),
         "invalid_prediction_files": invalid_prediction_files,
+        "unmatched_prediction_files": unmatched_prediction_files,
     }
 
     save_benchmark_summary_csv(

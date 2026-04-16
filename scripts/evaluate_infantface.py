@@ -115,6 +115,16 @@ def main() -> None:
         print("[INFO] Mean NME box point-to-line: n/a")
     print(f"[INFO] Valid landmarks used: {summary['valid_landmarks_used']}")
     print(f"[INFO] Output dir: {output_dir}")
+    if summary["images_with_invalid_prediction"] > 0:
+        print(
+            "[INFO] Invalid prediction files treated as missing: "
+            f"{summary['images_with_invalid_prediction']}"
+        )
+    if summary.get("unmatched_prediction_files_count", 0) > 0:
+        print(
+            "[INFO] Prediction files without resolved GT match: "
+            f"{summary['unmatched_prediction_files_count']}"
+        )
 
 
 if __name__ == "__main__":
