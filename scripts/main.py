@@ -375,6 +375,24 @@ def build_model(config: ExperimentConfig) -> HRNetLandmarkVisibility:
     return model
 
 
+def print_visibility_metrics(summary: dict, prefix: str = "") -> None:
+    """Print visibility precision, recall, and F1 metrics."""
+    metrics = summary.get("visibility_metrics", {})
+    label_prefix = f"{prefix} " if prefix else ""
+    for label, display_name in (
+        ("global", "Global"),
+        ("visible", "Visible class"),
+        ("invisible", "Invisible class"),
+    ):
+        current = metrics.get(label, {})
+        print(
+            f"[INFO] {label_prefix}Visibility {display_name}: "
+            f"precision={current.get('precision', 0.0):.4f} "
+            f"recall={current.get('recall', 0.0):.4f} "
+            f"f1={current.get('f1', 0.0):.4f}"
+        )
+
+
 def main() -> None:
     """Execute the end-to-end experiment pipeline from the command line."""
     args = parse_args()
@@ -544,7 +562,7 @@ def main() -> None:
         )
         print("[INFO] Training finished.")
         print(f"[INFO] Best epoch: {summary['best_epoch']}")
-        print(f"[INFO] Best val loss: {summary['best_val_loss']:.6f}")
+        print(f"[INFO] Best val loss: {summary['best_val_loss']:.4f}")
         print(f"[INFO] Results CSV: {summary['results_csv']}")
 
         best_checkpoint_path = config.output_dir / "best_model.pth"
@@ -574,25 +592,23 @@ def main() -> None:
             line_color=config.overlay_connection_color,
         )
         print("[INFO] Test evaluation finished.")
-        print(f"[INFO] Test mean NME box: {test_summary['mean_nme_box']:.6f}")
-        print(f"[INFO] Test median NME box: {test_summary['median_nme_box']:.6f}")
+        print(f"[INFO] Test mean NME box: {test_summary['mean_nme_box']:.4f}")
+        print(f"[INFO] Test median NME box: {test_summary['median_nme_box']:.4f}")
         if test_summary.get("mean_nme_box_point_to_line") is not None:
             print(
                 "[INFO] Test mean NME box point-to-line: "
-                f"{test_summary['mean_nme_box_point_to_line']:.6f}"
+                f"{test_summary['mean_nme_box_point_to_line']:.4f}"
             )
         if test_summary.get("median_nme_box_point_to_line") is not None:
             print(
                 "[INFO] Test median NME box point-to-line: "
-                f"{test_summary['median_nme_box_point_to_line']:.6f}"
+                f"{test_summary['median_nme_box_point_to_line']:.4f}"
             )
         if test_summary["mean_nme_interocular"] is not None:
             print(
-                f"[INFO] Test mean NME interocular: {test_summary['mean_nme_interocular']:.6f}"
+                f"[INFO] Test mean NME interocular: {test_summary['mean_nme_interocular']:.4f}"
             )
-        print(
-            f"[INFO] Test visibility accuracy: {test_summary['visibility_accuracy']:.6f}"
-        )
+        print_visibility_metrics(test_summary, prefix="Test")
         print(f"[INFO] Test evaluation dir: {test_output_dir}")
         print(f"[INFO] Test labels dir: {test_summary['prediction_labels_dir']}")
         if test_summary["prediction_overlays_dir"] is not None:

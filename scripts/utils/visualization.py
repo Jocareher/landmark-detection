@@ -577,7 +577,7 @@ def plot_confusion_matrix(
     figure, axis = plt.subplots(figsize=(6.5, 5.5))
     image = axis.imshow(matrix, cmap="Blues", interpolation="nearest")
 
-    class_labels = ["Visible (0)", "Invisible (1)"]
+    class_labels = ["Invisible (0)", "Visible (1)"]
     axis.set_xticks([0, 1])
     axis.set_yticks([0, 1])
     axis.set_xticklabels(class_labels, fontsize=11)
@@ -619,6 +619,8 @@ def plot_per_landmark_boxplot(
     title: str = "Per-landmark NME distribution",
     y_limits: tuple[float, float] | None = None,
     y_scale: str = "log",
+    clip_values_to_y_limits: bool = False,
+    clipping_note: str | None = None,
 ) -> None:
     """Plot a per-landmark NME boxplot using semantic region colors."""
     landmark_names = get_default_landmark_names()
@@ -634,6 +636,11 @@ def plot_per_landmark_boxplot(
         current_values = [float(value) for value in landmark_values]
         if y_scale == "log":
             current_values = [max(value, 1e-8) for value in current_values]
+        if clip_values_to_y_limits and y_limits is not None:
+            y_min, y_max = y_limits
+            current_values = [
+                min(max(value, y_min), y_max) for value in current_values
+            ]
         plotted_errors.append(current_values)
 
     figure_width = max(20.0, number_of_landmarks * 0.34)
@@ -691,6 +698,18 @@ def plot_per_landmark_boxplot(
     axis.set_title(title, fontsize=17, fontweight="bold", pad=12)
     axis.tick_params(axis="y", labelsize=11)
     axis.grid(True, axis="y", linestyle="--", alpha=0.35)
+    if clipping_note:
+        axis.text(
+            0.995,
+            0.015,
+            clipping_note,
+            transform=axis.transAxes,
+            ha="right",
+            va="bottom",
+            fontsize=8,
+            color="#555555",
+            alpha=0.85,
+        )
 
     from matplotlib.lines import Line2D
     from matplotlib.patches import Patch
@@ -788,6 +807,8 @@ def plot_yaw_view_boxplots(
     orientation_metrics: dict[str, dict[str, float | None]] | None = None,
     y_scale: str = "log",
     filename_suffix: str = "log",
+    clip_values_to_y_limits: bool = False,
+    clipping_note: str | None = None,
 ) -> None:
     """Generate one per-landmark NME boxplot for each face orientation."""
     ordered_orientations = [
@@ -814,15 +835,15 @@ def plot_yaw_view_boxplots(
         )
         summary_parts = []
         if current_metrics.get("mean_nme_box") is not None:
-            summary_parts.append(f"Mean NME box: {current_metrics['mean_nme_box']:.6f}")
+            summary_parts.append(f"Mean NME box: {current_metrics['mean_nme_box']:.4f}")
         if current_metrics.get("mean_nme_box_point_to_line") is not None:
             summary_parts.append(
                 "Mean NME point-to-line: "
-                f"{current_metrics['mean_nme_box_point_to_line']:.6f}"
+                f"{current_metrics['mean_nme_box_point_to_line']:.4f}"
             )
         if current_metrics.get("mean_nme_interocular") is not None:
             summary_parts.append(
-                f"Mean NME interocular: {current_metrics['mean_nme_interocular']:.6f}"
+                f"Mean NME interocular: {current_metrics['mean_nme_interocular']:.4f}"
             )
         if summary_parts:
             title = f"{title}\n" + " | ".join(summary_parts)
@@ -835,4 +856,6 @@ def plot_yaw_view_boxplots(
             title=title,
             y_limits=y_limits,
             y_scale=y_scale,
+            clip_values_to_y_limits=clip_values_to_y_limits,
+            clipping_note=clipping_note,
         )

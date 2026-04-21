@@ -13,6 +13,8 @@ from PIL import Image
 from .evaluate import (
     _build_boxplot_title,
     compute_box_normalization_factor,
+    format_metric_value,
+    round_metric_value,
     save_per_image_nme_csv,
     save_per_landmark_nme_csv,
 )
@@ -348,7 +350,12 @@ def save_benchmark_summary_csv(output_path: Path, summary: dict[str, Any]) -> No
         writer = csv.writer(file)
         writer.writerow(["metric", "value"])
         for metric_name, metric_value in rows:
-            writer.writerow([metric_name, metric_value])
+            writer.writerow(
+                [
+                    metric_name,
+                    format_metric_value(round_metric_value(metric_value)),
+                ]
+            )
 
 
 def benchmark_prediction_directory(
@@ -604,6 +611,12 @@ def benchmark_prediction_directory(
             if fixed_log_y_limits is not None
             else compute_global_log_y_limits(grouped_errors)
         )
+        clip_log_for_comparison = fixed_log_y_limits is not None
+        clipping_note = (
+            f"Values clipped to [{y_limits_log[0]:.0e}, {y_limits_log[1]:.0e}] for display only"
+            if clip_log_for_comparison
+            else None
+        )
         orientation_metrics = {
             orientation: {
                 "mean_nme_box": (float(np.mean(values)) if values else None),
@@ -629,6 +642,8 @@ def benchmark_prediction_directory(
             y_scale="log",
             filename_suffix="log",
             orientation_metrics=orientation_metrics,
+            clip_values_to_y_limits=clip_log_for_comparison,
+            clipping_note=clipping_note,
         )
         plot_yaw_view_boxplots(
             orientation_to_errors=selected_orientation_to_errors,
@@ -646,6 +661,8 @@ def benchmark_prediction_directory(
             title=title,
             y_limits=y_limits_log,
             y_scale="log",
+            clip_values_to_y_limits=clip_log_for_comparison,
+            clipping_note=clipping_note,
         )
         plot_per_landmark_boxplot(
             per_landmark_errors=selected_per_landmark_errors,
@@ -707,7 +724,17 @@ def benchmark_prediction_directory(
             if orientation != UNKNOWN_ORIENTATION
             or orientation_sample_counts.get(orientation, 0) > 0
         },
+        "comparable_log_boxplot": {
+            "y_limits": list(fixed_log_y_limits)
+            if fixed_log_y_limits is not None
+            else None,
+            "values_clipped_for_visualization_only": bool(
+                fixed_log_y_limits is not None
+            ),
+        },
     }
+
+    summary = round_metric_value(summary)
 
     save_benchmark_summary_csv(
         output_path=output_dir / "metrics_summary.csv",
@@ -944,6 +971,8 @@ def benchmark_infantface_prediction_directory(
         "invalid_prediction_files": invalid_prediction_files,
         "unmatched_prediction_files": unmatched_prediction_files,
     }
+
+    summary = round_metric_value(summary)
 
     save_benchmark_summary_csv(
         output_path=output_dir / "metrics_summary.csv",

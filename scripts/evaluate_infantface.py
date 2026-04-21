@@ -100,16 +100,16 @@ def main() -> None:
     print(
         "[INFO] Detection rate: "
         f"{summary['images_with_prediction']}/{summary['total_images']} "
-        f"({summary['detection_rate'] * 100.0:.2f}%)"
+        f"({summary['detection_rate'] * 100.0:.4f}%)"
     )
     if summary["mean_nme_box"] is not None:
-        print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.6f}")
+        print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.4f}")
     else:
         print("[INFO] Mean NME box: n/a")
     if summary["mean_nme_box_point_to_line"] is not None:
         print(
             "[INFO] Mean NME box point-to-line: "
-            f"{summary['mean_nme_box_point_to_line']:.6f}"
+            f"{summary['mean_nme_box_point_to_line']:.4f}"
         )
     else:
         print("[INFO] Mean NME box point-to-line: n/a")

@@ -204,6 +204,23 @@ def build_model(config: ExperimentConfig) -> HRNetLandmarkVisibility:
     return model
 
 
+def print_visibility_metrics(summary: dict) -> None:
+    """Print visibility precision, recall, and F1 metrics."""
+    metrics = summary.get("visibility_metrics", {})
+    for label, display_name in (
+        ("global", "Global"),
+        ("visible", "Visible class"),
+        ("invisible", "Invisible class"),
+    ):
+        current = metrics.get(label, {})
+        print(
+            f"[INFO] Visibility {display_name}: "
+            f"precision={current.get('precision', 0.0):.4f} "
+            f"recall={current.get('recall', 0.0):.4f} "
+            f"f1={current.get('f1', 0.0):.4f}"
+        )
+
+
 def main() -> None:
     """
     Run standalone evaluation.
@@ -277,30 +294,30 @@ def main() -> None:
 
     print("[INFO] Evaluation finished.")
     if summary["mean_nme_box"] is not None:
-        print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.6f}")
+        print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.4f}")
     else:
         print("[INFO] Mean NME box: n/a")
     if summary["median_nme_box"] is not None:
-        print(f"[INFO] Median NME box: {summary['median_nme_box']:.6f}")
+        print(f"[INFO] Median NME box: {summary['median_nme_box']:.4f}")
     else:
         print("[INFO] Median NME box: n/a")
     if summary.get("mean_nme_box_point_to_line") is not None:
         print(
             "[INFO] Mean NME box point-to-line: "
-            f"{summary['mean_nme_box_point_to_line']:.6f}"
+            f"{summary['mean_nme_box_point_to_line']:.4f}"
         )
     else:
         print("[INFO] Mean NME box point-to-line: n/a")
     if summary.get("median_nme_box_point_to_line") is not None:
         print(
             "[INFO] Median NME box point-to-line: "
-            f"{summary['median_nme_box_point_to_line']:.6f}"
+            f"{summary['median_nme_box_point_to_line']:.4f}"
         )
     else:
         print("[INFO] Median NME box point-to-line: n/a")
     if summary["mean_nme_interocular"] is not None:
-        print(f"[INFO] Mean NME interocular: {summary['mean_nme_interocular']:.6f}")
-    print(f"[INFO] Visibility accuracy: {summary['visibility_accuracy']:.6f}")
+        print(f"[INFO] Mean NME interocular: {summary['mean_nme_interocular']:.4f}")
+    print_visibility_metrics(summary)
     print(f"[INFO] Labels dir: {summary['prediction_labels_dir']}")
     if summary["prediction_overlays_dir"] is not None:
         print(f"[INFO] Overlays dir: {summary['prediction_overlays_dir']}")

@@ -12,7 +12,9 @@ from .evaluate import (
     _build_boxplot_title,
     compute_binary_confusion_matrix,
     compute_box_normalization_factor,
+    compute_visibility_classification_metrics,
     normalize_confusion_matrix,
+    round_metric_value,
     save_metrics_summary_csv,
     save_per_image_nme_csv,
     save_per_landmark_nme_csv,
@@ -402,6 +404,9 @@ def evaluate_natural_checkpoint(
         predictions=visibility_predictions,
     )
     confusion_matrix_normalized = normalize_confusion_matrix(confusion_matrix_raw)
+    visibility_metrics = compute_visibility_classification_metrics(
+        confusion_matrix_raw
+    )
 
     plot_confusion_matrix(
         matrix=confusion_matrix_raw,
@@ -413,7 +418,7 @@ def evaluate_natural_checkpoint(
         matrix=confusion_matrix_normalized,
         output_path=figures_dir / "confusion_matrix_normalized.png",
         title="Visibility confusion matrix normalized",
-        value_format=".3f",
+        value_format=".4f",
     )
 
     summary = {
@@ -438,9 +443,7 @@ def evaluate_natural_checkpoint(
             else None
         ),
         "mean_nme_interocular": None,
-        "visibility_accuracy": float(
-            (visibility_targets == visibility_predictions).mean()
-        ),
+        "visibility_metrics": visibility_metrics,
         "visibility_threshold": float(visibility_threshold),
         "confusion_matrix_raw": confusion_matrix_raw.tolist(),
         "confusion_matrix_normalized": confusion_matrix_normalized.tolist(),
@@ -468,6 +471,8 @@ def evaluate_natural_checkpoint(
             or orientation_sample_counts.get(orientation, 0) > 0
         },
     }
+
+    summary = round_metric_value(summary)
 
     save_metrics_summary_csv(
         output_path=output_dir / "metrics_summary.csv",

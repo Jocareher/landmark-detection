@@ -174,6 +174,81 @@ def normalize_confusion_matrix(confusion_matrix: np.ndarray) -> np.ndarray:
     return confusion_matrix.astype(np.float64) / row_sums
 
 
+def _safe_divide(numerator: float, denominator: float) -> float:
+    """Return a stable ratio for metric computation."""
+    return float(numerator / denominator) if denominator > 0.0 else 0.0
+
+
+def _compute_f1(precision: float, recall: float) -> float:
+    """Compute F1 from precision and recall with zero-division protection."""
+    return _safe_divide(2.0 * precision * recall, precision + recall)
+
+
+def compute_visibility_classification_metrics(
+    confusion_matrix: np.ndarray,
+) -> dict[str, dict[str, float]]:
+    """Compute visibility precision, recall, and F1 from a binary confusion matrix."""
+    true_negative, false_positive = confusion_matrix[0]
+    false_negative, true_positive = confusion_matrix[1]
+
+    visible_precision = _safe_divide(true_positive, true_positive + false_positive)
+    visible_recall = _safe_divide(true_positive, true_positive + false_negative)
+    visible_f1 = _compute_f1(visible_precision, visible_recall)
+
+    invisible_precision = _safe_divide(true_negative, true_negative + false_negative)
+    invisible_recall = _safe_divide(true_negative, true_negative + false_positive)
+    invisible_f1 = _compute_f1(invisible_precision, invisible_recall)
+
+    return {
+        "global": {
+            "precision": (visible_precision + invisible_precision) / 2.0,
+            "recall": (visible_recall + invisible_recall) / 2.0,
+            "f1": (visible_f1 + invisible_f1) / 2.0,
+        },
+        "visible": {
+            "precision": visible_precision,
+            "recall": visible_recall,
+            "f1": visible_f1,
+        },
+        "invisible": {
+            "precision": invisible_precision,
+            "recall": invisible_recall,
+            "f1": invisible_f1,
+        },
+    }
+
+
+def round_metric_value(value: Any, decimals: int = 4) -> Any:
+    """Round float-like metric values recursively while preserving counts and paths."""
+    if isinstance(value, dict):
+        return {
+            key: round_metric_value(nested_value, decimals=decimals)
+            for key, nested_value in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            round_metric_value(nested_value, decimals=decimals)
+            for nested_value in value
+        ]
+    if isinstance(value, tuple):
+        return tuple(
+            round_metric_value(nested_value, decimals=decimals)
+            for nested_value in value
+        )
+    if isinstance(value, np.ndarray):
+        return round_metric_value(value.tolist(), decimals=decimals)
+    if isinstance(value, (np.floating, float)):
+        return round(float(value), decimals)
+    return value
+
+
+def format_metric_value(value: Any, decimals: int = 4) -> Any:
+    """Format float-like metric values for fixed-decimal CSV/terminal output."""
+    if isinstance(value, (np.floating, float)):
+        return f"{float(value):.{decimals}f}"
+    return value
+
+
 def save_metrics_summary_csv(
     output_path: Path,
     summary: dict[str, Any],
@@ -209,7 +284,48 @@ def save_metrics_summary_csv(
             summary.get("median_nme_box_point_to_line"),
         ),
         ("mean_nme_interocular", summary.get("mean_nme_interocular")),
-        ("visibility_accuracy", summary.get("visibility_accuracy")),
+        (
+            "visibility_global_precision",
+            summary.get("visibility_metrics", {})
+            .get("global", {})
+            .get("precision"),
+        ),
+        (
+            "visibility_global_recall",
+            summary.get("visibility_metrics", {}).get("global", {}).get("recall"),
+        ),
+        (
+            "visibility_global_f1",
+            summary.get("visibility_metrics", {}).get("global", {}).get("f1"),
+        ),
+        (
+            "visibility_visible_precision",
+            summary.get("visibility_metrics", {})
+            .get("visible", {})
+            .get("precision"),
+        ),
+        (
+            "visibility_visible_recall",
+            summary.get("visibility_metrics", {}).get("visible", {}).get("recall"),
+        ),
+        (
+            "visibility_visible_f1",
+            summary.get("visibility_metrics", {}).get("visible", {}).get("f1"),
+        ),
+        (
+            "visibility_invisible_precision",
+            summary.get("visibility_metrics", {})
+            .get("invisible", {})
+            .get("precision"),
+        ),
+        (
+            "visibility_invisible_recall",
+            summary.get("visibility_metrics", {}).get("invisible", {}).get("recall"),
+        ),
+        (
+            "visibility_invisible_f1",
+            summary.get("visibility_metrics", {}).get("invisible", {}).get("f1"),
+        ),
         ("visibility_threshold", summary.get("visibility_threshold")),
     ]
 
@@ -219,20 +335,20 @@ def save_metrics_summary_csv(
     if confusion_matrix_raw is not None:
         rows.extend(
             [
-                ("cm_raw_tn_visible_visible", confusion_matrix_raw[0][0]),
-                ("cm_raw_fp_visible_invisible", confusion_matrix_raw[0][1]),
-                ("cm_raw_fn_invisible_visible", confusion_matrix_raw[1][0]),
-                ("cm_raw_tp_invisible_invisible", confusion_matrix_raw[1][1]),
+                ("cm_raw_tn_invisible_invisible", confusion_matrix_raw[0][0]),
+                ("cm_raw_fp_invisible_visible", confusion_matrix_raw[0][1]),
+                ("cm_raw_fn_visible_invisible", confusion_matrix_raw[1][0]),
+                ("cm_raw_tp_visible_visible", confusion_matrix_raw[1][1]),
             ]
         )
 
     if confusion_matrix_normalized is not None:
         rows.extend(
             [
-                ("cm_norm_tn_visible_visible", confusion_matrix_normalized[0][0]),
-                ("cm_norm_fp_visible_invisible", confusion_matrix_normalized[0][1]),
-                ("cm_norm_fn_invisible_visible", confusion_matrix_normalized[1][0]),
-                ("cm_norm_tp_invisible_invisible", confusion_matrix_normalized[1][1]),
+                ("cm_norm_tn_invisible_invisible", confusion_matrix_normalized[0][0]),
+                ("cm_norm_fp_invisible_visible", confusion_matrix_normalized[0][1]),
+                ("cm_norm_fn_visible_invisible", confusion_matrix_normalized[1][0]),
+                ("cm_norm_tp_visible_visible", confusion_matrix_normalized[1][1]),
             ]
         )
 
@@ -264,7 +380,12 @@ def save_metrics_summary_csv(
         writer = csv.writer(file)
         writer.writerow(["metric", "value"])
         for metric_name, metric_value in rows:
-            writer.writerow([metric_name, metric_value])
+            writer.writerow(
+                [
+                    metric_name,
+                    format_metric_value(round_metric_value(metric_value)),
+                ]
+            )
 
 
 def save_per_landmark_nme_csv(
@@ -295,7 +416,7 @@ def save_per_landmark_nme_csv(
                         landmark_index,
                         landmark_names[landmark_index],
                         sample_index,
-                        float(error_value),
+                        format_metric_value(round_metric_value(float(error_value))),
                     ]
                 )
 
@@ -333,17 +454,21 @@ def save_per_image_nme_csv(
                     row["sample_id"],
                     row["orientation"],
                     (
-                        float(row["mean_nme_box"])
+                        format_metric_value(round_metric_value(float(row["mean_nme_box"])))
                         if row["mean_nme_box"] is not None
                         else None
                     ),
                     (
-                        float(row["mean_nme_box_point_to_line"])
+                        format_metric_value(
+                            round_metric_value(float(row["mean_nme_box_point_to_line"]))
+                        )
                         if row.get("mean_nme_box_point_to_line") is not None
                         else None
                     ),
                     (
-                        float(row["mean_nme_interocular"])
+                        format_metric_value(
+                            round_metric_value(float(row["mean_nme_interocular"]))
+                        )
                         if row["mean_nme_interocular"] is not None
                         else None
                     ),
@@ -403,9 +528,9 @@ def _build_boxplot_title(
     title = f"Per-landmark NME distribution - {label}"
     summary_parts = []
     if mean_nme_box is not None:
-        summary_parts.append(f"Mean NME box: {mean_nme_box:.6f}")
+        summary_parts.append(f"Mean NME box: {mean_nme_box:.4f}")
     if mean_nme_interocular is not None:
-        summary_parts.append(f"Mean NME interocular: {mean_nme_interocular:.6f}")
+        summary_parts.append(f"Mean NME interocular: {mean_nme_interocular:.4f}")
     if summary_parts:
         title = f"{title}\n" + " | ".join(summary_parts)
     return title
@@ -762,6 +887,9 @@ def evaluate_checkpoint(
         predictions=visibility_predictions,
     )
     confusion_matrix_normalized = normalize_confusion_matrix(confusion_matrix_raw)
+    visibility_metrics = compute_visibility_classification_metrics(
+        confusion_matrix_raw
+    )
 
     plot_confusion_matrix(
         matrix=confusion_matrix_raw,
@@ -773,7 +901,7 @@ def evaluate_checkpoint(
         matrix=confusion_matrix_normalized,
         output_path=figures_dir / "confusion_matrix_normalized.png",
         title="Visibility confusion matrix normalized",
-        value_format=".3f",
+        value_format=".4f",
     )
 
     summary = {
@@ -794,9 +922,7 @@ def evaluate_checkpoint(
             if global_interocular_nme_values
             else None
         ),
-        "visibility_accuracy": float(
-            (visibility_targets == visibility_predictions).mean()
-        ),
+        "visibility_metrics": visibility_metrics,
         "visibility_threshold": float(visibility_threshold),
         "confusion_matrix_raw": confusion_matrix_raw.tolist(),
         "confusion_matrix_normalized": confusion_matrix_normalized.tolist(),
@@ -831,6 +957,8 @@ def evaluate_checkpoint(
             for orientation, box_values in orientation_to_box_nme_values.items()
         },
     }
+
+    summary = round_metric_value(summary)
 
     save_metrics_summary_csv(
         output_path=output_dir / "metrics_summary.csv",
