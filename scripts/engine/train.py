@@ -27,7 +27,6 @@ def run_epoch(
     scaler: torch.amp.GradScaler | None = None,
     lambda_heatmap: float = 1.0,
     lambda_visibility: float = 1.0,
-    invisible_landmark_weight: float = 1.0,
     training: bool = True,
     use_subpixel_decode: bool = False,
     use_amp: bool = True,
@@ -78,7 +77,6 @@ def run_epoch(
                     visibility_loss_fn=visibility_loss_fn,
                     lambda_heatmap=lambda_heatmap,
                     lambda_visibility=lambda_visibility,
-                    invisible_landmark_weight=invisible_landmark_weight,
                 )
             total_loss = loss_dict["total_loss"]
             if use_amp:
@@ -103,7 +101,6 @@ def run_epoch(
                         visibility_loss_fn=visibility_loss_fn,
                         lambda_heatmap=lambda_heatmap,
                         lambda_visibility=lambda_visibility,
-                        invisible_landmark_weight=invisible_landmark_weight,
                     )
             total_loss = loss_dict["total_loss"]
 
@@ -254,7 +251,6 @@ def train_model(
     output_dir: str | Path,
     lambda_heatmap: float = 1.0,
     lambda_visibility: float = 1.0,
-    invisible_landmark_weight: float = 1.0,
     patience: int = 15,
     project_name: str | None = None,
     run_name: str | None = None,
@@ -304,7 +300,6 @@ def train_model(
             scaler=scaler,
             lambda_heatmap=lambda_heatmap,
             lambda_visibility=lambda_visibility,
-            invisible_landmark_weight=invisible_landmark_weight,
             training=True,
             use_subpixel_decode=False,
             use_amp=amp_enabled,
@@ -320,7 +315,6 @@ def train_model(
             scaler=None,
             lambda_heatmap=lambda_heatmap,
             lambda_visibility=lambda_visibility,
-            invisible_landmark_weight=invisible_landmark_weight,
             training=False,
             use_subpixel_decode=False,
             use_amp=amp_enabled,
@@ -412,7 +406,6 @@ def smoke_test_single_batch(
     optimizer: torch.optim.Optimizer,
     lambda_heatmap: float = 1.0,
     lambda_visibility: float = 1.0,
-    invisible_landmark_weight: float = 1.0,
 ) -> None:
     """Run a single optimization step to validate the end-to-end training path."""
     model.train()
@@ -429,7 +422,6 @@ def smoke_test_single_batch(
         visibility_loss_fn=visibility_loss_fn,
         lambda_heatmap=lambda_heatmap,
         lambda_visibility=lambda_visibility,
-        invisible_landmark_weight=invisible_landmark_weight,
     )
     optimizer.zero_grad(set_to_none=True)
     loss_dict["total_loss"].backward()
