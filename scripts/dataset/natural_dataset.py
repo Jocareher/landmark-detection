@@ -10,6 +10,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 from ..config import ExperimentConfig
+from ..utils.natural_labels import parse_natural_landmark_label
 
 VALID_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
@@ -84,7 +85,7 @@ class NaturalLandmarkEvaluationDataset(Dataset):
         original_width, original_height = self._load_image_size(
             sample_info["source_image_path"]
         )
-        gt_landmarks, gt_visibility = self._load_original_gt(
+        gt_landmarks, gt_visibility, class_idx, orientation = self._load_original_gt(
             label_path=sample_info["gt_label_path"],
             image_width=original_width,
             image_height=original_height,
@@ -112,6 +113,8 @@ class NaturalLandmarkEvaluationDataset(Dataset):
             "detection_index": sample_info["metadata"].get("detection_index"),
             "predicted_class_id": sample_info["metadata"].get("predicted_class_id"),
             "predicted_class_name": sample_info["metadata"].get("predicted_class_name"),
+            "class_idx": -1 if class_idx is None else int(class_idx),
+            "orientation": orientation,
         }
 
         return {
@@ -274,21 +277,17 @@ class NaturalLandmarkEvaluationDataset(Dataset):
         label_path: Path,
         image_width: int,
         image_height: int,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, int | None, str]:
         """Load normalized original-image GT and convert visible points to pixels."""
-        data = np.loadtxt(label_path, dtype=np.float32)
-        if data.ndim == 1:
-            data = data.reshape(1, -1)
-        if data.shape != (self.config.num_landmarks, 3):
-            raise ValueError(
-                f"Invalid label shape in '{label_path}'. Expected ({self.config.num_landmarks}, 3), got {data.shape}."
-            )
-
-        landmarks = data[:, :2].astype(np.float32, copy=True)
-        visibility = data[:, 2].astype(np.float32, copy=True)
+        parsed_label = parse_natural_landmark_label(
+            label_path=label_path,
+            expected_num_landmarks=self.config.num_landmarks,
+        )
+        landmarks = parsed_label.landmarks
+        visibility = parsed_label.visibility
 
         visible_mask = visibility == 1.0
         landmarks[visible_mask, 0] *= float(image_width)
         landmarks[visible_mask, 1] *= float(image_height)
         landmarks[~visible_mask] = 0.0
-        return landmarks, visibility
+        return landmarks, visibility, parsed_label.class_idx, parsed_label.orientation

@@ -17,10 +17,16 @@ from .evaluate import (
     save_per_landmark_nme_csv,
 )
 from .geometry_metrics import compute_per_landmark_point_to_line_distances
+from ..utils.natural_labels import (
+    NATURAL_ORIENTATION_NAMES,
+    UNKNOWN_ORIENTATION,
+    parse_natural_landmark_label,
+)
 from ..utils.visualization import (
     compute_global_linear_y_limits,
     compute_global_log_y_limits,
     plot_per_landmark_boxplot,
+    plot_yaw_view_boxplots,
 )
 
 VALID_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
@@ -123,24 +129,26 @@ def load_ground_truth_landmarks(
     label_path: str | Path,
     image_width: int,
     image_height: int,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, int | None, str]:
     """Load normalized GT landmarks and convert them to absolute image coordinates."""
     label_path = Path(label_path)
-    data = np.loadtxt(label_path, dtype=np.float32)
-    if data.ndim == 1:
-        data = data.reshape(1, -1)
-    if data.shape != (72, 3):
-        raise ValueError(
-            f"Expected GT shape (72, 3) in {label_path}, got {tuple(data.shape)}."
-        )
+    parsed_label = parse_natural_landmark_label(
+        label_path=label_path,
+        expected_num_landmarks=72,
+    )
 
-    landmarks = data[:, :2].copy()
-    visibility = data[:, 2].astype(np.int64)
+    landmarks = parsed_label.landmarks
+    visibility = parsed_label.visibility.astype(np.int64)
     landmarks[:, 0] *= float(image_width)
     landmarks[:, 1] *= float(image_height)
     invisible_mask = visibility == 0
     landmarks[invisible_mask] = 0.0
-    return landmarks.astype(np.float32), visibility
+    return (
+        landmarks.astype(np.float32),
+        visibility,
+        parsed_label.class_idx,
+        parsed_label.orientation,
+    )
 
 
 def load_infantface_ground_truth_landmarks(
@@ -316,6 +324,26 @@ def save_benchmark_summary_csv(output_path: Path, summary: dict[str, Any]) -> No
         ),
         ("valid_landmarks_used", summary.get("valid_landmarks_used")),
     ]
+    orientation_sample_counts = summary.get("orientation_sample_counts")
+    if orientation_sample_counts is not None:
+        for orientation_name, count in orientation_sample_counts.items():
+            rows.append((f"samples_{orientation_name}", count))
+
+    orientation_metrics = summary.get("orientation_metrics")
+    if orientation_metrics is not None:
+        for orientation_name, metrics in orientation_metrics.items():
+            rows.extend(
+                [
+                    (
+                        f"mean_nme_box_{orientation_name}",
+                        metrics.get("mean_nme_box"),
+                    ),
+                    (
+                        f"mean_nme_box_point_to_line_{orientation_name}",
+                        metrics.get("mean_nme_box_point_to_line"),
+                    ),
+                ]
+            )
     with output_path.open("w", newline="", encoding="utf-8") as file:
         writer = csv.writer(file)
         writer.writerow(["metric", "value"])
@@ -374,6 +402,20 @@ def benchmark_prediction_directory(
     per_landmark_errors_72: list[list[float]] = [[] for _ in range(72)]
     per_landmark_point_to_line_errors_68: list[list[float]] = [[] for _ in range(68)]
     per_landmark_point_to_line_errors_72: list[list[float]] = [[] for _ in range(72)]
+    orientation_names = [*NATURAL_ORIENTATION_NAMES, UNKNOWN_ORIENTATION]
+    orientation_to_errors_68: dict[str, list[list[float]]] = {
+        orientation: [[] for _ in range(68)] for orientation in orientation_names
+    }
+    orientation_to_errors_72: dict[str, list[list[float]]] = {
+        orientation: [[] for _ in range(72)] for orientation in orientation_names
+    }
+    orientation_to_box_nme_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
+    orientation_to_box_nme_point_to_line_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
+    orientation_sample_counts = {orientation: 0 for orientation in orientation_names}
     per_image_nme: list[dict[str, Any]] = []
     invalid_prediction_files: list[str] = []
     inferred_num_landmarks: int | None = None
@@ -384,13 +426,30 @@ def benchmark_prediction_directory(
 
     for sample in samples:
         sample_id = sample["sample_id"]
+        with Image.open(sample["image_path"]) as image:
+            image_width, image_height = image.size
+
+        (
+            gt_landmarks_all,
+            gt_visibility_all,
+            _gt_class_idx,
+            gt_orientation,
+        ) = load_ground_truth_landmarks(
+            label_path=sample["label_path"],
+            image_width=image_width,
+            image_height=image_height,
+        )
+        if gt_orientation not in orientation_sample_counts:
+            gt_orientation = UNKNOWN_ORIENTATION
+        orientation_sample_counts[gt_orientation] += 1
+
         candidate_prediction_paths = prediction_paths_by_gt_stem.get(sample_id, [])
         if not candidate_prediction_paths:
             images_without_prediction += 1
             per_image_nme.append(
                 {
                     "sample_id": sample_id,
-                    "orientation": "benchmark",
+                    "orientation": gt_orientation,
                     "mean_nme_box": None,
                     "mean_nme_box_point_to_line": None,
                     "mean_nme_interocular": None,
@@ -415,15 +474,6 @@ def benchmark_prediction_directory(
             inferred_num_landmarks = parsed_prediction.num_landmarks
             sample_has_valid_prediction = True
 
-            with Image.open(sample["image_path"]) as image:
-                image_width, image_height = image.size
-
-            gt_landmarks_all, gt_visibility_all = load_ground_truth_landmarks(
-                label_path=sample["label_path"],
-                image_width=image_width,
-                image_height=image_height,
-            )
-
             landmark_count = parsed_prediction.num_landmarks
             gt_landmarks = gt_landmarks_all[:landmark_count]
             gt_visibility = gt_visibility_all[:landmark_count]
@@ -437,6 +487,11 @@ def benchmark_prediction_directory(
                 per_landmark_point_to_line_errors_68
                 if landmark_count == 68
                 else per_landmark_point_to_line_errors_72
+            )
+            orientation_to_errors = (
+                orientation_to_errors_68
+                if landmark_count == 68
+                else orientation_to_errors_72
             )
 
             (
@@ -454,11 +509,21 @@ def benchmark_prediction_directory(
                 per_landmark_errors[landmark_index].append(error_value)
             for landmark_index, error_value in visible_point_to_line_errors.items():
                 per_landmark_point_to_line_errors[landmark_index].append(error_value)
+            for landmark_index, error_value in visible_errors.items():
+                orientation_to_errors[gt_orientation][landmark_index].append(
+                    error_value
+                )
+            if mean_box_nme is not None:
+                orientation_to_box_nme_values[gt_orientation].append(mean_box_nme)
+            if mean_box_nme_point_to_line is not None:
+                orientation_to_box_nme_point_to_line_values[gt_orientation].append(
+                    mean_box_nme_point_to_line
+                )
 
             per_image_nme.append(
                 {
                     "sample_id": prediction_path.stem,
-                    "orientation": "benchmark",
+                    "orientation": gt_orientation,
                     "mean_nme_box": mean_box_nme,
                     "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
                     "mean_nme_interocular": None,
@@ -472,7 +537,7 @@ def benchmark_prediction_directory(
             per_image_nme.append(
                 {
                     "sample_id": sample_id,
-                    "orientation": "benchmark",
+                    "orientation": gt_orientation,
                     "mean_nme_box": None,
                     "mean_nme_box_point_to_line": None,
                     "mean_nme_interocular": None,
@@ -493,6 +558,11 @@ def benchmark_prediction_directory(
         per_landmark_point_to_line_errors_68
         if inferred_num_landmarks == 68
         else per_landmark_point_to_line_errors_72
+    )
+    selected_orientation_to_errors = (
+        orientation_to_errors_68
+        if inferred_num_landmarks == 68
+        else orientation_to_errors_72
     )
 
     valid_image_nme_values = [
@@ -518,6 +588,9 @@ def benchmark_prediction_directory(
     )
 
     if any(values for values in selected_per_landmark_errors):
+        grouped_errors = [selected_per_landmark_errors] + list(
+            selected_orientation_to_errors.values()
+        )
         title = _build_boxplot_title(
             label=f"Benchmark ({inferred_num_landmarks} landmarks)",
             mean_nme_box=(
@@ -529,9 +602,43 @@ def benchmark_prediction_directory(
         y_limits_log = (
             fixed_log_y_limits
             if fixed_log_y_limits is not None
-            else compute_global_log_y_limits([selected_per_landmark_errors])
+            else compute_global_log_y_limits(grouped_errors)
         )
-        y_limits_linear = compute_global_linear_y_limits([selected_per_landmark_errors])
+        orientation_metrics = {
+            orientation: {
+                "mean_nme_box": (float(np.mean(values)) if values else None),
+                "mean_nme_box_point_to_line": (
+                    float(
+                        np.mean(
+                            orientation_to_box_nme_point_to_line_values[orientation]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_values[orientation]
+                    else None
+                ),
+                "mean_nme_interocular": None,
+            }
+            for orientation, values in orientation_to_box_nme_values.items()
+        }
+        y_limits_linear = compute_global_linear_y_limits(grouped_errors)
+        plot_yaw_view_boxplots(
+            orientation_to_errors=selected_orientation_to_errors,
+            output_dir=figures_dir,
+            use_landmark_names=use_landmark_names_in_boxplot,
+            y_limits=y_limits_log,
+            y_scale="log",
+            filename_suffix="log",
+            orientation_metrics=orientation_metrics,
+        )
+        plot_yaw_view_boxplots(
+            orientation_to_errors=selected_orientation_to_errors,
+            output_dir=figures_dir,
+            use_landmark_names=use_landmark_names_in_boxplot,
+            y_limits=y_limits_linear,
+            y_scale="linear",
+            filename_suffix="linear",
+            orientation_metrics=orientation_metrics,
+        )
         plot_per_landmark_boxplot(
             per_landmark_errors=selected_per_landmark_errors,
             output_path=figures_dir / "boxplot_nme_per_landmark_global_log.png",
@@ -548,6 +655,15 @@ def benchmark_prediction_directory(
             y_limits=y_limits_linear,
             y_scale="linear",
         )
+    else:
+        orientation_metrics = {
+            orientation: {
+                "mean_nme_box": None,
+                "mean_nme_box_point_to_line": None,
+                "mean_nme_interocular": None,
+            }
+            for orientation in orientation_names
+        }
 
     summary = {
         "model_name": provided_prediction_root.name,
@@ -580,6 +696,17 @@ def benchmark_prediction_directory(
         "valid_landmarks_used": int(valid_landmarks_used),
         "invalid_prediction_files": invalid_prediction_files,
         "unmatched_prediction_files": unmatched_prediction_files,
+        "orientation_sample_counts": {
+            orientation: int(count)
+            for orientation, count in orientation_sample_counts.items()
+            if count > 0 or orientation != UNKNOWN_ORIENTATION
+        },
+        "orientation_metrics": {
+            orientation: metrics
+            for orientation, metrics in orientation_metrics.items()
+            if orientation != UNKNOWN_ORIENTATION
+            or orientation_sample_counts.get(orientation, 0) > 0
+        },
     }
 
     save_benchmark_summary_csv(
