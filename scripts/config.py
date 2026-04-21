@@ -72,8 +72,9 @@ LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.0
 LR_MILESTONES = (30, 50)
 LR_GAMMA = 0.1
-LAMBDA_HEATMAP = 1.0
-LAMBDA_VISIBILITY = 1.0
+LAMBDA_VIS = 1.0
+LAMBDA_LMK_VIS = 1.0
+LAMBDA_LMK_FULL = 1.0
 PATIENCE = 15
 USE_AMP = True
 RUN_SMOKE_TEST = False
@@ -173,8 +174,9 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "weight_decay": WEIGHT_DECAY,
     "lr_milestones": LR_MILESTONES,
     "lr_gamma": LR_GAMMA,
-    "lambda_heatmap": LAMBDA_HEATMAP,
-    "lambda_visibility": LAMBDA_VISIBILITY,
+    "lambda_vis": LAMBDA_VIS,
+    "lambda_lmk_vis": LAMBDA_LMK_VIS,
+    "lambda_lmk_full": LAMBDA_LMK_FULL,
     "patience": PATIENCE,
     "use_amp": USE_AMP,
     "run_smoke_test": RUN_SMOKE_TEST,

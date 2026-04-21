@@ -25,8 +25,9 @@ def run_epoch(
     visibility_loss_fn: torch.nn.Module,
     optimizer: torch.optim.Optimizer | None = None,
     scaler: torch.amp.GradScaler | None = None,
-    lambda_heatmap: float = 1.0,
-    lambda_visibility: float = 1.0,
+    lambda_vis: float = 1.0,
+    lambda_lmk_vis: float = 1.0,
+    lambda_lmk_full: float = 1.0,
     training: bool = True,
     use_subpixel_decode: bool = False,
     use_amp: bool = True,
@@ -38,7 +39,8 @@ def run_epoch(
 
     model.train(training)
     total_loss_meter = AverageMeter()
-    heatmap_loss_meter = AverageMeter()
+    full_landmark_loss_meter = AverageMeter()
+    visible_landmark_loss_meter = AverageMeter()
     visibility_loss_meter = AverageMeter()
     nme_meter = AverageMeter()
     batch_time_meter = AverageMeter()
@@ -75,8 +77,9 @@ def run_epoch(
                     batch=batch_on_device,
                     heatmap_loss_fn=heatmap_loss_fn,
                     visibility_loss_fn=visibility_loss_fn,
-                    lambda_heatmap=lambda_heatmap,
-                    lambda_visibility=lambda_visibility,
+                    lambda_vis=lambda_vis,
+                    lambda_lmk_vis=lambda_lmk_vis,
+                    lambda_lmk_full=lambda_lmk_full,
                 )
             total_loss = loss_dict["total_loss"]
             if use_amp:
@@ -99,14 +102,20 @@ def run_epoch(
                         batch=batch_on_device,
                         heatmap_loss_fn=heatmap_loss_fn,
                         visibility_loss_fn=visibility_loss_fn,
-                        lambda_heatmap=lambda_heatmap,
-                        lambda_visibility=lambda_visibility,
+                        lambda_vis=lambda_vis,
+                        lambda_lmk_vis=lambda_lmk_vis,
+                        lambda_lmk_full=lambda_lmk_full,
                     )
             total_loss = loss_dict["total_loss"]
 
         batch_size = images.size(0)
         total_loss_meter.update(total_loss.item(), batch_size)
-        heatmap_loss_meter.update(loss_dict["heatmap_loss"].item(), batch_size)
+        full_landmark_loss_meter.update(
+            loss_dict["full_landmark_loss"].item(), batch_size
+        )
+        visible_landmark_loss_meter.update(
+            loss_dict["visible_landmark_loss"].item(), batch_size
+        )
         visibility_loss_meter.update(loss_dict["visibility_loss"].item(), batch_size)
 
         if "landmarks" in batch_on_device:
@@ -124,7 +133,8 @@ def run_epoch(
         batch_time_meter.update(time.time() - batch_start_time)
         progress_bar.set_postfix(
             total=f"{total_loss_meter.avg:.4f}",
-            heatmap=f"{heatmap_loss_meter.avg:.4f}",
+            full=f"{full_landmark_loss_meter.avg:.4f}",
+            visible=f"{visible_landmark_loss_meter.avg:.4f}",
             vis=f"{visibility_loss_meter.avg:.4f}",
             nme=f"{nme_meter.avg:.4f}",
         )
@@ -133,7 +143,8 @@ def run_epoch(
 
     return {
         "total_loss": total_loss_meter.avg,
-        "heatmap_loss": heatmap_loss_meter.avg,
+        "full_landmark_loss": full_landmark_loss_meter.avg,
+        "visible_landmark_loss": visible_landmark_loss_meter.avg,
         "visibility_loss": visibility_loss_meter.avg,
         "nme": nme_meter.avg,
         "batch_time": batch_time_meter.avg,
@@ -177,12 +188,18 @@ def print_epoch_summary(
     print(f"Epoch {epoch + 1:03d}/{num_epochs:03d}")
     print("-" * 120)
     print(
-        f"Train | total: {train_metrics['total_loss']:.6f} | heatmap: {train_metrics['heatmap_loss']:.6f} | "
-        f"vis: {train_metrics['visibility_loss']:.6f} | NME: {train_metrics['nme']:.6f}"
+        f"Train | total: {train_metrics['total_loss']:.6f} | "
+        f"full: {train_metrics['full_landmark_loss']:.6f} | "
+        f"visible: {train_metrics['visible_landmark_loss']:.6f} | "
+        f"vis: {train_metrics['visibility_loss']:.6f} | "
+        f"NME: {train_metrics['nme']:.6f}"
     )
     print(
-        f"Val   | total: {val_metrics['total_loss']:.6f} | heatmap: {val_metrics['heatmap_loss']:.6f} | "
-        f"vis: {val_metrics['visibility_loss']:.6f} | NME: {val_metrics['nme']:.6f}"
+        f"Val   | total: {val_metrics['total_loss']:.6f} | "
+        f"full: {val_metrics['full_landmark_loss']:.6f} | "
+        f"visible: {val_metrics['visible_landmark_loss']:.6f} | "
+        f"vis: {val_metrics['visibility_loss']:.6f} | "
+        f"NME: {val_metrics['nme']:.6f}"
     )
     print(
         f"Time  | train: {train_metrics['epoch_time']:.2f}s | "
@@ -208,7 +225,8 @@ def initialize_results_csv(csv_path: str | Path) -> None:
                 "epoch",
                 "split",
                 "total_loss",
-                "heatmap_loss",
+                "full_landmark_loss",
+                "visible_landmark_loss",
                 "visibility_loss",
                 "nme",
                 "lr",
@@ -229,7 +247,8 @@ def append_results_row(
                 epoch,
                 split,
                 metrics["total_loss"],
-                metrics["heatmap_loss"],
+                metrics["full_landmark_loss"],
+                metrics["visible_landmark_loss"],
                 metrics["visibility_loss"],
                 metrics["nme"],
                 lr,
@@ -249,8 +268,9 @@ def train_model(
     device: torch.device,
     num_epochs: int,
     output_dir: str | Path,
-    lambda_heatmap: float = 1.0,
-    lambda_visibility: float = 1.0,
+    lambda_vis: float = 1.0,
+    lambda_lmk_vis: float = 1.0,
+    lambda_lmk_full: float = 1.0,
     patience: int = 15,
     project_name: str | None = None,
     run_name: str | None = None,
@@ -298,8 +318,9 @@ def train_model(
             visibility_loss_fn=visibility_loss_fn,
             optimizer=optimizer,
             scaler=scaler,
-            lambda_heatmap=lambda_heatmap,
-            lambda_visibility=lambda_visibility,
+            lambda_vis=lambda_vis,
+            lambda_lmk_vis=lambda_lmk_vis,
+            lambda_lmk_full=lambda_lmk_full,
             training=True,
             use_subpixel_decode=False,
             use_amp=amp_enabled,
@@ -313,8 +334,9 @@ def train_model(
             visibility_loss_fn=visibility_loss_fn,
             optimizer=None,
             scaler=None,
-            lambda_heatmap=lambda_heatmap,
-            lambda_visibility=lambda_visibility,
+            lambda_vis=lambda_vis,
+            lambda_lmk_vis=lambda_lmk_vis,
+            lambda_lmk_full=lambda_lmk_full,
             training=False,
             use_subpixel_decode=False,
             use_amp=amp_enabled,
@@ -357,11 +379,15 @@ def train_model(
                     "epoch": epoch,
                     "lr": current_lr,
                     "train/total_loss": train_metrics["total_loss"],
-                    "train/heatmap_loss": train_metrics["heatmap_loss"],
+                    "train/full_landmark_loss": train_metrics["full_landmark_loss"],
+                    "train/visible_landmark_loss": train_metrics[
+                        "visible_landmark_loss"
+                    ],
                     "train/visibility_loss": train_metrics["visibility_loss"],
                     "train/nme": train_metrics["nme"],
                     "val/total_loss": val_metrics["total_loss"],
-                    "val/heatmap_loss": val_metrics["heatmap_loss"],
+                    "val/full_landmark_loss": val_metrics["full_landmark_loss"],
+                    "val/visible_landmark_loss": val_metrics["visible_landmark_loss"],
                     "val/visibility_loss": val_metrics["visibility_loss"],
                     "val/nme": val_metrics["nme"],
                     "best/val_total_loss": best_val_loss,
@@ -404,8 +430,9 @@ def smoke_test_single_batch(
     heatmap_loss_fn: torch.nn.Module,
     visibility_loss_fn: torch.nn.Module,
     optimizer: torch.optim.Optimizer,
-    lambda_heatmap: float = 1.0,
-    lambda_visibility: float = 1.0,
+    lambda_vis: float = 1.0,
+    lambda_lmk_vis: float = 1.0,
+    lambda_lmk_full: float = 1.0,
 ) -> None:
     """Run a single optimization step to validate the end-to-end training path."""
     model.train()
@@ -420,8 +447,9 @@ def smoke_test_single_batch(
         batch={"heatmaps": heatmaps, "visibility": visibility},
         heatmap_loss_fn=heatmap_loss_fn,
         visibility_loss_fn=visibility_loss_fn,
-        lambda_heatmap=lambda_heatmap,
-        lambda_visibility=lambda_visibility,
+        lambda_vis=lambda_vis,
+        lambda_lmk_vis=lambda_lmk_vis,
+        lambda_lmk_full=lambda_lmk_full,
     )
     optimizer.zero_grad(set_to_none=True)
     loss_dict["total_loss"].backward()
@@ -435,6 +463,7 @@ def smoke_test_single_batch(
     nme_values = compute_box_normalized_nme(preds=pred_landmarks, targets=landmarks)
     print("Smoke test passed.")
     print(f"Total loss: {loss_dict['total_loss'].item():.6f}")
-    print(f"Heatmap loss: {loss_dict['heatmap_loss'].item():.6f}")
+    print(f"Full landmark loss: {loss_dict['full_landmark_loss'].item():.6f}")
+    print(f"Visible landmark loss: {loss_dict['visible_landmark_loss'].item():.6f}")
     print(f"Visibility loss: {loss_dict['visibility_loss'].item():.6f}")
     print(f"NME: {float(nme_values.mean()):.6f}")

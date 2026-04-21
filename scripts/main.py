@@ -90,18 +90,6 @@ def parse_args() -> argparse.Namespace:
         help="Learning rate for the optimizer.",
     )
     parser.add_argument(
-        "--lambda-heatmap",
-        type=float,
-        default=defaults.lambda_heatmap,
-        help="Weight assigned to the heatmap loss term.",
-    )
-    parser.add_argument(
-        "--lambda-visibility",
-        type=float,
-        default=defaults.lambda_visibility,
-        help="Weight assigned to the visibility loss term.",
-    )
-    parser.add_argument(
         "--seed",
         type=int,
         default=defaults.seed,
@@ -311,8 +299,6 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.eval_batch_size = args.eval_batch_size
     config.num_epochs = args.epochs
     config.learning_rate = args.lr
-    config.lambda_heatmap = args.lambda_heatmap
-    config.lambda_visibility = args.lambda_visibility
     config.seed = args.seed
     config.device = args.device
     config.transfer_mode = args.transfer_mode
@@ -493,8 +479,9 @@ def main() -> None:
             f"epochs={config.num_epochs} "
             f"batch_size={config.batch_size} "
             f"lr={config.learning_rate} "
-            f"lambda_heatmap={config.lambda_heatmap} "
-            f"lambda_visibility={config.lambda_visibility} "
+            f"lambda_vis={config.lambda_vis} "
+            f"lambda_lmk_vis={config.lambda_lmk_vis} "
+            f"lambda_lmk_full={config.lambda_lmk_full} "
         )
 
         if config.run_smoke_test:
@@ -507,8 +494,9 @@ def main() -> None:
                 heatmap_loss_fn=heatmap_loss_fn,
                 visibility_loss_fn=visibility_loss_fn,
                 optimizer=optimizer,
-                lambda_heatmap=config.lambda_heatmap,
-                lambda_visibility=config.lambda_visibility,
+                lambda_vis=config.lambda_vis,
+                lambda_lmk_vis=config.lambda_lmk_vis,
+                lambda_lmk_full=config.lambda_lmk_full,
             )
 
         print("[INFO] Starting training loop...")
@@ -523,8 +511,9 @@ def main() -> None:
             device=device,
             num_epochs=config.num_epochs,
             output_dir=config.output_dir,
-            lambda_heatmap=config.lambda_heatmap,
-            lambda_visibility=config.lambda_visibility,
+            lambda_vis=config.lambda_vis,
+            lambda_lmk_vis=config.lambda_lmk_vis,
+            lambda_lmk_full=config.lambda_lmk_full,
             patience=config.patience,
             project_name=config.wandb_project,
             run_name=config.wandb_run_name,

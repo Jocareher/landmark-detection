@@ -519,7 +519,7 @@ class HRNetW18Backbone(nn.Module):
 
 
 class HRNetLandmarkVisibility(nn.Module):
-    """HRNet-based multitask model with heatmap and visibility heads."""
+    """HRNet experiment with visibility-guided visible and full landmark heads."""
 
     FINAL_CONV_KERNEL = 1
 
@@ -529,36 +529,24 @@ class HRNetLandmarkVisibility(nn.Module):
         self.num_landmarks = num_landmarks
         self.backbone = HRNetW18Backbone()
         in_channels = self.backbone.final_inp_channels
+        branch_channels = in_channels // 2
         final_padding = 1 if self.FINAL_CONV_KERNEL == 3 else 0
 
-        self.landmark_head = nn.Sequential(
-            nn.Conv2d(
-                in_channels, in_channels, kernel_size=1, stride=1, padding=0, bias=False
-            ),
-            BatchNorm2d(in_channels, momentum=BN_MOMENTUM),
-            nn.ReLU(inplace=True),
+        self.visibility_feature_head = nn.Sequential(
             nn.Conv2d(
                 in_channels,
-                num_landmarks,
-                kernel_size=self.FINAL_CONV_KERNEL,
-                stride=1,
-                padding=final_padding,
-                bias=True,
-            ),
-        )
-        self.visibility_head = nn.Sequential(
-            nn.Conv2d(
-                in_channels,
-                in_channels // 2,
+                branch_channels,
                 kernel_size=1,
                 stride=1,
                 padding=0,
                 bias=False,
             ),
-            BatchNorm2d(in_channels // 2, momentum=BN_MOMENTUM),
+            BatchNorm2d(branch_channels, momentum=BN_MOMENTUM),
             nn.ReLU(inplace=True),
+        )
+        self.visibility_classifier = nn.Sequential(
             nn.Conv2d(
-                in_channels // 2,
+                branch_channels,
                 num_landmarks,
                 kernel_size=1,
                 stride=1,
@@ -567,31 +555,94 @@ class HRNetLandmarkVisibility(nn.Module):
             ),
             nn.AdaptiveAvgPool2d(1),
         )
+        self.visible_landmark_feature_head = nn.Sequential(
+            nn.Conv2d(
+                in_channels,
+                branch_channels,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=False,
+            ),
+            BatchNorm2d(branch_channels, momentum=BN_MOMENTUM),
+            nn.ReLU(inplace=True),
+        )
+        self.visible_landmark_predictor = nn.Conv2d(
+            branch_channels,
+            num_landmarks,
+            kernel_size=self.FINAL_CONV_KERNEL,
+            stride=1,
+            padding=final_padding,
+            bias=True,
+        )
+        self.full_landmark_fusion_head = nn.Sequential(
+            nn.Conv2d(
+                in_channels + (2 * branch_channels),
+                in_channels,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=False,
+            ),
+            BatchNorm2d(in_channels, momentum=BN_MOMENTUM),
+            nn.ReLU(inplace=True),
+        )
+        self.full_landmark_predictor = nn.Conv2d(
+            in_channels,
+            num_landmarks,
+            kernel_size=self.FINAL_CONV_KERNEL,
+            stride=1,
+            padding=final_padding,
+            bias=True,
+        )
         self._initialize_new_heads()
+
+    def _task_heads(self) -> list[nn.Module]:
+        """Return the experiment heads that sit on top of the shared backbone."""
+        return [
+            self.visibility_feature_head,
+            self.visibility_classifier,
+            self.visible_landmark_feature_head,
+            self.visible_landmark_predictor,
+            self.full_landmark_fusion_head,
+            self.full_landmark_predictor,
+        ]
 
     def _initialize_new_heads(self) -> None:
         """Initialize the newly created task heads with lightweight random weights."""
-        for module in list(self.landmark_head.modules()) + list(
-            self.visibility_head.modules()
-        ):
-            if isinstance(module, nn.Conv2d):
-                nn.init.normal_(module.weight, std=0.001)
-                if module.bias is not None:
+        for head in self._task_heads():
+            for module in head.modules():
+                if isinstance(module, nn.Conv2d):
+                    nn.init.normal_(module.weight, std=0.001)
+                    if module.bias is not None:
+                        nn.init.constant_(module.bias, 0)
+                elif isinstance(module, nn.BatchNorm2d):
+                    nn.init.constant_(module.weight, 1)
                     nn.init.constant_(module.bias, 0)
-            elif isinstance(module, nn.BatchNorm2d):
-                nn.init.constant_(module.weight, 1)
-                nn.init.constant_(module.bias, 0)
 
     def forward_features(self, x: torch.Tensor) -> torch.Tensor:
         """Extract shared HRNet features before the task-specific heads."""
         return self.backbone(x)
 
     def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
-        """Return landmark heatmaps and visibility logits for an input batch."""
+        """Return final landmarks, visible-landmark heatmaps, and visibility logits."""
         features = self.forward_features(x)
-        landmark_heatmaps = self.landmark_head(features)
-        visibility_logits = self.visibility_head(features).flatten(start_dim=1)
-        return {"heatmaps": landmark_heatmaps, "visibility_logits": visibility_logits}
+        visibility_features = self.visibility_feature_head(features)
+        visible_landmark_features = self.visible_landmark_feature_head(features)
+        visibility_logits = self.visibility_classifier(visibility_features).flatten(
+            start_dim=1
+        )
+        visible_heatmaps = self.visible_landmark_predictor(visible_landmark_features)
+        fused_features = torch.cat(
+            [features, visibility_features, visible_landmark_features], dim=1
+        )
+        full_features = self.full_landmark_fusion_head(fused_features)
+        landmark_heatmaps = self.full_landmark_predictor(full_features)
+        return {
+            "heatmaps": landmark_heatmaps,
+            "visible_heatmaps": visible_heatmaps,
+            "visibility_logits": visibility_logits,
+        }
 
     def load_official_hrnet_pretrained(
         self, pretrained_path: str, verbose: bool = True
@@ -654,10 +705,9 @@ class HRNetLandmarkVisibility(nn.Module):
 
         for parameter in self.backbone.parameters():
             parameter.requires_grad = False
-        for parameter in self.landmark_head.parameters():
-            parameter.requires_grad = True
-        for parameter in self.visibility_head.parameters():
-            parameter.requires_grad = True
+        for head in self._task_heads():
+            for parameter in head.parameters():
+                parameter.requires_grad = True
 
         if mode == "feature_extractor":
             return
