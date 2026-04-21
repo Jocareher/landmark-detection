@@ -251,7 +251,6 @@ def main() -> None:
             point_radius=config.overlay_point_radius,
             line_width=config.overlay_line_width,
             line_color=config.overlay_connection_color,
-            save_crop_overlays=config.save_natural_crop_overlays,
         )
     else:
         dataloader = build_natural_evaluation_dataloader(
@@ -273,6 +272,7 @@ def main() -> None:
             point_radius=config.overlay_point_radius,
             line_width=config.overlay_line_width,
             line_color=config.overlay_connection_color,
+            save_crop_overlays=config.save_natural_crop_overlays,
         )
 
     print("[INFO] Evaluation finished.")
@@ -284,6 +284,20 @@ def main() -> None:
         print(f"[INFO] Median NME box: {summary['median_nme_box']:.6f}")
     else:
         print("[INFO] Median NME box: n/a")
+    if summary.get("mean_nme_box_point_to_line") is not None:
+        print(
+            "[INFO] Mean NME box point-to-line: "
+            f"{summary['mean_nme_box_point_to_line']:.6f}"
+        )
+    else:
+        print("[INFO] Mean NME box point-to-line: n/a")
+    if summary.get("median_nme_box_point_to_line") is not None:
+        print(
+            "[INFO] Median NME box point-to-line: "
+            f"{summary['median_nme_box_point_to_line']:.6f}"
+        )
+    else:
+        print("[INFO] Median NME box point-to-line: n/a")
     if summary["mean_nme_interocular"] is not None:
         print(f"[INFO] Mean NME interocular: {summary['mean_nme_interocular']:.6f}")
     print(f"[INFO] Visibility accuracy: {summary['visibility_accuracy']:.6f}")

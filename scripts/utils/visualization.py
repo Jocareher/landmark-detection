@@ -215,6 +215,29 @@ def get_landmark_region_colors(num_landmarks: int) -> list[str]:
     return colors
 
 
+def save_overlay_image(image: Image.Image, output_path: Path) -> None:
+    """Save an overlay image with sensible compression based on file extension."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    suffix = output_path.suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        image.convert("RGB").save(
+            output_path,
+            format="JPEG",
+            quality=85,
+            optimize=True,
+            progressive=True,
+            subsampling=2,
+        )
+        return
+
+    image.save(
+        output_path,
+        format="PNG",
+        optimize=True,
+        compress_level=6,
+    )
+
+
 def save_landmark_overlay_image(
     image_path: Path,
     output_path: Path,
@@ -275,7 +298,7 @@ def save_landmark_overlay_image(
                 fill=color,
             )
 
-    image.save(output_path)
+    save_overlay_image(image, output_path)
 
 
 @contextmanager
@@ -539,7 +562,7 @@ def save_landmark_comparison_overlay_image(
                 fill=color,
             )
 
-    image.save(output_path)
+    save_overlay_image(image, output_path)
 
 
 def plot_confusion_matrix(
@@ -792,6 +815,11 @@ def plot_yaw_view_boxplots(
         summary_parts = []
         if current_metrics.get("mean_nme_box") is not None:
             summary_parts.append(f"Mean NME box: {current_metrics['mean_nme_box']:.6f}")
+        if current_metrics.get("mean_nme_box_point_to_line") is not None:
+            summary_parts.append(
+                "Mean NME point-to-line: "
+                f"{current_metrics['mean_nme_box_point_to_line']:.6f}"
+            )
         if current_metrics.get("mean_nme_interocular") is not None:
             summary_parts.append(
                 f"Mean NME interocular: {current_metrics['mean_nme_interocular']:.6f}"
