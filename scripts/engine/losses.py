@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 import torch.nn.functional as F
+
+from .pca_shape_prior import (
+    compute_pca_projection_loss,
+    softargmax_heatmaps_to_image_coords,
+)
 
 
 def compute_visible_landmark_heatmap_loss(
@@ -38,6 +45,10 @@ def compute_multitask_loss(
     lambda_vis: float = 1.0,
     lambda_lmk_vis: float = 1.0,
     lambda_lmk_full: float = 1.0,
+    lambda_pca_projection: float = 0.0,
+    pca_shape_prior: dict[str, Any] | None = None,
+    image_height: int | None = None,
+    image_width: int | None = None,
 ) -> dict[str, torch.Tensor]:
     """Compute the experiment loss for visibility, visible landmarks, and full landmarks."""
     predicted_full_heatmaps = outputs["heatmaps"]
@@ -53,14 +64,31 @@ def compute_multitask_loss(
         target_visibility=target_visibility,
     )
     visibility_loss = visibility_loss_fn(predicted_visibility_logits, target_visibility)
+    pca_projection_loss = predicted_full_heatmaps.new_zeros(())
+    if pca_shape_prior is not None and lambda_pca_projection > 0.0:
+        if image_height is None or image_width is None:
+            raise ValueError(
+                "image_height and image_width are required for PCA projection loss."
+            )
+        predicted_landmarks = softargmax_heatmaps_to_image_coords(
+            heatmaps=predicted_full_heatmaps,
+            image_height=image_height,
+            image_width=image_width,
+        )
+        pca_projection_loss = compute_pca_projection_loss(
+            predicted_landmarks=predicted_landmarks,
+            pca_prior=pca_shape_prior,
+        ).to(dtype=predicted_full_heatmaps.dtype)
     total_loss = (
         lambda_vis * visibility_loss
         + lambda_lmk_vis * visible_landmark_loss
         + lambda_lmk_full * full_landmark_loss
+        + lambda_pca_projection * pca_projection_loss
     )
     return {
         "total_loss": total_loss,
         "full_landmark_loss": full_landmark_loss,
         "visible_landmark_loss": visible_landmark_loss,
         "visibility_loss": visibility_loss,
+        "pca_projection_loss": pca_projection_loss,
     }

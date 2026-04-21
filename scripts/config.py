@@ -75,6 +75,8 @@ LR_GAMMA = 0.1
 LAMBDA_VIS = 1.0
 LAMBDA_LMK_VIS = 1.0
 LAMBDA_LMK_FULL = 1.0
+PCA_PRIOR_PATH = None
+LAMBDA_PCA_PROJECTION = 0.0
 PATIENCE = 15
 USE_AMP = True
 RUN_SMOKE_TEST = False
@@ -177,6 +179,8 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "lambda_vis": LAMBDA_VIS,
     "lambda_lmk_vis": LAMBDA_LMK_VIS,
     "lambda_lmk_full": LAMBDA_LMK_FULL,
+    "pca_prior_path": PCA_PRIOR_PATH,
+    "lambda_pca_projection": LAMBDA_PCA_PROJECTION,
     "patience": PATIENCE,
     "use_amp": USE_AMP,
     "run_smoke_test": RUN_SMOKE_TEST,

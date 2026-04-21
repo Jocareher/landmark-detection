@@ -90,6 +90,18 @@ def parse_args() -> argparse.Namespace:
         help="Learning rate for the optimizer.",
     )
     parser.add_argument(
+        "--pca-prior-path",
+        type=Path,
+        default=defaults.pca_prior_path,
+        help="Path to the precomputed train-set PCA shape prior .pt file.",
+    )
+    parser.add_argument(
+        "--lambda-pca-projection",
+        type=float,
+        default=defaults.lambda_pca_projection,
+        help="Weight assigned to the PCA projection loss on final landmarks.",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=defaults.seed,
@@ -299,6 +311,8 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.eval_batch_size = args.eval_batch_size
     config.num_epochs = args.epochs
     config.learning_rate = args.lr
+    config.pca_prior_path = args.pca_prior_path
+    config.lambda_pca_projection = args.lambda_pca_projection
     config.seed = args.seed
     config.device = args.device
     config.transfer_mode = args.transfer_mode
@@ -482,6 +496,8 @@ def main() -> None:
             f"lambda_vis={config.lambda_vis} "
             f"lambda_lmk_vis={config.lambda_lmk_vis} "
             f"lambda_lmk_full={config.lambda_lmk_full} "
+            f"lambda_pca_projection={config.lambda_pca_projection} "
+            f"pca_prior_path={config.pca_prior_path} "
         )
 
         if config.run_smoke_test:
@@ -497,6 +513,8 @@ def main() -> None:
                 lambda_vis=config.lambda_vis,
                 lambda_lmk_vis=config.lambda_lmk_vis,
                 lambda_lmk_full=config.lambda_lmk_full,
+                lambda_pca_projection=config.lambda_pca_projection,
+                pca_prior_path=config.pca_prior_path,
             )
 
         print("[INFO] Starting training loop...")
@@ -514,6 +532,8 @@ def main() -> None:
             lambda_vis=config.lambda_vis,
             lambda_lmk_vis=config.lambda_lmk_vis,
             lambda_lmk_full=config.lambda_lmk_full,
+            lambda_pca_projection=config.lambda_pca_projection,
+            pca_prior_path=config.pca_prior_path,
             patience=config.patience,
             project_name=config.wandb_project,
             run_name=config.wandb_run_name,

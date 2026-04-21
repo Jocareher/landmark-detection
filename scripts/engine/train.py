@@ -14,6 +14,7 @@ from .metrics import (
     compute_box_normalized_nme,
     decode_heatmaps_to_image_coords,
 )
+from .pca_shape_prior import load_pca_shape_prior
 from ..utils.visualization import visualize_predicted_heatmaps_on_train_batch
 
 
@@ -28,6 +29,8 @@ def run_epoch(
     lambda_vis: float = 1.0,
     lambda_lmk_vis: float = 1.0,
     lambda_lmk_full: float = 1.0,
+    lambda_pca_projection: float = 0.0,
+    pca_shape_prior: dict[str, Any] | None = None,
     training: bool = True,
     use_subpixel_decode: bool = False,
     use_amp: bool = True,
@@ -42,6 +45,7 @@ def run_epoch(
     full_landmark_loss_meter = AverageMeter()
     visible_landmark_loss_meter = AverageMeter()
     visibility_loss_meter = AverageMeter()
+    pca_projection_loss_meter = AverageMeter()
     nme_meter = AverageMeter()
     batch_time_meter = AverageMeter()
     autocast_device = device.type
@@ -80,6 +84,10 @@ def run_epoch(
                     lambda_vis=lambda_vis,
                     lambda_lmk_vis=lambda_lmk_vis,
                     lambda_lmk_full=lambda_lmk_full,
+                    lambda_pca_projection=lambda_pca_projection,
+                    pca_shape_prior=pca_shape_prior,
+                    image_height=images.shape[2],
+                    image_width=images.shape[3],
                 )
             total_loss = loss_dict["total_loss"]
             if use_amp:
@@ -105,6 +113,10 @@ def run_epoch(
                         lambda_vis=lambda_vis,
                         lambda_lmk_vis=lambda_lmk_vis,
                         lambda_lmk_full=lambda_lmk_full,
+                        lambda_pca_projection=lambda_pca_projection,
+                        pca_shape_prior=pca_shape_prior,
+                        image_height=images.shape[2],
+                        image_width=images.shape[3],
                     )
             total_loss = loss_dict["total_loss"]
 
@@ -117,6 +129,9 @@ def run_epoch(
             loss_dict["visible_landmark_loss"].item(), batch_size
         )
         visibility_loss_meter.update(loss_dict["visibility_loss"].item(), batch_size)
+        pca_projection_loss_meter.update(
+            loss_dict["pca_projection_loss"].item(), batch_size
+        )
 
         if "landmarks" in batch_on_device:
             pred_landmarks = decode_heatmaps_to_image_coords(
@@ -136,6 +151,7 @@ def run_epoch(
             full=f"{full_landmark_loss_meter.avg:.4f}",
             visible=f"{visible_landmark_loss_meter.avg:.4f}",
             vis=f"{visibility_loss_meter.avg:.4f}",
+            pca=f"{pca_projection_loss_meter.avg:.4f}",
             nme=f"{nme_meter.avg:.4f}",
         )
 
@@ -146,6 +162,7 @@ def run_epoch(
         "full_landmark_loss": full_landmark_loss_meter.avg,
         "visible_landmark_loss": visible_landmark_loss_meter.avg,
         "visibility_loss": visibility_loss_meter.avg,
+        "pca_projection_loss": pca_projection_loss_meter.avg,
         "nme": nme_meter.avg,
         "batch_time": batch_time_meter.avg,
         "epoch_time": time.time() - epoch_start_time,
@@ -192,6 +209,7 @@ def print_epoch_summary(
         f"full: {train_metrics['full_landmark_loss']:.6f} | "
         f"visible: {train_metrics['visible_landmark_loss']:.6f} | "
         f"vis: {train_metrics['visibility_loss']:.6f} | "
+        f"pca: {train_metrics['pca_projection_loss']:.6f} | "
         f"NME: {train_metrics['nme']:.6f}"
     )
     print(
@@ -199,6 +217,7 @@ def print_epoch_summary(
         f"full: {val_metrics['full_landmark_loss']:.6f} | "
         f"visible: {val_metrics['visible_landmark_loss']:.6f} | "
         f"vis: {val_metrics['visibility_loss']:.6f} | "
+        f"pca: {val_metrics['pca_projection_loss']:.6f} | "
         f"NME: {val_metrics['nme']:.6f}"
     )
     print(
@@ -228,6 +247,7 @@ def initialize_results_csv(csv_path: str | Path) -> None:
                 "full_landmark_loss",
                 "visible_landmark_loss",
                 "visibility_loss",
+                "pca_projection_loss",
                 "nme",
                 "lr",
                 "epoch_time",
@@ -250,6 +270,7 @@ def append_results_row(
                 metrics["full_landmark_loss"],
                 metrics["visible_landmark_loss"],
                 metrics["visibility_loss"],
+                metrics["pca_projection_loss"],
                 metrics["nme"],
                 lr,
                 metrics["epoch_time"],
@@ -271,6 +292,8 @@ def train_model(
     lambda_vis: float = 1.0,
     lambda_lmk_vis: float = 1.0,
     lambda_lmk_full: float = 1.0,
+    lambda_pca_projection: float = 0.0,
+    pca_prior_path: str | Path | None = None,
     patience: int = 15,
     project_name: str | None = None,
     run_name: str | None = None,
@@ -302,6 +325,15 @@ def train_model(
     if use_wandb and wandb is not None:
         wandb.init(project=project_name, name=run_name, reinit=True)
 
+    pca_shape_prior = None
+    if pca_prior_path is not None:
+        pca_prior_path = Path(pca_prior_path)
+        if not pca_prior_path.exists():
+            raise FileNotFoundError(f"PCA prior file not found: {pca_prior_path}")
+        pca_shape_prior = load_pca_shape_prior(pca_prior_path, device=device)
+    if lambda_pca_projection > 0.0 and pca_shape_prior is None:
+        raise ValueError("lambda_pca_projection > 0 requires a valid pca_prior_path.")
+
     best_val_loss = float("inf")
     best_epoch = -1
     patience_counter = 0
@@ -321,6 +353,8 @@ def train_model(
             lambda_vis=lambda_vis,
             lambda_lmk_vis=lambda_lmk_vis,
             lambda_lmk_full=lambda_lmk_full,
+            lambda_pca_projection=lambda_pca_projection,
+            pca_shape_prior=pca_shape_prior,
             training=True,
             use_subpixel_decode=False,
             use_amp=amp_enabled,
@@ -337,6 +371,8 @@ def train_model(
             lambda_vis=lambda_vis,
             lambda_lmk_vis=lambda_lmk_vis,
             lambda_lmk_full=lambda_lmk_full,
+            lambda_pca_projection=lambda_pca_projection,
+            pca_shape_prior=pca_shape_prior,
             training=False,
             use_subpixel_decode=False,
             use_amp=amp_enabled,
@@ -384,11 +420,15 @@ def train_model(
                         "visible_landmark_loss"
                     ],
                     "train/visibility_loss": train_metrics["visibility_loss"],
+                    "train/pca_projection_loss": train_metrics[
+                        "pca_projection_loss"
+                    ],
                     "train/nme": train_metrics["nme"],
                     "val/total_loss": val_metrics["total_loss"],
                     "val/full_landmark_loss": val_metrics["full_landmark_loss"],
                     "val/visible_landmark_loss": val_metrics["visible_landmark_loss"],
                     "val/visibility_loss": val_metrics["visibility_loss"],
+                    "val/pca_projection_loss": val_metrics["pca_projection_loss"],
                     "val/nme": val_metrics["nme"],
                     "best/val_total_loss": best_val_loss,
                 }
@@ -433,6 +473,8 @@ def smoke_test_single_batch(
     lambda_vis: float = 1.0,
     lambda_lmk_vis: float = 1.0,
     lambda_lmk_full: float = 1.0,
+    lambda_pca_projection: float = 0.0,
+    pca_prior_path: str | Path | None = None,
 ) -> None:
     """Run a single optimization step to validate the end-to-end training path."""
     model.train()
@@ -441,6 +483,11 @@ def smoke_test_single_batch(
     heatmaps = batch["heatmaps"].to(device, non_blocking=True)
     visibility = batch["visibility"].to(device, non_blocking=True)
     landmarks = batch["landmarks"].to(device, non_blocking=True)
+    pca_shape_prior = None
+    if pca_prior_path is not None:
+        pca_shape_prior = load_pca_shape_prior(pca_prior_path, device=device)
+    if lambda_pca_projection > 0.0 and pca_shape_prior is None:
+        raise ValueError("lambda_pca_projection > 0 requires a valid pca_prior_path.")
     outputs = model(images)
     loss_dict = compute_multitask_loss(
         outputs=outputs,
@@ -450,6 +497,10 @@ def smoke_test_single_batch(
         lambda_vis=lambda_vis,
         lambda_lmk_vis=lambda_lmk_vis,
         lambda_lmk_full=lambda_lmk_full,
+        lambda_pca_projection=lambda_pca_projection,
+        pca_shape_prior=pca_shape_prior,
+        image_height=images.shape[2],
+        image_width=images.shape[3],
     )
     optimizer.zero_grad(set_to_none=True)
     loss_dict["total_loss"].backward()
@@ -466,4 +517,5 @@ def smoke_test_single_batch(
     print(f"Full landmark loss: {loss_dict['full_landmark_loss'].item():.6f}")
     print(f"Visible landmark loss: {loss_dict['visible_landmark_loss'].item():.6f}")
     print(f"Visibility loss: {loss_dict['visibility_loss'].item():.6f}")
+    print(f"PCA projection loss: {loss_dict['pca_projection_loss'].item():.6f}")
     print(f"NME: {float(nme_values.mean()):.6f}")
