@@ -95,7 +95,7 @@ def main() -> None:
     print(
         "[INFO] Detection rate: "
         f"{summary['images_with_prediction']}/{summary['total_images']} "
-        f"({summary['detection_rate'] * 100.0:.4f}%)"
+        f"({summary['detection_rate'] * 100.0:.2f}%)"
     )
     if summary["mean_nme_box"] is not None:
         print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.4f}")
