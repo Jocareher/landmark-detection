@@ -85,6 +85,7 @@ def main() -> None:
         prediction_root=args.prediction_root,
         output_dir=output_dir,
         use_landmark_names_in_boxplot=args.use_landmark_names,
+        fixed_log_y_limits=(1e-3, 1.0),
     )
 
     print("[INFO] InfantFace evaluation finished.")

@@ -23,6 +23,7 @@ from .geometry_metrics import compute_per_landmark_point_to_line_distances
 from ..utils.natural_labels import (
     NATURAL_ORIENTATION_NAMES,
     UNKNOWN_ORIENTATION,
+    orientation_from_class_idx,
     parse_natural_landmark_label,
 )
 from ..utils.visualization import (
@@ -156,17 +157,75 @@ def load_ground_truth_landmarks(
 
 def load_infantface_ground_truth_landmarks(
     label_path: str | Path,
-) -> np.ndarray:
-    """Load one InfantFace GT file containing 68 absolute landmark coordinates."""
+) -> tuple[np.ndarray, int | None, str]:
+    """Load one InfantFace GT file with absolute 68-point landmarks.
+
+    Supported formats:
+
+    New format:
+        class_idx
+        x1 y1
+        ...
+        x68 y68
+
+    Legacy format:
+        x1 y1
+        ...
+        x68 y68
+
+    The class header is used only for orientation-based analysis. Legacy files are
+    still accepted as ``unknown`` orientation so older annotation exports do not
+    get silently misread as one landmark row.
+    """
     label_path = Path(label_path)
-    data = np.loadtxt(label_path, dtype=np.float32)
-    if data.ndim == 1:
-        data = data.reshape(1, -1)
+    lines = [
+        line.strip()
+        for line in label_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not lines:
+        raise ValueError(f"Empty InfantFace GT file: {label_path}")
+
+    first_tokens = lines[0].split()
+    if len(first_tokens) == 1:
+        class_value = float(first_tokens[0])
+        class_idx = int(class_value)
+        if class_value != float(class_idx):
+            raise ValueError(
+                f"Expected integer class_idx in first line of {label_path}, "
+                f"got {first_tokens[0]!r}."
+            )
+        orientation = orientation_from_class_idx(class_idx)
+        landmark_lines = lines[1:]
+    elif len(first_tokens) == 2:
+        class_idx = None
+        orientation = UNKNOWN_ORIENTATION
+        landmark_lines = lines
+    else:
+        raise ValueError(
+            f"Could not parse first line of {label_path}. Expected either "
+            "a one-value class_idx header or a two-value landmark row."
+        )
+
+    rows: list[list[float]] = []
+    for line_number, raw_line in enumerate(
+        landmark_lines,
+        start=(2 if class_idx is not None else 1),
+    ):
+        tokens = raw_line.split()
+        if len(tokens) != 2:
+            raise ValueError(
+                f"Invalid InfantFace landmark row in {label_path} at line "
+                f"{line_number}. Expected 'x y', got: {raw_line!r}."
+            )
+        rows.append([float(token) for token in tokens])
+
+    data = np.asarray(rows, dtype=np.float32)
     if data.shape != (68, 2):
         raise ValueError(
             f"Expected InfantFace GT shape (68, 2) in {label_path}, got {tuple(data.shape)}."
         )
-    return data.astype(np.float32)
+    return data.astype(np.float32), class_idx, orientation
 
 
 def _parse_prediction_lines(lines: list[str]) -> list[np.ndarray]:
@@ -782,8 +841,9 @@ def benchmark_infantface_prediction_directory(
     prediction_root: str | Path,
     output_dir: str | Path,
     use_landmark_names_in_boxplot: bool = True,
+    fixed_log_y_limits: tuple[float, float] | None = None,
 ) -> dict[str, Any]:
-    """Benchmark one prediction directory against InfantFace 68-point GT."""
+    """Benchmark one prediction directory against class-aware InfantFace 68-point GT."""
     provided_gt_root, gt_labels_dir = resolve_text_labels_dir(
         gt_root, labels_subdir_name="labels"
     )
@@ -830,6 +890,17 @@ def benchmark_infantface_prediction_directory(
 
     per_landmark_errors: list[list[float]] = [[] for _ in range(68)]
     per_landmark_point_to_line_errors: list[list[float]] = [[] for _ in range(68)]
+    orientation_names = [*NATURAL_ORIENTATION_NAMES, UNKNOWN_ORIENTATION]
+    orientation_to_errors: dict[str, list[list[float]]] = {
+        orientation: [[] for _ in range(68)] for orientation in orientation_names
+    }
+    orientation_to_box_nme_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
+    orientation_to_box_nme_point_to_line_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
+    orientation_sample_counts = {orientation: 0 for orientation in orientation_names}
     per_image_nme: list[dict[str, Any]] = []
     per_image_per_landmark_nme: list[dict[str, Any]] = []
     invalid_prediction_files: list[str] = []
@@ -841,13 +912,24 @@ def benchmark_infantface_prediction_directory(
 
     for gt_path in gt_paths:
         sample_id = gt_path.stem
+        (
+            gt_landmarks,
+            gt_class_idx,
+            gt_orientation,
+        ) = load_infantface_ground_truth_landmarks(
+            gt_path,
+        )
+        if gt_orientation not in orientation_sample_counts:
+            gt_orientation = UNKNOWN_ORIENTATION
+        orientation_sample_counts[gt_orientation] += 1
+
         candidate_prediction_paths = prediction_paths_by_gt_stem.get(sample_id, [])
         if not candidate_prediction_paths:
             images_without_prediction += 1
             per_image_nme.append(
                 {
                     "sample_id": sample_id,
-                    "orientation": "infantface",
+                    "orientation": gt_orientation,
                     "mean_nme_box": None,
                     "mean_nme_box_point_to_line": None,
                     "mean_nme_interocular": None,
@@ -872,7 +954,6 @@ def benchmark_infantface_prediction_directory(
             inferred_num_landmarks = parsed_prediction.num_landmarks
             sample_has_valid_prediction = True
 
-            gt_landmarks = load_infantface_ground_truth_landmarks(gt_path)
             predicted_landmarks = parsed_prediction.landmarks[:68].astype(np.float32)
             valid_mask = np.ones(68, dtype=bool)
 
@@ -889,8 +970,17 @@ def benchmark_infantface_prediction_directory(
             valid_landmarks_used += len(current_errors)
             for landmark_index, error_value in current_errors.items():
                 per_landmark_errors[landmark_index].append(error_value)
+                orientation_to_errors[gt_orientation][landmark_index].append(
+                    error_value
+                )
             for landmark_index, error_value in current_point_to_line_errors.items():
                 per_landmark_point_to_line_errors[landmark_index].append(error_value)
+            if mean_box_nme is not None:
+                orientation_to_box_nme_values[gt_orientation].append(mean_box_nme)
+            if mean_box_nme_point_to_line is not None:
+                orientation_to_box_nme_point_to_line_values[gt_orientation].append(
+                    mean_box_nme_point_to_line
+                )
             for landmark_index, error_value in current_errors.items():
                 pred_visibility_value = (
                     int(parsed_prediction.visibility[landmark_index])
@@ -904,8 +994,8 @@ def benchmark_infantface_prediction_directory(
                         "prediction_id": prediction_path.stem,
                         "evaluation_mode": "infantface",
                         "split": "benchmark",
-                        "orientation": "infantface",
-                        "class_idx": None,
+                        "orientation": gt_orientation,
+                        "class_idx": gt_class_idx,
                         "landmark_idx": int(landmark_index),
                         "point_to_point_nme_box": float(error_value),
                         "point_to_line_nme_box": float(
@@ -920,7 +1010,7 @@ def benchmark_infantface_prediction_directory(
             per_image_nme.append(
                 {
                     "sample_id": prediction_path.stem,
-                    "orientation": "infantface",
+                    "orientation": gt_orientation,
                     "mean_nme_box": mean_box_nme,
                     "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
                     "mean_nme_interocular": None,
@@ -934,7 +1024,7 @@ def benchmark_infantface_prediction_directory(
             per_image_nme.append(
                 {
                     "sample_id": sample_id,
-                    "orientation": "infantface",
+                    "orientation": gt_orientation,
                     "mean_nme_box": None,
                     "mean_nme_box_point_to_line": None,
                     "mean_nme_interocular": None,
@@ -973,6 +1063,7 @@ def benchmark_infantface_prediction_directory(
     )
 
     if any(values for values in per_landmark_errors):
+        grouped_errors = [per_landmark_errors] + list(orientation_to_errors.values())
         title = _build_boxplot_title(
             label="InfantFace (68 landmarks)",
             mean_nme_box=(
@@ -981,22 +1072,81 @@ def benchmark_infantface_prediction_directory(
                 else None
             ),
         )
+        y_limits_log = (
+            fixed_log_y_limits
+            if fixed_log_y_limits is not None
+            else compute_global_log_y_limits(grouped_errors)
+        )
+        clip_log_for_comparison = fixed_log_y_limits is not None
+        clipping_note = (
+            f"Values clipped to [{y_limits_log[0]:.0e}, {y_limits_log[1]:.0e}] for display only"
+            if clip_log_for_comparison
+            else None
+        )
+        orientation_metrics = {
+            orientation: {
+                "mean_nme_box": (float(np.mean(values)) if values else None),
+                "mean_nme_box_point_to_line": (
+                    float(
+                        np.mean(
+                            orientation_to_box_nme_point_to_line_values[orientation]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_values[orientation]
+                    else None
+                ),
+                "mean_nme_interocular": None,
+            }
+            for orientation, values in orientation_to_box_nme_values.items()
+        }
+        y_limits_linear = compute_global_linear_y_limits(grouped_errors)
+        plot_yaw_view_boxplots(
+            orientation_to_errors=orientation_to_errors,
+            output_dir=figures_dir,
+            use_landmark_names=use_landmark_names_in_boxplot,
+            y_limits=y_limits_log,
+            y_scale="log",
+            filename_suffix="log",
+            orientation_metrics=orientation_metrics,
+            clip_values_to_y_limits=clip_log_for_comparison,
+            clipping_note=clipping_note,
+        )
+        plot_yaw_view_boxplots(
+            orientation_to_errors=orientation_to_errors,
+            output_dir=figures_dir,
+            use_landmark_names=use_landmark_names_in_boxplot,
+            y_limits=y_limits_linear,
+            y_scale="linear",
+            filename_suffix="linear",
+            orientation_metrics=orientation_metrics,
+        )
         plot_per_landmark_boxplot(
             per_landmark_errors=per_landmark_errors,
             output_path=figures_dir / "boxplot_nme_per_landmark_global_log.png",
             use_landmark_names=use_landmark_names_in_boxplot,
             title=title,
-            y_limits=compute_global_log_y_limits([per_landmark_errors]),
+            y_limits=y_limits_log,
             y_scale="log",
+            clip_values_to_y_limits=clip_log_for_comparison,
+            clipping_note=clipping_note,
         )
         plot_per_landmark_boxplot(
             per_landmark_errors=per_landmark_errors,
             output_path=figures_dir / "boxplot_nme_per_landmark_global_linear.png",
             use_landmark_names=use_landmark_names_in_boxplot,
             title=title,
-            y_limits=compute_global_linear_y_limits([per_landmark_errors]),
+            y_limits=y_limits_linear,
             y_scale="linear",
         )
+    else:
+        orientation_metrics = {
+            orientation: {
+                "mean_nme_box": None,
+                "mean_nme_box_point_to_line": None,
+                "mean_nme_interocular": None,
+            }
+            for orientation in orientation_names
+        }
 
     summary = {
         "model_name": provided_prediction_root.name,
@@ -1030,6 +1180,25 @@ def benchmark_infantface_prediction_directory(
         "valid_landmarks_used": int(valid_landmarks_used),
         "invalid_prediction_files": invalid_prediction_files,
         "unmatched_prediction_files": unmatched_prediction_files,
+        "orientation_sample_counts": {
+            orientation: int(count)
+            for orientation, count in orientation_sample_counts.items()
+            if count > 0 or orientation != UNKNOWN_ORIENTATION
+        },
+        "orientation_metrics": {
+            orientation: metrics
+            for orientation, metrics in orientation_metrics.items()
+            if orientation != UNKNOWN_ORIENTATION
+            or orientation_sample_counts.get(orientation, 0) > 0
+        },
+        "comparable_log_boxplot": {
+            "y_limits": list(fixed_log_y_limits)
+            if fixed_log_y_limits is not None
+            else None,
+            "values_clipped_for_visualization_only": bool(
+                fixed_log_y_limits is not None
+            ),
+        },
     }
 
     summary = round_metric_value(summary)
