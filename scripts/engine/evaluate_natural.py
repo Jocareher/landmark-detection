@@ -227,7 +227,9 @@ def evaluate_natural_checkpoint(
                     class_idx = int(class_idx.item())
                 else:
                     class_idx = int(class_idx)
-                source_image_name = str(metadata_batch["source_image_name"][sample_index])
+                source_image_name = str(
+                    metadata_batch["source_image_name"][sample_index]
+                )
 
                 if prediction_labels_dir is not None:
                     save_prediction_file(
@@ -437,9 +439,7 @@ def evaluate_natural_checkpoint(
         predictions=visibility_predictions,
     )
     confusion_matrix_normalized = normalize_confusion_matrix(confusion_matrix_raw)
-    visibility_metrics = compute_visibility_classification_metrics(
-        confusion_matrix_raw
-    )
+    visibility_metrics = compute_visibility_classification_metrics(confusion_matrix_raw)
 
     plot_confusion_matrix(
         matrix=confusion_matrix_raw,

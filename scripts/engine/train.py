@@ -266,14 +266,14 @@ def append_results_row(
             [
                 epoch,
                 split,
-                metrics['total_loss'],
-                metrics['full_landmark_loss'],
-                metrics['visible_landmark_loss'],
-                metrics['visibility_loss'],
-                metrics['pca_projection_loss'],
-                metrics['nme'],
+                metrics["total_loss"],
+                metrics["full_landmark_loss"],
+                metrics["visible_landmark_loss"],
+                metrics["visibility_loss"],
+                metrics["pca_projection_loss"],
+                metrics["nme"],
                 lr,
-                metrics['epoch_time'],
+                metrics["epoch_time"],
             ]
         )
 
@@ -420,9 +420,7 @@ def train_model(
                         "visible_landmark_loss"
                     ],
                     "train/visibility_loss": train_metrics["visibility_loss"],
-                    "train/pca_projection_loss": train_metrics[
-                        "pca_projection_loss"
-                    ],
+                    "train/pca_projection_loss": train_metrics["pca_projection_loss"],
                     "train/nme": train_metrics["nme"],
                     "val/total_loss": val_metrics["total_loss"],
                     "val/full_landmark_loss": val_metrics["full_landmark_loss"],

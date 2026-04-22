@@ -194,6 +194,12 @@ def get_landmark_anatomical_group(landmark_index: int) -> str:
     return "unknown"
 
 
+def get_landmark_anatomical_label(landmark_index: int) -> str:
+    """Return a group label with the human-readable 1-based landmark index."""
+    anatomical_group = get_landmark_anatomical_group(landmark_index)
+    return f"{anatomical_group}_{landmark_index + 1}"
+
+
 def get_landmark_connection_definitions() -> list[tuple[range, bool]]:
     """Return landmark index groups and whether they should be drawn as closed loops."""
     return [
@@ -646,9 +652,7 @@ def plot_per_landmark_boxplot(
             current_values = [max(value, 1e-8) for value in current_values]
         if clip_values_to_y_limits and y_limits is not None:
             y_min, y_max = y_limits
-            current_values = [
-                min(max(value, y_min), y_max) for value in current_values
-            ]
+            current_values = [min(max(value, y_min), y_max) for value in current_values]
         plotted_errors.append(current_values)
 
     figure_width = max(20.0, number_of_landmarks * 0.34)

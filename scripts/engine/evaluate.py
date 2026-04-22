@@ -18,6 +18,7 @@ from ..utils.visualization import (
     compute_global_log_y_limits,
     get_default_landmark_names,
     get_landmark_anatomical_group,
+    get_landmark_anatomical_label,
     plot_confusion_matrix,
     plot_per_landmark_boxplot,
     plot_yaw_view_boxplots,
@@ -287,9 +288,7 @@ def save_metrics_summary_csv(
         ("mean_nme_interocular", summary.get("mean_nme_interocular")),
         (
             "visibility_global_precision",
-            summary.get("visibility_metrics", {})
-            .get("global", {})
-            .get("precision"),
+            summary.get("visibility_metrics", {}).get("global", {}).get("precision"),
         ),
         (
             "visibility_global_recall",
@@ -301,9 +300,7 @@ def save_metrics_summary_csv(
         ),
         (
             "visibility_visible_precision",
-            summary.get("visibility_metrics", {})
-            .get("visible", {})
-            .get("precision"),
+            summary.get("visibility_metrics", {}).get("visible", {}).get("precision"),
         ),
         (
             "visibility_visible_recall",
@@ -315,9 +312,7 @@ def save_metrics_summary_csv(
         ),
         (
             "visibility_invisible_precision",
-            summary.get("visibility_metrics", {})
-            .get("invisible", {})
-            .get("precision"),
+            summary.get("visibility_metrics", {}).get("invisible", {}).get("precision"),
         ),
         (
             "visibility_invisible_recall",
@@ -455,7 +450,9 @@ def save_per_image_nme_csv(
                     row["sample_id"],
                     row["orientation"],
                     (
-                        format_metric_value(round_metric_value(float(row["mean_nme_box"])))
+                        format_metric_value(
+                            round_metric_value(float(row["mean_nme_box"]))
+                        )
                         if row["mean_nme_box"] is not None
                         else None
                     ),
@@ -491,6 +488,7 @@ def save_per_image_per_landmark_nme_csv(
         "class_idx",
         "landmark_idx",
         "anatomical_group",
+        "anatomical_label",
         "point_to_point_nme_box",
         "point_to_line_nme_box",
         "gt_visibility",
@@ -508,13 +506,19 @@ def save_per_image_per_landmark_nme_csv(
                 if landmark_idx is not None
                 else None
             )
+            anatomical_label = (
+                get_landmark_anatomical_label(int(landmark_idx))
+                if landmark_idx is not None
+                else None
+            )
             writer.writerow(
                 {
                     field_name: format_metric_value(
                         round_metric_value(
-                            anatomical_group
-                            if field_name == "anatomical_group"
-                            else row.get(field_name)
+                            {
+                                "anatomical_group": anatomical_group,
+                                "anatomical_label": anatomical_label,
+                            }.get(field_name, row.get(field_name))
                         )
                     )
                     for field_name in fieldnames
@@ -962,9 +966,7 @@ def evaluate_checkpoint(
         predictions=visibility_predictions,
     )
     confusion_matrix_normalized = normalize_confusion_matrix(confusion_matrix_raw)
-    visibility_metrics = compute_visibility_classification_metrics(
-        confusion_matrix_raw
-    )
+    visibility_metrics = compute_visibility_classification_metrics(confusion_matrix_raw)
 
     plot_confusion_matrix(
         matrix=confusion_matrix_raw,
