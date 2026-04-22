@@ -476,6 +476,40 @@ def save_per_image_nme_csv(
             )
 
 
+def save_per_image_per_landmark_nme_csv(
+    rows: list[dict[str, Any]],
+    output_path: Path,
+) -> None:
+    """Save one long-format row per evaluated image/prediction and landmark."""
+    fieldnames = [
+        "image_id",
+        "prediction_id",
+        "evaluation_mode",
+        "split",
+        "orientation",
+        "class_idx",
+        "landmark_idx",
+        "point_to_point_nme_box",
+        "point_to_line_nme_box",
+        "gt_visibility",
+        "pred_visibility",
+        "landmark_count",
+    ]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    field_name: format_metric_value(
+                        round_metric_value(row.get(field_name))
+                    )
+                    for field_name in fieldnames
+                }
+            )
+
+
 def extract_face_orientation(sample_id: str) -> str:
     """
     Infer face orientation from the filename stem.
@@ -598,6 +632,7 @@ def evaluate_checkpoint(
     per_landmark_errors: list[list[float]] | None = None
     per_landmark_point_to_line_errors: list[list[float]] | None = None
     per_image_nme: list[dict[str, Any]] = []
+    per_image_per_landmark_nme: list[dict[str, Any]] = []
     all_visibility_targets: list[np.ndarray] = []
     all_visibility_predictions: list[np.ndarray] = []
 
@@ -692,6 +727,7 @@ def evaluate_checkpoint(
                 target_visibility = (
                     target_visibility_batch[sample_index].numpy().astype(np.int64)
                 )
+                split = str(metadata_batch.get("split", [""])[sample_index])
 
                 if prediction_labels_dir is not None:
                     save_prediction_file(
@@ -747,6 +783,29 @@ def evaluate_checkpoint(
                     per_landmark_point_to_line_errors[landmark_index].append(
                         float(error_value)
                     )
+                for landmark_index in range(len(current_errors)):
+                    per_image_per_landmark_nme.append(
+                        {
+                            "image_id": sample_id,
+                            "prediction_id": sample_id,
+                            "evaluation_mode": "synthetic",
+                            "split": split,
+                            "orientation": orientation,
+                            "class_idx": None,
+                            "landmark_idx": int(landmark_index),
+                            "point_to_point_nme_box": float(
+                                current_errors[landmark_index]
+                            ),
+                            "point_to_line_nme_box": float(
+                                current_point_to_line_errors[landmark_index]
+                            ),
+                            "gt_visibility": int(target_visibility[landmark_index]),
+                            "pred_visibility": int(
+                                predicted_visibility[landmark_index]
+                            ),
+                            "landmark_count": int(len(current_errors)),
+                        }
+                    )
 
                 for landmark_index, error_value in enumerate(current_errors):
                     orientation_to_errors[orientation][landmark_index].append(
@@ -784,6 +843,10 @@ def evaluate_checkpoint(
     save_per_image_nme_csv(
         per_image_nme=per_image_nme,
         output_path=output_dir / "per_image_nme.csv",
+    )
+    save_per_image_per_landmark_nme_csv(
+        rows=per_image_per_landmark_nme,
+        output_path=output_dir / "per_image_per_landmark_nme.csv",
     )
     all_grouped_errors = [per_landmark_errors] + list(orientation_to_errors.values())
     global_y_limits = compute_global_log_y_limits(all_grouped_errors)

@@ -17,6 +17,7 @@ from .evaluate import (
     round_metric_value,
     save_metrics_summary_csv,
     save_per_image_nme_csv,
+    save_per_image_per_landmark_nme_csv,
     save_per_landmark_nme_csv,
 )
 from .geometry_metrics import compute_per_landmark_point_to_line_distances
@@ -130,6 +131,7 @@ def evaluate_natural_checkpoint(
     per_landmark_errors: list[list[float]] | None = None
     per_landmark_point_to_line_errors: list[list[float]] | None = None
     per_image_nme: list[dict[str, Any]] = []
+    per_image_per_landmark_nme: list[dict[str, Any]] = []
     all_visibility_targets: list[np.ndarray] = []
     all_visibility_predictions: list[np.ndarray] = []
     num_samples_with_geometric_metrics = 0
@@ -220,6 +222,12 @@ def evaluate_natural_checkpoint(
                 target_visibility = (
                     target_visibility_batch[sample_index].numpy().astype(np.int64)
                 )
+                class_idx = metadata_batch["class_idx"][sample_index]
+                if hasattr(class_idx, "item"):
+                    class_idx = int(class_idx.item())
+                else:
+                    class_idx = int(class_idx)
+                source_image_name = str(metadata_batch["source_image_name"][sample_index])
 
                 if prediction_labels_dir is not None:
                     save_prediction_file(
@@ -278,6 +286,27 @@ def evaluate_natural_checkpoint(
                             error_value
                         )
                     for landmark_index, error_value in visible_errors.items():
+                        per_image_per_landmark_nme.append(
+                            {
+                                "image_id": source_image_name,
+                                "prediction_id": sample_id,
+                                "evaluation_mode": "natural",
+                                "split": "natural",
+                                "orientation": orientation,
+                                "class_idx": class_idx if class_idx >= 0 else None,
+                                "landmark_idx": int(landmark_index),
+                                "point_to_point_nme_box": float(error_value),
+                                "point_to_line_nme_box": float(
+                                    visible_point_to_line_errors[landmark_index]
+                                ),
+                                "gt_visibility": int(target_visibility[landmark_index]),
+                                "pred_visibility": int(
+                                    predicted_visibility[landmark_index]
+                                ),
+                                "landmark_count": int(len(target_visibility)),
+                            }
+                        )
+                    for landmark_index, error_value in visible_errors.items():
                         orientation_to_errors[orientation][landmark_index].append(
                             error_value
                         )
@@ -313,6 +342,10 @@ def evaluate_natural_checkpoint(
     save_per_image_nme_csv(
         per_image_nme=per_image_nme,
         output_path=output_dir / "per_image_nme.csv",
+    )
+    save_per_image_per_landmark_nme_csv(
+        rows=per_image_per_landmark_nme,
+        output_path=output_dir / "per_image_per_landmark_nme.csv",
     )
 
     valid_image_nme_values = [

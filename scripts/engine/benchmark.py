@@ -16,6 +16,7 @@ from .evaluate import (
     format_metric_value,
     round_metric_value,
     save_per_image_nme_csv,
+    save_per_image_per_landmark_nme_csv,
     save_per_landmark_nme_csv,
 )
 from .geometry_metrics import compute_per_landmark_point_to_line_distances
@@ -424,6 +425,7 @@ def benchmark_prediction_directory(
     }
     orientation_sample_counts = {orientation: 0 for orientation in orientation_names}
     per_image_nme: list[dict[str, Any]] = []
+    per_image_per_landmark_nme: list[dict[str, Any]] = []
     invalid_prediction_files: list[str] = []
     inferred_num_landmarks: int | None = None
     images_with_prediction = 0
@@ -439,7 +441,7 @@ def benchmark_prediction_directory(
         (
             gt_landmarks_all,
             gt_visibility_all,
-            _gt_class_idx,
+            gt_class_idx,
             gt_orientation,
         ) = load_ground_truth_landmarks(
             label_path=sample["label_path"],
@@ -517,6 +519,30 @@ def benchmark_prediction_directory(
             for landmark_index, error_value in visible_point_to_line_errors.items():
                 per_landmark_point_to_line_errors[landmark_index].append(error_value)
             for landmark_index, error_value in visible_errors.items():
+                pred_visibility_value = (
+                    int(parsed_prediction.visibility[landmark_index])
+                    if parsed_prediction.visibility is not None
+                    else None
+                )
+                per_image_per_landmark_nme.append(
+                    {
+                        "image_id": sample_id,
+                        "prediction_id": prediction_path.stem,
+                        "evaluation_mode": "sota",
+                        "split": "benchmark",
+                        "orientation": gt_orientation,
+                        "class_idx": gt_class_idx,
+                        "landmark_idx": int(landmark_index),
+                        "point_to_point_nme_box": float(error_value),
+                        "point_to_line_nme_box": float(
+                            visible_point_to_line_errors[landmark_index]
+                        ),
+                        "gt_visibility": int(gt_visibility[landmark_index]),
+                        "pred_visibility": pred_visibility_value,
+                        "landmark_count": int(landmark_count),
+                    }
+                )
+            for landmark_index, error_value in visible_errors.items():
                 orientation_to_errors[gt_orientation][landmark_index].append(
                     error_value
                 )
@@ -592,6 +618,10 @@ def benchmark_prediction_directory(
     save_per_image_nme_csv(
         per_image_nme=per_image_nme,
         output_path=output_dir / "per_image_nme.csv",
+    )
+    save_per_image_per_landmark_nme_csv(
+        rows=per_image_per_landmark_nme,
+        output_path=output_dir / "per_image_per_landmark_nme.csv",
     )
 
     if any(values for values in selected_per_landmark_errors):
@@ -801,6 +831,7 @@ def benchmark_infantface_prediction_directory(
     per_landmark_errors: list[list[float]] = [[] for _ in range(68)]
     per_landmark_point_to_line_errors: list[list[float]] = [[] for _ in range(68)]
     per_image_nme: list[dict[str, Any]] = []
+    per_image_per_landmark_nme: list[dict[str, Any]] = []
     invalid_prediction_files: list[str] = []
     inferred_num_landmarks: int | None = None
     images_with_prediction = 0
@@ -860,6 +891,31 @@ def benchmark_infantface_prediction_directory(
                 per_landmark_errors[landmark_index].append(error_value)
             for landmark_index, error_value in current_point_to_line_errors.items():
                 per_landmark_point_to_line_errors[landmark_index].append(error_value)
+            for landmark_index, error_value in current_errors.items():
+                pred_visibility_value = (
+                    int(parsed_prediction.visibility[landmark_index])
+                    if parsed_prediction.visibility is not None
+                    and landmark_index < len(parsed_prediction.visibility)
+                    else None
+                )
+                per_image_per_landmark_nme.append(
+                    {
+                        "image_id": sample_id,
+                        "prediction_id": prediction_path.stem,
+                        "evaluation_mode": "infantface",
+                        "split": "benchmark",
+                        "orientation": "infantface",
+                        "class_idx": None,
+                        "landmark_idx": int(landmark_index),
+                        "point_to_point_nme_box": float(error_value),
+                        "point_to_line_nme_box": float(
+                            current_point_to_line_errors[landmark_index]
+                        ),
+                        "gt_visibility": 1,
+                        "pred_visibility": pred_visibility_value,
+                        "landmark_count": 68,
+                    }
+                )
 
             per_image_nme.append(
                 {
@@ -910,6 +966,10 @@ def benchmark_infantface_prediction_directory(
     save_per_image_nme_csv(
         per_image_nme=per_image_nme,
         output_path=output_dir / "per_image_nme.csv",
+    )
+    save_per_image_per_landmark_nme_csv(
+        rows=per_image_per_landmark_nme,
+        output_path=output_dir / "per_image_per_landmark_nme.csv",
     )
 
     if any(values for values in per_landmark_errors):
