@@ -17,6 +17,7 @@ from ..utils.visualization import (
     compute_global_linear_y_limits,
     compute_global_log_y_limits,
     get_default_landmark_names,
+    get_landmark_anatomical_group,
     plot_confusion_matrix,
     plot_per_landmark_boxplot,
     plot_yaw_view_boxplots,
@@ -489,6 +490,7 @@ def save_per_image_per_landmark_nme_csv(
         "orientation",
         "class_idx",
         "landmark_idx",
+        "anatomical_group",
         "point_to_point_nme_box",
         "point_to_line_nme_box",
         "gt_visibility",
@@ -500,10 +502,20 @@ def save_per_image_per_landmark_nme_csv(
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
         for row in rows:
+            landmark_idx = row.get("landmark_idx")
+            anatomical_group = (
+                get_landmark_anatomical_group(int(landmark_idx))
+                if landmark_idx is not None
+                else None
+            )
             writer.writerow(
                 {
                     field_name: format_metric_value(
-                        round_metric_value(row.get(field_name))
+                        round_metric_value(
+                            anatomical_group
+                            if field_name == "anatomical_group"
+                            else row.get(field_name)
+                        )
                     )
                     for field_name in fieldnames
                 }

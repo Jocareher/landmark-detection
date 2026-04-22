@@ -186,6 +186,14 @@ def get_landmark_region_definitions() -> list[tuple[str, range, str]]:
     ]
 
 
+def get_landmark_anatomical_group(landmark_index: int) -> str:
+    """Return the snake-case anatomical group for a 68/72-landmark index."""
+    for region_name, landmark_range, _ in get_landmark_region_definitions():
+        if landmark_index in landmark_range:
+            return region_name.lower().replace(" ", "_")
+    return "unknown"
+
+
 def get_landmark_connection_definitions() -> list[tuple[range, bool]]:
     """Return landmark index groups and whether they should be drawn as closed loops."""
     return [
