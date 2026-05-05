@@ -32,6 +32,7 @@ def normalize_shape_for_procrustes(
         raise ValueError(
             f"Expected points with shape (N, 2), got {tuple(points.shape)}."
         )
+    points = points.to(dtype=torch.float32)
     centered = points - points.mean(dim=0, keepdim=True)
     scale = torch.linalg.norm(centered)
     if float(scale.item()) <= eps:
@@ -51,6 +52,9 @@ def estimate_similarity_transform_torch(
             f"Expected matching (N, 2) source/target shapes, got "
             f"{tuple(source.shape)} and {tuple(target.shape)}."
         )
+
+    source = source.to(dtype=torch.float32)
+    target = target.to(dtype=torch.float32)
 
     source_center = source.mean(dim=0)
     target_center = target.mean(dim=0)
@@ -85,6 +89,7 @@ def apply_similarity_transform_torch(
     translation: torch.Tensor,
 ) -> torch.Tensor:
     """Apply a row-vector similarity transform to one `(N, 2)` landmark shape."""
+    coords = coords.to(dtype=torch.float32)
     return (scale * (coords @ rotation)) + translation
 
 
@@ -404,6 +409,7 @@ def compute_pca_projection_loss(
             f"got {tuple(predicted_landmarks.shape)}."
         )
 
+    predicted_landmarks = predicted_landmarks.to(dtype=torch.float32)
     class_indices = class_indices.reshape(-1).to(dtype=torch.int64)
     if predicted_landmarks.shape[0] != class_indices.shape[0]:
         raise ValueError(
