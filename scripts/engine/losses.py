@@ -75,16 +75,21 @@ def compute_multitask_loss(
             raise ValueError(
                 "batch['class_idx'] is required for class-conditioned PCA projection loss."
             )
-        predicted_landmarks = softargmax_heatmaps_to_image_coords(
-            heatmaps=predicted_full_heatmaps,
-            image_height=image_height,
-            image_width=image_width,
+        pca_device_type = predicted_full_heatmaps.device.type
+        with torch.autocast(device_type=pca_device_type, enabled=False):
+            predicted_landmarks = softargmax_heatmaps_to_image_coords(
+                heatmaps=predicted_full_heatmaps.float(),
+                image_height=image_height,
+                image_width=image_width,
+            )
+            pca_projection_loss = compute_pca_projection_loss(
+                predicted_landmarks=predicted_landmarks,
+                class_indices=target_class_idx,
+                pca_prior=pca_shape_prior,
+            )
+        pca_projection_loss = pca_projection_loss.to(
+            dtype=predicted_full_heatmaps.dtype
         )
-        pca_projection_loss = compute_pca_projection_loss(
-            predicted_landmarks=predicted_landmarks,
-            class_indices=target_class_idx,
-            pca_prior=pca_shape_prior,
-        ).to(dtype=predicted_full_heatmaps.dtype)
     total_loss = (
         lambda_vis * visibility_loss
         + lambda_lmk_vis * visible_landmark_loss
