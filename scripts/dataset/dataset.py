@@ -10,6 +10,8 @@ from PIL import Image
 from torch.utils.data import Dataset
 from tqdm.auto import tqdm
 
+from ..utils.synthetic_labels import parse_synthetic_landmark_label
+
 SampleDict = dict[str, Any]
 TargetMode = Literal["regression", "heatmap", "both"]
 
@@ -130,7 +132,7 @@ class SyntheticLandmarkDataset(Dataset):
 
         image = self._load_image(image_path)
         original_width, original_height = image.size
-        landmarks, visibility = self._load_label(
+        landmarks, visibility, class_idx, class_name = self._load_label(
             label_path, original_width, original_height
         )
 
@@ -142,6 +144,8 @@ class SyntheticLandmarkDataset(Dataset):
             "transformed_size": (original_height, original_width),
             "split": self.split,
             "num_landmarks": self.num_landmarks,
+            "class_idx": -1 if class_idx is None else int(class_idx),
+            "class_name": class_name,
             "geometric_augmentation": {
                 "applied": False,
                 "rotation_deg": 0.0,
@@ -153,6 +157,7 @@ class SyntheticLandmarkDataset(Dataset):
             "image": image,
             "landmarks": landmarks,
             "visibility": visibility,
+            "class_idx": -1 if class_idx is None else int(class_idx),
             "metadata": metadata,
         }
 
@@ -166,6 +171,7 @@ class SyntheticLandmarkDataset(Dataset):
         output: SampleDict = {
             "image": image_tensor,
             "visibility": visibility_tensor,
+            "class_idx": torch.as_tensor(sample["class_idx"], dtype=torch.int64),
         }
         if self.target_mode in {"regression", "both"}:
             output["landmarks"] = landmarks_tensor
@@ -252,12 +258,13 @@ class SyntheticLandmarkDataset(Dataset):
     def _is_minimally_valid_label(self, label_path: Path) -> bool:
         """Check that a label file has the expected `(num_landmarks, 3)` shape."""
         try:
-            data = np.loadtxt(label_path, dtype=np.float32)
+            parse_synthetic_landmark_label(
+                label_path=label_path,
+                expected_num_landmarks=self.num_landmarks,
+            )
         except Exception:
             return False
-        if data.ndim == 1:
-            data = data.reshape(1, -1)
-        return data.shape == (self.num_landmarks, 3)
+        return True
 
     @staticmethod
     def _load_image(image_path: Path) -> Image.Image:
@@ -266,21 +273,17 @@ class SyntheticLandmarkDataset(Dataset):
 
     def _load_label(
         self, label_path: Path, image_width: int, image_height: int
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray, int | None, str]:
         """Load normalized labels and convert landmark coordinates to pixel space."""
-        data = np.loadtxt(label_path, dtype=np.float32)
-        if data.ndim == 1:
-            data = data.reshape(1, -1)
-        if data.shape != (self.num_landmarks, 3):
-            raise ValueError(
-                f"Invalid label shape in '{label_path}'. Expected ({self.num_landmarks}, 3), got {data.shape}."
-            )
-
-        landmarks = data[:, :2].astype(np.float32, copy=True)
-        visibility = data[:, 2].astype(np.float32, copy=True)
+        parsed_label = parse_synthetic_landmark_label(
+            label_path=label_path,
+            expected_num_landmarks=self.num_landmarks,
+        )
+        landmarks = parsed_label.landmarks.astype(np.float32, copy=True)
+        visibility = parsed_label.visibility.astype(np.float32, copy=True)
         landmarks[:, 0] *= float(image_width)
         landmarks[:, 1] *= float(image_height)
-        return landmarks, visibility
+        return landmarks, visibility, parsed_label.class_idx, parsed_label.class_name
 
     @staticmethod
     def _ensure_image_tensor(image: Any) -> torch.Tensor:

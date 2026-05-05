@@ -63,9 +63,11 @@ def run_epoch(
         images = batch["image"].to(device, non_blocking=True)
         heatmaps = batch["heatmaps"].to(device, non_blocking=True)
         visibility = batch["visibility"].to(device, non_blocking=True)
+        class_idx = batch["class_idx"].to(device, non_blocking=True)
         batch_on_device: dict[str, torch.Tensor] = {
             "heatmaps": heatmaps,
             "visibility": visibility,
+            "class_idx": class_idx,
         }
         if "landmarks" in batch:
             batch_on_device["landmarks"] = batch["landmarks"].to(
@@ -129,9 +131,7 @@ def run_epoch(
             loss_dict["visible_landmark_loss"].item(), batch_size
         )
         visibility_loss_meter.update(loss_dict["visibility_loss"].item(), batch_size)
-        pca_projection_loss_meter.update(
-            loss_dict["pca_projection_loss"].item(), batch_size
-        )
+        pca_projection_loss_meter.update(loss_dict["pca_loss"].item(), batch_size)
 
         if "landmarks" in batch_on_device:
             pred_landmarks = decode_heatmaps_to_image_coords(
@@ -162,7 +162,7 @@ def run_epoch(
         "full_landmark_loss": full_landmark_loss_meter.avg,
         "visible_landmark_loss": visible_landmark_loss_meter.avg,
         "visibility_loss": visibility_loss_meter.avg,
-        "pca_projection_loss": pca_projection_loss_meter.avg,
+        "pca_loss": pca_projection_loss_meter.avg,
         "nme": nme_meter.avg,
         "batch_time": batch_time_meter.avg,
         "epoch_time": time.time() - epoch_start_time,
@@ -209,7 +209,7 @@ def print_epoch_summary(
         f"full: {train_metrics['full_landmark_loss']:.6f} | "
         f"visible: {train_metrics['visible_landmark_loss']:.6f} | "
         f"vis: {train_metrics['visibility_loss']:.6f} | "
-        f"pca: {train_metrics['pca_projection_loss']:.6f} | "
+        f"pca: {train_metrics['pca_loss']:.6f} | "
         f"NME: {train_metrics['nme']:.6f}"
     )
     print(
@@ -217,7 +217,7 @@ def print_epoch_summary(
         f"full: {val_metrics['full_landmark_loss']:.6f} | "
         f"visible: {val_metrics['visible_landmark_loss']:.6f} | "
         f"vis: {val_metrics['visibility_loss']:.6f} | "
-        f"pca: {val_metrics['pca_projection_loss']:.6f} | "
+        f"pca: {val_metrics['pca_loss']:.6f} | "
         f"NME: {val_metrics['nme']:.6f}"
     )
     print(
@@ -247,7 +247,7 @@ def initialize_results_csv(csv_path: str | Path) -> None:
                 "full_landmark_loss",
                 "visible_landmark_loss",
                 "visibility_loss",
-                "pca_projection_loss",
+                "pca_loss",
                 "nme",
                 "lr",
                 "epoch_time",
@@ -270,7 +270,7 @@ def append_results_row(
                 metrics["full_landmark_loss"],
                 metrics["visible_landmark_loss"],
                 metrics["visibility_loss"],
-                metrics["pca_projection_loss"],
+                metrics["pca_loss"],
                 metrics["nme"],
                 lr,
                 metrics["epoch_time"],
@@ -420,13 +420,13 @@ def train_model(
                         "visible_landmark_loss"
                     ],
                     "train/visibility_loss": train_metrics["visibility_loss"],
-                    "train/pca_projection_loss": train_metrics["pca_projection_loss"],
+                    "train/pca_loss": train_metrics["pca_loss"],
                     "train/nme": train_metrics["nme"],
                     "val/total_loss": val_metrics["total_loss"],
                     "val/full_landmark_loss": val_metrics["full_landmark_loss"],
                     "val/visible_landmark_loss": val_metrics["visible_landmark_loss"],
                     "val/visibility_loss": val_metrics["visibility_loss"],
-                    "val/pca_projection_loss": val_metrics["pca_projection_loss"],
+                    "val/pca_loss": val_metrics["pca_loss"],
                     "val/nme": val_metrics["nme"],
                     "best/val_total_loss": best_val_loss,
                 }
@@ -481,6 +481,7 @@ def smoke_test_single_batch(
     heatmaps = batch["heatmaps"].to(device, non_blocking=True)
     visibility = batch["visibility"].to(device, non_blocking=True)
     landmarks = batch["landmarks"].to(device, non_blocking=True)
+    class_idx = batch["class_idx"].to(device, non_blocking=True)
     pca_shape_prior = None
     if pca_prior_path is not None:
         pca_shape_prior = load_pca_shape_prior(pca_prior_path, device=device)
@@ -489,7 +490,11 @@ def smoke_test_single_batch(
     outputs = model(images)
     loss_dict = compute_multitask_loss(
         outputs=outputs,
-        batch={"heatmaps": heatmaps, "visibility": visibility},
+        batch={
+            "heatmaps": heatmaps,
+            "visibility": visibility,
+            "class_idx": class_idx,
+        },
         heatmap_loss_fn=heatmap_loss_fn,
         visibility_loss_fn=visibility_loss_fn,
         lambda_vis=lambda_vis,
@@ -515,5 +520,5 @@ def smoke_test_single_batch(
     print(f"Full landmark loss: {loss_dict['full_landmark_loss'].item():.6f}")
     print(f"Visible landmark loss: {loss_dict['visible_landmark_loss'].item():.6f}")
     print(f"Visibility loss: {loss_dict['visibility_loss'].item():.6f}")
-    print(f"PCA projection loss: {loss_dict['pca_projection_loss'].item():.6f}")
+    print(f"PCA loss: {loss_dict['pca_loss'].item():.6f}")
     print(f"NME: {float(nme_values.mean()):.6f}")

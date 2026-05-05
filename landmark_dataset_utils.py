@@ -9,6 +9,8 @@ from typing import Iterator, List, Sequence, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
 
+from scripts.utils.synthetic_labels import parse_synthetic_landmark_label
+
 
 LANDMARK_NAMES_72 = [
     *(f"face_contour_{index}" for index in range(1, 18)),
@@ -339,10 +341,35 @@ def parse_landmark_label_file(
     - `zero`: replace invisible points with `(0, 0)`
     """
     label_file = Path(label_file)
+    raw_lines = label_file.read_text(encoding="utf-8").splitlines()
+    non_empty_lines = [line.strip() for line in raw_lines if line.strip()]
+    if non_empty_lines and len(non_empty_lines[0].split()) == 1:
+        parsed_label = parse_synthetic_landmark_label(
+            label_path=label_file,
+            expected_num_landmarks=72,
+        )
+        instance: LandmarkInstance = []
+        for (x_coord, y_coord), visibility_value in zip(
+            parsed_label.landmarks,
+            parsed_label.visibility,
+        ):
+            visibility = int(float(visibility_value))
+            if visibility == 0:
+                if invisible_strategy == "nan":
+                    x_coord, y_coord = np.nan, np.nan
+                elif invisible_strategy == "zero":
+                    x_coord, y_coord = 0.0, 0.0
+                elif invisible_strategy != "keep":
+                    raise ValueError(
+                        f"Unknown invisible_strategy: {invisible_strategy}"
+                    )
+            instance.append((float(x_coord), float(y_coord), visibility))
+        return [instance]
+
     instances: List[LandmarkInstance] = []
     current_instance: LandmarkInstance = []
 
-    for raw_line in label_file.read_text(encoding="utf-8").splitlines():
+    for raw_line in raw_lines:
         line = raw_line.strip()
         if not line:
             if current_instance:

@@ -56,6 +56,7 @@ def compute_multitask_loss(
     predicted_visibility_logits = outputs["visibility_logits"]
     target_heatmaps = batch["heatmaps"]
     target_visibility = batch["visibility"]
+    target_class_idx = batch.get("class_idx")
 
     full_landmark_loss = heatmap_loss_fn(predicted_full_heatmaps, target_heatmaps)
     visible_landmark_loss = compute_visible_landmark_heatmap_loss(
@@ -70,6 +71,10 @@ def compute_multitask_loss(
             raise ValueError(
                 "image_height and image_width are required for PCA projection loss."
             )
+        if target_class_idx is None:
+            raise ValueError(
+                "batch['class_idx'] is required for class-conditioned PCA projection loss."
+            )
         predicted_landmarks = softargmax_heatmaps_to_image_coords(
             heatmaps=predicted_full_heatmaps,
             image_height=image_height,
@@ -77,6 +82,7 @@ def compute_multitask_loss(
         )
         pca_projection_loss = compute_pca_projection_loss(
             predicted_landmarks=predicted_landmarks,
+            class_indices=target_class_idx,
             pca_prior=pca_shape_prior,
         ).to(dtype=predicted_full_heatmaps.dtype)
     total_loss = (
@@ -90,5 +96,5 @@ def compute_multitask_loss(
         "full_landmark_loss": full_landmark_loss,
         "visible_landmark_loss": visible_landmark_loss,
         "visibility_loss": visibility_loss,
-        "pca_projection_loss": pca_projection_loss,
+        "pca_loss": pca_projection_loss,
     }
