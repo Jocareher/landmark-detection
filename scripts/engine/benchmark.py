@@ -26,6 +26,10 @@ from ..utils.natural_labels import (
     orientation_from_class_idx,
     parse_natural_landmark_label,
 )
+from ..utils.synthetic_labels import (
+    format_synthetic_yaw_group,
+    parse_synthetic_landmark_label,
+)
 from ..utils.visualization import (
     compute_global_linear_y_limits,
     compute_global_log_y_limits,
@@ -35,6 +39,20 @@ from ..utils.visualization import (
 
 VALID_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 DETECTOR_EXPORT_SUFFIX_PATTERN = re.compile(r"^(?P<base>.+)__det_(?P<index>\d+)$")
+
+
+def format_yaw_filename_key(yaw_angle: float) -> str:
+    """Return a stable filename/summary key for a synthetic yaw angle."""
+    yaw_value = float(yaw_angle)
+    if yaw_value.is_integer():
+        return f"yaw_{int(yaw_value):+d}deg".replace("+", "plus_").replace(
+            "-", "minus_"
+        )
+    return (
+        f"yaw_{yaw_value:+g}deg".replace("+", "plus_")
+        .replace("-", "minus_")
+        .replace(".", "p")
+    )
 
 
 @dataclass
@@ -134,9 +152,9 @@ def load_ground_truth_landmarks(
     image_width: int,
     image_height: int,
 ) -> tuple[np.ndarray, np.ndarray, int | None, str]:
-    """Load normalized GT landmarks and convert them to absolute image coordinates."""
+    """Load normalized synthetic GT landmarks and convert them to absolute image coordinates."""
     label_path = Path(label_path)
-    parsed_label = parse_natural_landmark_label(
+    parsed_label = parse_synthetic_landmark_label(
         label_path=label_path,
         expected_num_landmarks=72,
     )
@@ -150,8 +168,12 @@ def load_ground_truth_landmarks(
     return (
         landmarks.astype(np.float32),
         visibility,
-        parsed_label.class_idx,
-        parsed_label.orientation,
+        None,
+        (
+            format_yaw_filename_key(float(parsed_label.yaw_angle))
+            if parsed_label.yaw_angle is not None
+            else UNKNOWN_ORIENTATION
+        ),
     )
 
 
@@ -469,20 +491,13 @@ def benchmark_prediction_directory(
     per_landmark_errors_72: list[list[float]] = [[] for _ in range(72)]
     per_landmark_point_to_line_errors_68: list[list[float]] = [[] for _ in range(68)]
     per_landmark_point_to_line_errors_72: list[list[float]] = [[] for _ in range(72)]
-    orientation_names = [*NATURAL_ORIENTATION_NAMES, UNKNOWN_ORIENTATION]
-    orientation_to_errors_68: dict[str, list[list[float]]] = {
-        orientation: [[] for _ in range(68)] for orientation in orientation_names
-    }
-    orientation_to_errors_72: dict[str, list[list[float]]] = {
-        orientation: [[] for _ in range(72)] for orientation in orientation_names
-    }
-    orientation_to_box_nme_values: dict[str, list[float]] = {
-        orientation: [] for orientation in orientation_names
-    }
-    orientation_to_box_nme_point_to_line_values: dict[str, list[float]] = {
-        orientation: [] for orientation in orientation_names
-    }
-    orientation_sample_counts = {orientation: 0 for orientation in orientation_names}
+    orientation_names: list[str] = []
+    orientation_to_errors_68: dict[str, list[list[float]]] = {}
+    orientation_to_errors_72: dict[str, list[list[float]]] = {}
+    orientation_to_box_nme_values: dict[str, list[float]] = {}
+    orientation_to_box_nme_point_to_line_values: dict[str, list[float]] = {}
+    orientation_sample_counts: dict[str, int] = {}
+    orientation_display_labels: dict[str, str] = {}
     per_image_nme: list[dict[str, Any]] = []
     per_image_per_landmark_nme: list[dict[str, Any]] = []
     invalid_prediction_files: list[str] = []
@@ -508,7 +523,18 @@ def benchmark_prediction_directory(
             image_height=image_height,
         )
         if gt_orientation not in orientation_sample_counts:
-            gt_orientation = UNKNOWN_ORIENTATION
+            orientation_names.append(gt_orientation)
+            orientation_to_errors_68[gt_orientation] = [[] for _ in range(68)]
+            orientation_to_errors_72[gt_orientation] = [[] for _ in range(72)]
+            orientation_to_box_nme_values[gt_orientation] = []
+            orientation_to_box_nme_point_to_line_values[gt_orientation] = []
+            orientation_sample_counts[gt_orientation] = 0
+            if gt_orientation.startswith("yaw_"):
+                yaw_text = gt_orientation.removeprefix("yaw_").removesuffix("deg")
+                yaw_text = yaw_text.replace("plus_", "+").replace("minus_", "-")
+                orientation_display_labels[gt_orientation] = f"{yaw_text}°"
+            else:
+                orientation_display_labels[gt_orientation] = gt_orientation
         orientation_sample_counts[gt_orientation] += 1
 
         candidate_prediction_paths = prediction_paths_by_gt_stem.get(sample_id, [])
@@ -640,6 +666,19 @@ def benchmark_prediction_directory(
         raise RuntimeError(
             "Could not infer the model landmark format because no valid prediction file was found."
         )
+    orientation_names = sorted(
+        orientation_names,
+        key=lambda name: (
+            float(
+                name.removeprefix("yaw_")
+                .removesuffix("deg")
+                .replace("plus_", "+")
+                .replace("minus_", "-")
+            )
+            if name.startswith("yaw_")
+            else float("inf")
+        ),
+    )
 
     selected_per_landmark_errors = (
         per_landmark_errors_68
@@ -733,6 +772,11 @@ def benchmark_prediction_directory(
             orientation_metrics=orientation_metrics,
             clip_values_to_y_limits=clip_log_for_comparison,
             clipping_note=clipping_note,
+            ordered_orientations=orientation_names,
+            display_labels=orientation_display_labels,
+            filename_labels={
+                orientation: orientation for orientation in orientation_names
+            },
         )
         plot_yaw_view_boxplots(
             orientation_to_errors=selected_orientation_to_errors,
@@ -742,6 +786,11 @@ def benchmark_prediction_directory(
             y_scale="linear",
             filename_suffix="linear",
             orientation_metrics=orientation_metrics,
+            ordered_orientations=orientation_names,
+            display_labels=orientation_display_labels,
+            filename_labels={
+                orientation: orientation for orientation in orientation_names
+            },
         )
         plot_per_landmark_boxplot(
             per_landmark_errors=selected_per_landmark_errors,

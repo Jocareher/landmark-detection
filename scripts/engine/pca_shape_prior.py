@@ -6,9 +6,6 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from ..utils.synthetic_labels import SYNTHETIC_CLASS_ID_TO_NAME
-
-
 PCA_ALIGNMENT_METHOD = "procrustes"
 PCA_ALIGNMENT_ALLOW_REFLECTION = False
 PCA_ALIGNMENT_EPS = 1e-6
@@ -116,7 +113,7 @@ def generalized_procrustes_analysis_torch(
     tolerance: float = 1e-6,
     eps: float = PCA_ALIGNMENT_EPS,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Run generalized Procrustes analysis on one class-specific shape set."""
+    """Run generalized Procrustes analysis on a set of landmark shapes."""
     if shapes.ndim != 3 or shapes.shape[-1] != 2:
         raise ValueError(
             f"Expected shapes with shape (M, N, 2), got {tuple(shapes.shape)}."
@@ -181,15 +178,14 @@ def _select_num_components(
     return min(requested, max_components)
 
 
-def fit_single_class_pca_prior(
+def fit_global_pca_shape_prior(
     landmarks: torch.Tensor,
-    class_idx: int,
     num_components: int | None = 32,
     explained_variance_threshold: float | None = None,
     allow_reflection: bool = PCA_ALIGNMENT_ALLOW_REFLECTION,
     eps: float = PCA_ALIGNMENT_EPS,
 ) -> tuple[dict[str, Any], torch.Tensor]:
-    """Fit one PCA prior for a single orientation class after GPA alignment."""
+    """Fit one global PCA prior after pooling all finite training shapes."""
     if landmarks.ndim != 3 or landmarks.shape[-1] != 2:
         raise ValueError(
             f"Expected landmarks with shape (M, N, 2), got {tuple(landmarks.shape)}."
@@ -199,8 +195,7 @@ def fit_single_class_pca_prior(
     valid_landmarks = landmarks[finite_mask].float()
     if valid_landmarks.shape[0] < 2:
         raise ValueError(
-            f"Class {class_idx} requires at least two finite shapes to fit PCA, "
-            f"got {valid_landmarks.shape[0]}."
+            f"Global PCA prior requires at least two finite shapes, got {valid_landmarks.shape[0]}."
         )
 
     aligned_shapes, reference_shape = generalized_procrustes_analysis_torch(
@@ -218,7 +213,7 @@ def fit_single_class_pca_prior(
     )
     if max_components < 1:
         raise ValueError(
-            f"Class {class_idx} does not have enough samples to fit at least one PCA component."
+            "The global training shapes do not have enough samples to fit at least one PCA component."
         )
 
     explained_variance_all = singular_values.square() / (shape_vectors.shape[0] - 1)
@@ -232,8 +227,7 @@ def fit_single_class_pca_prior(
     )
 
     prior = {
-        "class_idx": int(class_idx),
-        "class_name": SYNTHETIC_CLASS_ID_TO_NAME[int(class_idx)],
+        "scope": "global",
         "mean_shape": mean_shape.cpu(),
         "components": vh[:selected_components].cpu(),
         "explained_variance": explained_variance_all[:selected_components].cpu(),
@@ -259,69 +253,44 @@ def fit_single_class_pca_prior(
     return prior, aligned_shapes.cpu()
 
 
-def fit_class_conditioned_pca_shape_prior(
+def build_global_pca_shape_prior_payload(
     landmarks: torch.Tensor,
-    class_indices: torch.Tensor,
     num_components: int | None = 32,
     explained_variance_threshold: float | None = None,
     allow_reflection: bool = PCA_ALIGNMENT_ALLOW_REFLECTION,
     eps: float = PCA_ALIGNMENT_EPS,
-) -> tuple[dict[str, Any], dict[int, torch.Tensor]]:
-    """Fit one Procrustes-aligned PCA prior per class_idx."""
+) -> tuple[dict[str, Any], torch.Tensor]:
+    """Fit a single Procrustes-aligned PCA prior from all synthetic training samples."""
     if landmarks.ndim != 3 or landmarks.shape[-1] != 2:
         raise ValueError(
             f"Expected landmarks with shape (M, N, 2), got {tuple(landmarks.shape)}."
         )
-    class_indices = class_indices.reshape(-1).to(dtype=torch.int64)
-    if landmarks.shape[0] != class_indices.shape[0]:
-        raise ValueError(
-            f"Landmark/class batch mismatch: {landmarks.shape[0]} vs {class_indices.shape[0]}."
-        )
-
-    priors: dict[int, dict[str, Any]] = {}
-    aligned_shapes_by_class: dict[int, torch.Tensor] = {}
-    for class_idx, class_name in SYNTHETIC_CLASS_ID_TO_NAME.items():
-        class_mask = class_indices == int(class_idx)
-        class_landmarks = landmarks[class_mask]
-        if class_landmarks.shape[0] < 2:
-            raise ValueError(
-                f"Class {class_idx} ({class_name}) has only {class_landmarks.shape[0]} "
-                "train samples. At least two are required to fit PCA."
-            )
-        prior, aligned_shapes = fit_single_class_pca_prior(
-            landmarks=class_landmarks,
-            class_idx=int(class_idx),
-            num_components=num_components,
-            explained_variance_threshold=explained_variance_threshold,
-            allow_reflection=allow_reflection,
-            eps=eps,
-        )
-        priors[int(class_idx)] = prior
-        aligned_shapes_by_class[int(class_idx)] = aligned_shapes
-
+    global_prior, aligned_shapes = fit_global_pca_shape_prior(
+        landmarks=landmarks,
+        num_components=num_components,
+        explained_variance_threshold=explained_variance_threshold,
+        allow_reflection=allow_reflection,
+        eps=eps,
+    )
     payload = {
-        "priors": priors,
+        "global_prior": global_prior,
         "alignment": {
             "method": PCA_ALIGNMENT_METHOD,
             "num_landmarks": int(landmarks.shape[1]),
             "allow_reflection": bool(allow_reflection),
             "eps": float(eps),
         },
-        "class_mapping": {
-            int(class_idx): class_name
-            for class_idx, class_name in SYNTHETIC_CLASS_ID_TO_NAME.items()
-        },
     }
-    return payload, aligned_shapes_by_class
+    return payload, aligned_shapes
 
 
 def load_pca_shape_prior(
     prior_path: str | Path,
     device: torch.device | str,
 ) -> dict[str, Any]:
-    """Load a saved class-conditioned PCA prior and move tensor fields to device."""
+    """Load a saved global PCA prior and move tensor fields to device."""
     payload = torch.load(prior_path, map_location=device, weights_only=False)
-    required_keys = {"priors", "alignment", "class_mapping"}
+    required_keys = {"global_prior", "alignment"}
     missing_keys = required_keys.difference(payload)
     if missing_keys:
         raise ValueError(
@@ -333,26 +302,19 @@ def load_pca_shape_prior(
             f"Expected '{PCA_ALIGNMENT_METHOD}'."
         )
 
-    normalized_priors: dict[int, dict[str, Any]] = {}
-    for raw_class_idx, prior in payload["priors"].items():
-        class_idx = int(raw_class_idx)
-        for key in (
-            "mean_shape",
-            "components",
-            "explained_variance",
-            "explained_variance_ratio",
-            "all_explained_variance",
-            "all_explained_variance_ratio",
-            "reference_shape",
-        ):
-            if key in prior and isinstance(prior[key], torch.Tensor):
-                prior[key] = prior[key].to(device=device, dtype=torch.float32)
-        normalized_priors[class_idx] = prior
-    payload["priors"] = normalized_priors
-    payload["class_mapping"] = {
-        int(raw_class_idx): class_name
-        for raw_class_idx, class_name in payload["class_mapping"].items()
-    }
+    global_prior = payload["global_prior"]
+    for key in (
+        "mean_shape",
+        "components",
+        "explained_variance",
+        "explained_variance_ratio",
+        "all_explained_variance",
+        "all_explained_variance_ratio",
+        "reference_shape",
+    ):
+        if key in global_prior and isinstance(global_prior[key], torch.Tensor):
+            global_prior[key] = global_prior[key].to(device=device, dtype=torch.float32)
+    payload["global_prior"] = global_prior
     return payload
 
 
@@ -399,10 +361,9 @@ def softargmax_heatmaps_to_image_coords(
 
 def compute_pca_projection_loss(
     predicted_landmarks: torch.Tensor,
-    class_indices: torch.Tensor,
     pca_prior: dict[str, Any],
 ) -> torch.Tensor:
-    """Penalize projection residuals using the class-conditioned PCA subspace."""
+    """Penalize projection residuals using the global PCA subspace."""
     if predicted_landmarks.ndim != 3 or predicted_landmarks.shape[-1] != 2:
         raise ValueError(
             "Expected predicted_landmarks with shape (B, N, 2), "
@@ -410,35 +371,23 @@ def compute_pca_projection_loss(
         )
 
     predicted_landmarks = predicted_landmarks.to(dtype=torch.float32)
-    class_indices = class_indices.reshape(-1).to(dtype=torch.int64)
-    if predicted_landmarks.shape[0] != class_indices.shape[0]:
-        raise ValueError(
-            f"Predicted landmark/class batch mismatch: "
-            f"{predicted_landmarks.shape[0]} vs {class_indices.shape[0]}."
-        )
 
     alignment_config = pca_prior["alignment"]
     allow_reflection = bool(alignment_config.get("allow_reflection", False))
     eps = float(alignment_config.get("eps", PCA_ALIGNMENT_EPS))
+    global_prior = pca_prior["global_prior"]
+    expected_landmarks = int(global_prior["num_landmarks"])
 
     sample_losses: list[torch.Tensor] = []
     for sample_index in range(predicted_landmarks.shape[0]):
-        class_idx = int(class_indices[sample_index].item())
-        if class_idx not in pca_prior["priors"]:
-            raise ValueError(
-                f"Missing PCA prior for class_idx={class_idx}. "
-                f"Available classes: {sorted(pca_prior['priors'])}."
-            )
-        current_prior = pca_prior["priors"][class_idx]
-        expected_landmarks = int(current_prior["num_landmarks"])
         current_shape = predicted_landmarks[sample_index]
         if current_shape.shape[0] != expected_landmarks:
             raise ValueError(
-                f"PCA prior for class_idx={class_idx} expects {expected_landmarks} landmarks, "
+                f"Global PCA prior expects {expected_landmarks} landmarks, "
                 f"got {current_shape.shape[0]}."
             )
 
-        reference_shape = current_prior["reference_shape"].to(
+        reference_shape = global_prior["reference_shape"].to(
             device=current_shape.device,
             dtype=current_shape.dtype,
         )
@@ -449,11 +398,11 @@ def compute_pca_projection_loss(
             eps=eps,
         )
         shape_vector = aligned_shape.reshape(1, -1)
-        mean_shape = current_prior["mean_shape"].to(
+        mean_shape = global_prior["mean_shape"].to(
             device=shape_vector.device,
             dtype=shape_vector.dtype,
         )
-        components = current_prior["components"].to(
+        components = global_prior["components"].to(
             device=shape_vector.device,
             dtype=shape_vector.dtype,
         )

@@ -821,15 +821,19 @@ def plot_yaw_view_boxplots(
     filename_suffix: str = "log",
     clip_values_to_y_limits: bool = False,
     clipping_note: str | None = None,
+    ordered_orientations: list[str] | None = None,
+    display_labels: dict[str, str] | None = None,
+    filename_labels: dict[str, str] | None = None,
 ) -> None:
-    """Generate one per-landmark NME boxplot for each face orientation."""
-    ordered_orientations = [
-        "left",
-        "quarter_left",
-        "frontal",
-        "quarter_right",
-        "right",
-    ]
+    """Generate one per-landmark NME boxplot for each yaw/orientation group."""
+    if ordered_orientations is None:
+        ordered_orientations = [
+            "left",
+            "quarter_left",
+            "frontal",
+            "quarter_right",
+            "right",
+        ]
 
     for orientation in ordered_orientations:
         if orientation not in orientation_to_errors:
@@ -842,8 +846,14 @@ def plot_yaw_view_boxplots(
         current_metrics = (
             orientation_metrics.get(orientation, {}) if orientation_metrics else {}
         )
+        display_label = (
+            display_labels.get(orientation, orientation)
+            if display_labels
+            else orientation
+        )
         title = (
-            f"Per-landmark NME distribution - {orientation.replace('_', ' ').title()}"
+            f"Per-landmark NME distribution - "
+            f"{display_label.replace('_', ' ').title()}"
         )
         summary_parts = []
         if current_metrics.get("mean_nme_box") is not None:
@@ -860,10 +870,15 @@ def plot_yaw_view_boxplots(
         if summary_parts:
             title = f"{title}\n" + " | ".join(summary_parts)
 
+        filename_label = (
+            filename_labels.get(orientation, orientation)
+            if filename_labels
+            else orientation
+        )
         plot_per_landmark_boxplot(
             per_landmark_errors=current_errors,
             output_path=output_dir
-            / f"boxplot_nme_per_landmark_{orientation}_{filename_suffix}.png",
+            / f"boxplot_nme_per_landmark_{filename_label}_{filename_suffix}.png",
             use_landmark_names=use_landmark_names,
             title=title,
             y_limits=y_limits,
@@ -871,3 +886,75 @@ def plot_yaw_view_boxplots(
             clip_values_to_y_limits=clip_values_to_y_limits,
             clipping_note=clipping_note,
         )
+
+
+def plot_grouped_nme_boxplot(
+    group_to_values: dict[str, list[float]],
+    ordered_groups: list[str],
+    display_labels: dict[str, str],
+    output_path: Path,
+    title: str,
+    y_scale: str = "linear",
+    y_limits: tuple[float, float] | None = None,
+) -> None:
+    """Plot image-level NME distributions grouped by yaw/orientation."""
+    if y_scale not in {"log", "linear"}:
+        raise ValueError(f"Unsupported y_scale '{y_scale}'.")
+
+    plotted_groups = [
+        group
+        for group in ordered_groups
+        if group in group_to_values and group_to_values[group]
+    ]
+    if not plotted_groups:
+        return
+
+    values = []
+    for group in plotted_groups:
+        current_values = [float(value) for value in group_to_values[group]]
+        if y_scale == "log":
+            current_values = [max(value, 1e-8) for value in current_values]
+        values.append(current_values)
+
+    figure_width = max(8.0, len(plotted_groups) * 0.85)
+    figure, axis = plt.subplots(figsize=(figure_width, 6))
+    axis.boxplot(
+        values,
+        showfliers=True,
+        showmeans=True,
+        patch_artist=True,
+        medianprops={"color": "#8B0000", "linewidth": 2.0},
+        meanprops={
+            "marker": "D",
+            "markerfacecolor": "#003366",
+            "markeredgecolor": "white",
+            "markersize": 5.0,
+        },
+        boxprops={"facecolor": "#72B7B2", "edgecolor": "#333333", "alpha": 0.7},
+        whiskerprops={"color": "#4d4d4d", "linewidth": 1.1},
+        capprops={"color": "#4d4d4d", "linewidth": 1.1},
+        flierprops={
+            "marker": "o",
+            "markerfacecolor": "#4B0082",
+            "markeredgecolor": "#4B0082",
+            "markersize": 3.0,
+            "alpha": 0.35,
+        },
+    )
+    axis.set_yscale(y_scale)
+    if y_limits is not None:
+        axis.set_ylim(y_limits)
+    axis.set_xticks(np.arange(1, len(plotted_groups) + 1))
+    axis.set_xticklabels(
+        [display_labels.get(group, group) for group in plotted_groups],
+        rotation=35,
+        ha="right",
+    )
+    axis.set_xlabel("Yaw angle", fontsize=13, fontweight="bold")
+    axis.set_ylabel(f"Mean NME ({y_scale} scale)", fontsize=13, fontweight="bold")
+    axis.set_title(title, fontsize=15, fontweight="bold", pad=12)
+    axis.grid(True, axis="y", linestyle="--", alpha=0.35)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    plt.tight_layout()
+    figure.savefig(output_path, dpi=180, bbox_inches="tight")
+    plt.close(figure)

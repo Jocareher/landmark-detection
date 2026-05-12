@@ -132,7 +132,7 @@ class SyntheticLandmarkDataset(Dataset):
 
         image = self._load_image(image_path)
         original_width, original_height = image.size
-        landmarks, visibility, class_idx, class_name = self._load_label(
+        landmarks, visibility, yaw_angle, yaw_group = self._load_label(
             label_path, original_width, original_height
         )
 
@@ -144,8 +144,8 @@ class SyntheticLandmarkDataset(Dataset):
             "transformed_size": (original_height, original_width),
             "split": self.split,
             "num_landmarks": self.num_landmarks,
-            "class_idx": -1 if class_idx is None else int(class_idx),
-            "class_name": class_name,
+            "yaw_angle": float("nan") if yaw_angle is None else float(yaw_angle),
+            "yaw_group": yaw_group,
             "geometric_augmentation": {
                 "applied": False,
                 "rotation_deg": 0.0,
@@ -157,7 +157,7 @@ class SyntheticLandmarkDataset(Dataset):
             "image": image,
             "landmarks": landmarks,
             "visibility": visibility,
-            "class_idx": -1 if class_idx is None else int(class_idx),
+            "yaw_angle": float("nan") if yaw_angle is None else float(yaw_angle),
             "metadata": metadata,
         }
 
@@ -171,7 +171,7 @@ class SyntheticLandmarkDataset(Dataset):
         output: SampleDict = {
             "image": image_tensor,
             "visibility": visibility_tensor,
-            "class_idx": torch.as_tensor(sample["class_idx"], dtype=torch.int64),
+            "yaw_angle": torch.as_tensor(sample["yaw_angle"], dtype=torch.float32),
         }
         if self.target_mode in {"regression", "both"}:
             output["landmarks"] = landmarks_tensor
@@ -273,7 +273,7 @@ class SyntheticLandmarkDataset(Dataset):
 
     def _load_label(
         self, label_path: Path, image_width: int, image_height: int
-    ) -> tuple[np.ndarray, np.ndarray, int | None, str]:
+    ) -> tuple[np.ndarray, np.ndarray, float | None, str]:
         """Load normalized labels and convert landmark coordinates to pixel space."""
         parsed_label = parse_synthetic_landmark_label(
             label_path=label_path,
@@ -283,7 +283,7 @@ class SyntheticLandmarkDataset(Dataset):
         visibility = parsed_label.visibility.astype(np.float32, copy=True)
         landmarks[:, 0] *= float(image_width)
         landmarks[:, 1] *= float(image_height)
-        return landmarks, visibility, parsed_label.class_idx, parsed_label.class_name
+        return landmarks, visibility, parsed_label.yaw_angle, parsed_label.yaw_group
 
     @staticmethod
     def _ensure_image_tensor(image: Any) -> torch.Tensor:

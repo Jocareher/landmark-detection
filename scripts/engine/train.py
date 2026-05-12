@@ -63,11 +63,9 @@ def run_epoch(
         images = batch["image"].to(device, non_blocking=True)
         heatmaps = batch["heatmaps"].to(device, non_blocking=True)
         visibility = batch["visibility"].to(device, non_blocking=True)
-        class_idx = batch["class_idx"].to(device, non_blocking=True)
         batch_on_device: dict[str, torch.Tensor] = {
             "heatmaps": heatmaps,
             "visibility": visibility,
-            "class_idx": class_idx,
         }
         if "landmarks" in batch:
             batch_on_device["landmarks"] = batch["landmarks"].to(
@@ -481,7 +479,6 @@ def smoke_test_single_batch(
     heatmaps = batch["heatmaps"].to(device, non_blocking=True)
     visibility = batch["visibility"].to(device, non_blocking=True)
     landmarks = batch["landmarks"].to(device, non_blocking=True)
-    class_idx = batch["class_idx"].to(device, non_blocking=True)
     pca_shape_prior = None
     if pca_prior_path is not None:
         pca_shape_prior = load_pca_shape_prior(pca_prior_path, device=device)
@@ -493,7 +490,6 @@ def smoke_test_single_batch(
         batch={
             "heatmaps": heatmaps,
             "visibility": visibility,
-            "class_idx": class_idx,
         },
         heatmap_loss_fn=heatmap_loss_fn,
         visibility_loss_fn=visibility_loss_fn,

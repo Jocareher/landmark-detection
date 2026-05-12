@@ -20,10 +20,12 @@ from ..utils.visualization import (
     get_landmark_anatomical_group,
     get_landmark_anatomical_label,
     plot_confusion_matrix,
+    plot_grouped_nme_boxplot,
     plot_per_landmark_boxplot,
     plot_yaw_view_boxplots,
     save_landmark_overlay_image,
 )
+from ..utils.synthetic_labels import format_synthetic_yaw_group
 
 
 def compute_box_normalization_factor(
@@ -348,6 +350,28 @@ def save_metrics_summary_csv(
             ]
         )
 
+    yaw_sample_counts = summary.get("yaw_sample_counts")
+    if yaw_sample_counts is not None:
+        for yaw_key, count in yaw_sample_counts.items():
+            rows.append((f"samples_{yaw_key}", count))
+
+    yaw_metrics = summary.get("yaw_metrics")
+    if yaw_metrics is not None:
+        for yaw_key, metrics in yaw_metrics.items():
+            rows.append((f"mean_nme_box_{yaw_key}", metrics.get("mean_nme_box")))
+            rows.append(
+                (
+                    f"mean_nme_box_point_to_line_{yaw_key}",
+                    metrics.get("mean_nme_box_point_to_line"),
+                )
+            )
+            rows.append(
+                (
+                    f"mean_nme_interocular_{yaw_key}",
+                    metrics.get("mean_nme_interocular"),
+                )
+            )
+
     orientation_sample_counts = summary.get("orientation_sample_counts")
     if orientation_sample_counts is not None:
         for orientation_name, count in orientation_sample_counts.items():
@@ -439,6 +463,8 @@ def save_per_image_nme_csv(
             [
                 "sample_id",
                 "orientation",
+                "yaw_angle",
+                "yaw_group",
                 "mean_nme_box",
                 "mean_nme_box_point_to_line",
                 "mean_nme_interocular",
@@ -448,7 +474,9 @@ def save_per_image_nme_csv(
             writer.writerow(
                 [
                     row["sample_id"],
-                    row["orientation"],
+                    row.get("orientation"),
+                    row.get("yaw_angle"),
+                    row.get("yaw_group"),
                     (
                         format_metric_value(
                             round_metric_value(float(row["mean_nme_box"]))
@@ -486,6 +514,8 @@ def save_per_image_per_landmark_nme_csv(
         "split",
         "orientation",
         "class_idx",
+        "yaw_angle",
+        "yaw_group",
         "landmark_idx",
         "anatomical_group",
         "anatomical_label",
@@ -567,6 +597,31 @@ def extract_face_orientation(sample_id: str) -> str:
             return orientation
 
     raise ValueError(f"Could not infer orientation from sample_id='{sample_id}'.")
+
+
+def _extract_batched_scalar(value: Any, sample_index: int) -> Any:
+    """Extract one scalar from default-collated metadata."""
+    if isinstance(value, torch.Tensor):
+        return value[sample_index].item()
+    if isinstance(value, np.ndarray):
+        return value[sample_index].item()
+    if isinstance(value, (list, tuple)):
+        return value[sample_index]
+    return value
+
+
+def _format_yaw_key(yaw_angle: float) -> str:
+    """Return a stable filename/CSV-safe key for a yaw angle."""
+    yaw_value = float(yaw_angle)
+    if yaw_value.is_integer():
+        return f"yaw_{int(yaw_value):+d}deg".replace("+", "plus_").replace(
+            "-", "minus_"
+        )
+    return (
+        f"yaw_{yaw_value:+g}deg".replace("+", "plus_")
+        .replace("-", "minus_")
+        .replace(".", "p")
+    )
 
 
 def _build_boxplot_title(
@@ -652,27 +707,15 @@ def evaluate_checkpoint(
     all_visibility_targets: list[np.ndarray] = []
     all_visibility_predictions: list[np.ndarray] = []
 
-    orientation_names = ["left", "quarter_left", "frontal", "quarter_right", "right"]
-
-    orientation_to_errors: dict[str, list[list[float]]] = {}
-    orientation_to_box_nme_values: dict[str, list[float]] = {
-        orientation: [] for orientation in orientation_names
-    }
-    orientation_to_box_nme_point_to_line_values: dict[str, list[float]] = {
-        orientation: [] for orientation in orientation_names
-    }
-    orientation_to_interocular_nme_values: dict[str, list[float]] = {
-        orientation: [] for orientation in orientation_names
-    }
+    yaw_to_errors: dict[str, list[list[float]]] = {}
+    yaw_to_box_nme_values: dict[str, list[float]] = {}
+    yaw_to_box_nme_point_to_line_values: dict[str, list[float]] = {}
+    yaw_to_interocular_nme_values: dict[str, list[float]] = {}
+    yaw_display_labels: dict[str, str] = {}
+    yaw_sort_values: dict[str, float] = {}
     global_interocular_nme_values: list[float] = []
 
-    orientation_sample_counts = {
-        "left": 0,
-        "quarter_left": 0,
-        "frontal": 0,
-        "quarter_right": 0,
-        "right": 0,
-    }
+    yaw_sample_counts: dict[str, int] = {}
 
     with torch.inference_mode():
         for batch in tqdm(dataloader, desc="Evaluating", dynamic_ncols=True):
@@ -705,17 +748,24 @@ def evaluate_checkpoint(
                     [] for _ in range(number_of_landmarks)
                 ]
 
-                orientation_to_errors = {
-                    orientation: [[] for _ in range(number_of_landmarks)]
-                    for orientation in orientation_names
-                }
-
             for sample_index in range(batch_size):
                 sample_id = str(metadata_batch["sample_id"][sample_index])
                 image_path = Path(metadata_batch["image_path"][sample_index])
 
-                orientation = extract_face_orientation(sample_id)
-                orientation_sample_counts[orientation] += 1
+                yaw_angle = float(
+                    _extract_batched_scalar(metadata_batch["yaw_angle"], sample_index)
+                )
+                yaw_group = format_synthetic_yaw_group(yaw_angle)
+                yaw_key = _format_yaw_key(yaw_angle)
+                if yaw_key not in yaw_to_errors:
+                    yaw_to_errors[yaw_key] = [[] for _ in range(number_of_landmarks)]
+                    yaw_to_box_nme_values[yaw_key] = []
+                    yaw_to_box_nme_point_to_line_values[yaw_key] = []
+                    yaw_to_interocular_nme_values[yaw_key] = []
+                    yaw_sample_counts[yaw_key] = 0
+                    yaw_display_labels[yaw_key] = yaw_group
+                    yaw_sort_values[yaw_key] = yaw_angle
+                yaw_sample_counts[yaw_key] += 1
 
                 original_size = extract_batched_size(
                     batched_size=metadata_batch["original_size"],
@@ -777,7 +827,7 @@ def evaluate_checkpoint(
                 )
 
                 current_mean_interocular_nme: float | None = None
-                if orientation in {"frontal", "quarter_left", "quarter_right"}:
+                if abs(yaw_angle) < 55.0:
                     current_interocular_errors = compute_per_landmark_interocular_nme(
                         predicted_landmarks=predicted_landmarks_original,
                         target_landmarks=target_landmarks_original,
@@ -785,7 +835,7 @@ def evaluate_checkpoint(
                     current_mean_interocular_nme = float(
                         current_interocular_errors.mean()
                     )
-                    orientation_to_interocular_nme_values[orientation].append(
+                    yaw_to_interocular_nme_values[yaw_key].append(
                         current_mean_interocular_nme
                     )
                     global_interocular_nme_values.append(current_mean_interocular_nme)
@@ -806,8 +856,8 @@ def evaluate_checkpoint(
                             "prediction_id": sample_id,
                             "evaluation_mode": "synthetic",
                             "split": split,
-                            "orientation": orientation,
-                            "class_idx": None,
+                            "yaw_angle": yaw_angle,
+                            "yaw_group": yaw_group,
                             "landmark_idx": int(landmark_index),
                             "point_to_point_nme_box": float(
                                 current_errors[landmark_index]
@@ -824,18 +874,17 @@ def evaluate_checkpoint(
                     )
 
                 for landmark_index, error_value in enumerate(current_errors):
-                    orientation_to_errors[orientation][landmark_index].append(
-                        float(error_value)
-                    )
+                    yaw_to_errors[yaw_key][landmark_index].append(float(error_value))
 
-                orientation_to_box_nme_values[orientation].append(current_mean_box_nme)
-                orientation_to_box_nme_point_to_line_values[orientation].append(
+                yaw_to_box_nme_values[yaw_key].append(current_mean_box_nme)
+                yaw_to_box_nme_point_to_line_values[yaw_key].append(
                     current_mean_box_nme_point_to_line
                 )
                 per_image_nme.append(
                     {
                         "sample_id": sample_id,
-                        "orientation": orientation,
+                        "yaw_angle": yaw_angle,
+                        "yaw_group": yaw_group,
                         "mean_nme_box": current_mean_box_nme,
                         "mean_nme_box_point_to_line": current_mean_box_nme_point_to_line,
                         "mean_nme_interocular": current_mean_interocular_nme,
@@ -864,7 +913,14 @@ def evaluate_checkpoint(
         rows=per_image_per_landmark_nme,
         output_path=output_dir / "per_image_per_landmark_nme.csv",
     )
-    all_grouped_errors = [per_landmark_errors] + list(orientation_to_errors.values())
+    ordered_yaw_keys = sorted(
+        yaw_to_errors, key=lambda yaw_key: yaw_sort_values[yaw_key]
+    )
+    yaw_filename_labels = {yaw_key: yaw_key for yaw_key in ordered_yaw_keys}
+
+    all_grouped_errors = [per_landmark_errors] + [
+        yaw_to_errors[yaw_key] for yaw_key in ordered_yaw_keys
+    ]
     global_y_limits = compute_global_log_y_limits(all_grouped_errors)
     global_linear_y_limits = compute_global_linear_y_limits(all_grouped_errors)
 
@@ -902,60 +958,74 @@ def evaluate_checkpoint(
     )
 
     plot_yaw_view_boxplots(
-        orientation_to_errors=orientation_to_errors,
+        orientation_to_errors=yaw_to_errors,
         output_dir=figures_dir,
         use_landmark_names=use_landmark_names_in_boxplot,
         y_limits=global_y_limits,
         y_scale="log",
         filename_suffix="log",
+        ordered_orientations=ordered_yaw_keys,
+        display_labels=yaw_display_labels,
+        filename_labels=yaw_filename_labels,
         orientation_metrics={
-            orientation: {
+            yaw_key: {
                 "mean_nme_box": (float(np.mean(values)) if values else None),
                 "mean_nme_box_point_to_line": (
-                    float(
-                        np.mean(
-                            orientation_to_box_nme_point_to_line_values[orientation]
-                        )
-                    )
-                    if orientation_to_box_nme_point_to_line_values[orientation]
+                    float(np.mean(yaw_to_box_nme_point_to_line_values[yaw_key]))
+                    if yaw_to_box_nme_point_to_line_values[yaw_key]
                     else None
                 ),
                 "mean_nme_interocular": (
-                    float(np.mean(orientation_to_interocular_nme_values[orientation]))
-                    if orientation_to_interocular_nme_values[orientation]
+                    float(np.mean(yaw_to_interocular_nme_values[yaw_key]))
+                    if yaw_to_interocular_nme_values[yaw_key]
                     else None
                 ),
             }
-            for orientation, values in orientation_to_box_nme_values.items()
+            for yaw_key, values in yaw_to_box_nme_values.items()
         },
     )
     plot_yaw_view_boxplots(
-        orientation_to_errors=orientation_to_errors,
+        orientation_to_errors=yaw_to_errors,
         output_dir=figures_dir,
         use_landmark_names=use_landmark_names_in_boxplot,
         y_limits=global_linear_y_limits,
         y_scale="linear",
         filename_suffix="linear",
+        ordered_orientations=ordered_yaw_keys,
+        display_labels=yaw_display_labels,
+        filename_labels=yaw_filename_labels,
         orientation_metrics={
-            orientation: {
+            yaw_key: {
                 "mean_nme_box": (float(np.mean(values)) if values else None),
                 "mean_nme_box_point_to_line": (
-                    float(
-                        np.mean(
-                            orientation_to_box_nme_point_to_line_values[orientation]
-                        )
-                    )
-                    if orientation_to_box_nme_point_to_line_values[orientation]
+                    float(np.mean(yaw_to_box_nme_point_to_line_values[yaw_key]))
+                    if yaw_to_box_nme_point_to_line_values[yaw_key]
                     else None
                 ),
                 "mean_nme_interocular": (
-                    float(np.mean(orientation_to_interocular_nme_values[orientation]))
-                    if orientation_to_interocular_nme_values[orientation]
+                    float(np.mean(yaw_to_interocular_nme_values[yaw_key]))
+                    if yaw_to_interocular_nme_values[yaw_key]
                     else None
                 ),
             }
-            for orientation, values in orientation_to_box_nme_values.items()
+            for yaw_key, values in yaw_to_box_nme_values.items()
         },
+    )
+    plot_grouped_nme_boxplot(
+        group_to_values=yaw_to_box_nme_values,
+        ordered_groups=ordered_yaw_keys,
+        display_labels=yaw_display_labels,
+        output_path=figures_dir / "boxplot_mean_nme_by_yaw_angle_linear.png",
+        title="Synthetic mean NME by yaw angle",
+        y_scale="linear",
+    )
+    plot_grouped_nme_boxplot(
+        group_to_values=yaw_to_box_nme_values,
+        ordered_groups=ordered_yaw_keys,
+        display_labels=yaw_display_labels,
+        output_path=figures_dir / "boxplot_mean_nme_by_yaw_angle_log.png",
+        title="Synthetic mean NME by yaw angle",
+        y_scale="log",
     )
 
     visibility_targets = np.concatenate(all_visibility_targets, axis=0)
@@ -1012,26 +1082,27 @@ def evaluate_checkpoint(
         "prediction_overlays_dir": str(prediction_overlays_dir)
         if prediction_overlays_dir is not None
         else None,
-        "orientation_sample_counts": orientation_sample_counts,
-        "orientation_metrics": {
-            orientation: {
+        "yaw_sample_counts": {
+            yaw_key: yaw_sample_counts[yaw_key] for yaw_key in ordered_yaw_keys
+        },
+        "yaw_group_labels": {
+            yaw_key: yaw_display_labels[yaw_key] for yaw_key in ordered_yaw_keys
+        },
+        "yaw_metrics": {
+            yaw_key: {
                 "mean_nme_box": float(np.mean(box_values)) if box_values else None,
                 "mean_nme_box_point_to_line": (
-                    float(
-                        np.mean(
-                            orientation_to_box_nme_point_to_line_values[orientation]
-                        )
-                    )
-                    if orientation_to_box_nme_point_to_line_values[orientation]
+                    float(np.mean(yaw_to_box_nme_point_to_line_values[yaw_key]))
+                    if yaw_to_box_nme_point_to_line_values[yaw_key]
                     else None
                 ),
                 "mean_nme_interocular": (
-                    float(np.mean(orientation_to_interocular_nme_values[orientation]))
-                    if orientation_to_interocular_nme_values[orientation]
+                    float(np.mean(yaw_to_interocular_nme_values[yaw_key]))
+                    if yaw_to_interocular_nme_values[yaw_key]
                     else None
                 ),
             }
-            for orientation, box_values in orientation_to_box_nme_values.items()
+            for yaw_key, box_values in yaw_to_box_nme_values.items()
         },
     }
 
