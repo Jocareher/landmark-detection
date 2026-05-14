@@ -153,6 +153,7 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.eval_batch_size = args.batch_size
     config.num_workers = args.num_workers
     config.device = args.device
+    config.target_mode = "regression"
     config.seed = args.seed
     config.visibility_threshold = args.visibility_threshold
     config.use_landmark_names_in_boxplot = args.use_landmark_names

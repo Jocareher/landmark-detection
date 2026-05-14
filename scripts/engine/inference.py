@@ -15,7 +15,6 @@ from .postprocessing import (
     project_landmarks_to_original_size,
 )
 from ..utils.predictions import save_prediction_file
-from ..utils.visualization import save_landmark_overlay_image
 
 
 def run_inference(
@@ -85,6 +84,9 @@ def export_inference_outputs(
 
     model.eval()
     model.to(device)
+    save_landmark_overlay_image = None
+    if save_overlays or (project_to_original and save_crop_overlays):
+        from ..utils.visualization import save_landmark_overlay_image
 
     all_predictions: list[torch.Tensor] = []
     saved_samples = 0

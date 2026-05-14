@@ -74,30 +74,28 @@ def decode_heatmaps_to_image_coords(
     preds = get_preds_from_heatmaps(heatmaps)
     batch_size, num_landmarks, heatmap_height, heatmap_width = heatmaps.shape
 
-    # Apply subpixel refinement if enabled
     if use_subpixel:
-        refined_preds = preds.clone()
-        # Iterate over each sample and landmark in the batch
-        for batch_index in range(batch_size):
-            for landmark_index in range(num_landmarks):
-                # Get integer peak position
-                px = int(preds[batch_index, landmark_index, 0].item())
-                py = int(preds[batch_index, landmark_index, 1].item())
+        px = preds[..., 0].long()
+        py = preds[..., 1].long()
+        valid = (
+            (px > 0) & (px < heatmap_width - 1) & (py > 0) & (py < heatmap_height - 1)
+        )
 
-                # Only refine if peak is not at heatmap boundary
-                if 1 <= px < heatmap_width - 1 and 1 <= py < heatmap_height - 1:
-                    current_map = heatmaps[batch_index, landmark_index]
-                    # Compute gradients using finite differences
-                    diff_x = current_map[py, px + 1] - current_map[py, px - 1]
-                    diff_y = current_map[py + 1, px] - current_map[py - 1, px]
-                    # Apply small offset in gradient direction for refinement
-                    refined_preds[batch_index, landmark_index, 0] += (
-                        diff_x.sign() * 0.25
-                    )
-                    refined_preds[batch_index, landmark_index, 1] += (
-                        diff_y.sign() * 0.25
-                    )
-        preds = refined_preds
+        batch_indices = torch.arange(batch_size, device=heatmaps.device)[:, None]
+        landmark_indices = torch.arange(num_landmarks, device=heatmaps.device)[None, :]
+        px_clamped = px.clamp(1, heatmap_width - 2)
+        py_clamped = py.clamp(1, heatmap_height - 2)
+
+        diff_x = (
+            heatmaps[batch_indices, landmark_indices, py_clamped, px_clamped + 1]
+            - heatmaps[batch_indices, landmark_indices, py_clamped, px_clamped - 1]
+        )
+        diff_y = (
+            heatmaps[batch_indices, landmark_indices, py_clamped + 1, px_clamped]
+            - heatmaps[batch_indices, landmark_indices, py_clamped - 1, px_clamped]
+        )
+        offsets = torch.stack([diff_x.sign(), diff_y.sign()], dim=-1) * 0.25
+        preds = preds + offsets * valid.unsqueeze(-1).to(dtype=preds.dtype)
 
     # Scale from heatmap coordinates to image coordinates
     scale_x = image_width / float(heatmap_width)
