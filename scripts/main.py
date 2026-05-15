@@ -426,7 +426,11 @@ def validate_full_evaluation_paths(config: ExperimentConfig) -> None:
     if config.evaluate_babyland:
         required_fields.extend(
             [
-                ("babyland_crop_root", "BabyLand detector-export crop root", "BabyLand"),
+                (
+                    "babyland_crop_root",
+                    "BabyLand detector-export crop root",
+                    "BabyLand",
+                ),
                 ("babyland_gt_root", "BabyLand GT label root", "BabyLand"),
             ]
         )

@@ -110,7 +110,9 @@ def evaluate_synbaby(
     print("[INFO] SynBaby evaluation started...")
     print(f"[INFO] SynBaby output dir: {output_dir}")
     print(f"[INFO] SynBaby samples queued: {len(dataloader.dataset)}")
-    print("[INFO] SynBaby metrics, reports, predictions, and plots are being generated...")
+    print(
+        "[INFO] SynBaby metrics, reports, predictions, and plots are being generated..."
+    )
     summary = evaluate_checkpoint(
         model=model,
         dataloader=dataloader,
@@ -157,7 +159,9 @@ def evaluate_babyland(
     )
     print(f"[INFO] BabyLand samples queued: {len(dataloader.dataset)}")
     print("[INFO] BabyLand inference started on crop images...")
-    print("[INFO] BabyLand reprojection started from crop to original-image coordinates...")
+    print(
+        "[INFO] BabyLand reprojection started from crop to original-image coordinates..."
+    )
     print("[INFO] BabyLand metrics computation started...")
     summary = evaluate_natural_checkpoint(
         model=model,
@@ -210,7 +214,9 @@ def evaluate_infanface(
     dataloader = build_inference_dataloader(crop_root, inference_config)
     print(f"[INFO] InfAnFace samples queued: {len(dataloader.dataset)}")
     print("[INFO] InfAnFace inference started on crop images...")
-    print("[INFO] InfAnFace reprojection started from crop to original-image coordinates...")
+    print(
+        "[INFO] InfAnFace reprojection started from crop to original-image coordinates..."
+    )
     inference_summary = export_inference_outputs(
         model=model,
         dataloader=dataloader,
@@ -270,7 +276,9 @@ def run_full_evaluation(
 
     if config.evaluate_synbaby:
         if synbaby_dataloader is None:
-            raise ValueError("SynBaby evaluation is enabled but no dataloader was provided.")
+            raise ValueError(
+                "SynBaby evaluation is enabled but no dataloader was provided."
+            )
         summaries["synbaby"] = evaluate_synbaby(
             model=model,
             dataloader=synbaby_dataloader,
