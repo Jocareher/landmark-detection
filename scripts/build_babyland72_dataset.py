@@ -18,6 +18,11 @@ from PIL import Image, ImageOps
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from scripts.utils.visualization import (
+    render_landmark_preview_image,
+    save_overlay_image,
+)
+
 
 NUM_LANDMARKS = 72
 SUPPORTED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
@@ -88,6 +93,7 @@ class GenerationResult:
     unknown_keypoint_labels: list[dict[str, Any]] = field(default_factory=list)
     missing_landmarks_by_image: list[dict[str, Any]] = field(default_factory=list)
     missing_landmarks_by_index: list[dict[str, Any]] = field(default_factory=list)
+    plot_failures: list[dict[str, Any]] = field(default_factory=list)
     summary_rows: list[dict[str, Any]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     class_counts_original: Counter[int] = field(default_factory=Counter)
@@ -162,7 +168,9 @@ def _iter_annotation_results(task: dict[str, Any]) -> list[dict[str, Any]]:
                 continue
             annotation_results = annotation.get("result")
             if isinstance(annotation_results, list):
-                results.extend(item for item in annotation_results if isinstance(item, dict))
+                results.extend(
+                    item for item in annotation_results if isinstance(item, dict)
+                )
     return results
 
 
@@ -235,7 +243,9 @@ def build_labelstudio_orientation_index(
             continue
         stem = extract_stem_from_labelstudio_image_path(image_field)
         labels = _extract_orientation_labels(task)
-        grouped[stem].append((str(task.get("id", "")), _extract_annotation_id(task), labels))
+        grouped[stem].append(
+            (str(task.get("id", "")), _extract_annotation_id(task), labels)
+        )
 
     index: dict[str, OrientationRecord] = {}
     for stem, entries in grouped.items():
@@ -251,9 +261,13 @@ def build_labelstudio_orientation_index(
             for label in labels
             if label not in ORIENTATION_LABEL_TO_CLASS_IDX
         ]
-        class_indices = sorted({ORIENTATION_LABEL_TO_CLASS_IDX[label] for label in valid_labels})
+        class_indices = sorted(
+            {ORIENTATION_LABEL_TO_CLASS_IDX[label] for label in valid_labels}
+        )
         task_ids = [task_id for task_id, _, _ in entries if task_id]
-        annotation_ids = [annotation_id for _, annotation_id, _ in entries if annotation_id]
+        annotation_ids = [
+            annotation_id for _, annotation_id, _ in entries if annotation_id
+        ]
         if len(class_indices) == 1:
             status = "valid"
             class_idx = class_indices[0]
@@ -314,7 +328,8 @@ def build_landmark_index_from_labelstudio(json_path: Path) -> dict[str, Landmark
         landmarks = [
             result
             for result in _iter_annotation_results(task)
-            if _extract_keypoint_label(result) is not None and _extract_xy_percent(result) is not None
+            if _extract_keypoint_label(result) is not None
+            and _extract_xy_percent(result) is not None
         ]
         landmark_tasks[stem] = LandmarkTask(
             stem=stem,
@@ -326,7 +341,9 @@ def build_landmark_index_from_labelstudio(json_path: Path) -> dict[str, Landmark
     return landmark_tasks
 
 
-def find_matching_source_image(source_images: dict[str, Path], stem: str) -> Path | None:
+def find_matching_source_image(
+    source_images: dict[str, Path], stem: str
+) -> Path | None:
     """Find one source image by filename stem."""
     return source_images.get(stem)
 
@@ -362,7 +379,11 @@ def create_landmark_array_72(
             continue
         if landmark_index in seen:
             duplicate_found = True
-            action = "skipped_image" if duplicate_policy == "report_and_skip_image" else duplicate_policy
+            action = (
+                "skipped_image"
+                if duplicate_policy == "report_and_skip_image"
+                else duplicate_policy
+            )
             result.duplicate_landmarks.append(
                 {
                     "source_stem": task.stem,
@@ -379,8 +400,12 @@ def create_landmark_array_72(
                 continue
         seen[landmark_index] = label_name
         row_index = landmark_index - 1
-        landmarks[row_index, 0] = convert_labelstudio_percent_to_normalized(xy_percent[0])
-        landmarks[row_index, 1] = convert_labelstudio_percent_to_normalized(xy_percent[1])
+        landmarks[row_index, 0] = convert_labelstudio_percent_to_normalized(
+            xy_percent[0]
+        )
+        landmarks[row_index, 1] = convert_labelstudio_percent_to_normalized(
+            xy_percent[1]
+        )
         landmarks[row_index, 2] = 1.0
 
     if duplicate_found and duplicate_policy == "report_and_skip_image":
@@ -388,20 +413,26 @@ def create_landmark_array_72(
     return landmarks, "valid"
 
 
-def write_landmark_txt(label_path: Path, landmarks: np.ndarray, class_idx: int | None) -> None:
+def write_landmark_txt(
+    label_path: Path, landmarks: np.ndarray, class_idx: int | None
+) -> None:
     """Write one BabyLand-72 label file with an optional class_idx header."""
     label_path.parent.mkdir(parents=True, exist_ok=True)
     with label_path.open("w", encoding="utf-8") as handle:
         if class_idx is not None:
             handle.write(f"{int(class_idx)}\n")
         for x_coord, y_coord, visibility in landmarks:
-            if int(visibility) == 0 or not (math.isfinite(float(x_coord)) and math.isfinite(float(y_coord))):
+            if int(visibility) == 0 or not (
+                math.isfinite(float(x_coord)) and math.isfinite(float(y_coord))
+            ):
                 handle.write("nan nan 0\n")
             else:
                 handle.write(f"{float(x_coord):.8f} {float(y_coord):.8f} 1\n")
 
 
-def save_image_as_jpg(source_path: Path, output_path: Path, jpeg_quality: int = 95) -> None:
+def save_image_as_jpg(
+    source_path: Path, output_path: Path, jpeg_quality: int = 95
+) -> None:
     """Save one image as lowercase .jpg RGB output."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(source_path) as image:
@@ -410,7 +441,9 @@ def save_image_as_jpg(source_path: Path, output_path: Path, jpeg_quality: int = 
         )
 
 
-def flip_image_horizontally(source_path: Path, output_path: Path, jpeg_quality: int = 95) -> None:
+def flip_image_horizontally(
+    source_path: Path, output_path: Path, jpeg_quality: int = 95
+) -> None:
     """Save a horizontally flipped copy of an image as JPEG."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(source_path) as image:
@@ -418,21 +451,76 @@ def flip_image_horizontally(source_path: Path, output_path: Path, jpeg_quality: 
         flipped.save(output_path, format="JPEG", quality=jpeg_quality)
 
 
+def draw_babyland72_landmark_overlay(
+    image_path: Path,
+    output_path: Path,
+    landmarks: np.ndarray,
+    point_radius: int = 5,
+    line_width: int = 2,
+    line_color: str = "#00C853",
+) -> None:
+    """Draw visible BabyLand-72 landmarks over one generated dataset image."""
+    with Image.open(image_path) as image:
+        image_rgb = image.convert("RGB")
+        image_width, image_height = image_rgb.size
+        pixel_landmarks = landmarks[:, :2].astype(np.float32, copy=True)
+        finite_mask = np.isfinite(pixel_landmarks).all(axis=1)
+        pixel_landmarks[finite_mask, 0] *= float(image_width)
+        pixel_landmarks[finite_mask, 1] *= float(image_height)
+        visibility = landmarks[:, 2].astype(np.int64, copy=True)
+        visibility[~finite_mask] = 0
+        rendered = render_landmark_preview_image(
+            image=image_rgb,
+            landmarks=pixel_landmarks,
+            visibility=visibility,
+            point_radius=point_radius,
+            line_width=line_width,
+            line_color=line_color,
+        )
+    save_overlay_image(rendered, output_path)
+
+
 def get_horizontal_flip_index_mapping_72() -> list[int]:
     """Return the explicit 1-based BabyLand-72 horizontal flip permutation."""
     pairs = [
-        (1, 17), (2, 16), (3, 15), (4, 14), (5, 13), (6, 12), (7, 11), (8, 10),
-        (18, 27), (19, 26), (20, 25), (21, 24), (22, 23),
-        (32, 36), (33, 35),
-        (37, 46), (38, 45), (39, 44), (40, 43), (41, 48), (42, 47),
-        (49, 55), (50, 54), (51, 53), (56, 60), (57, 59),
-        (61, 65), (62, 64), (66, 68), (71, 72),
+        (1, 17),
+        (2, 16),
+        (3, 15),
+        (4, 14),
+        (5, 13),
+        (6, 12),
+        (7, 11),
+        (8, 10),
+        (18, 27),
+        (19, 26),
+        (20, 25),
+        (21, 24),
+        (22, 23),
+        (32, 36),
+        (33, 35),
+        (37, 46),
+        (38, 45),
+        (39, 44),
+        (40, 43),
+        (41, 48),
+        (42, 47),
+        (49, 55),
+        (50, 54),
+        (51, 53),
+        (56, 60),
+        (57, 59),
+        (61, 65),
+        (62, 64),
+        (66, 68),
+        (71, 72),
     ]
     mapping = list(range(1, NUM_LANDMARKS + 1))
     for left, right in pairs:
         mapping[left - 1] = right
         mapping[right - 1] = left
-    if len(mapping) != NUM_LANDMARKS or sorted(mapping) != list(range(1, NUM_LANDMARKS + 1)):
+    if len(mapping) != NUM_LANDMARKS or sorted(mapping) != list(
+        range(1, NUM_LANDMARKS + 1)
+    ):
         raise AssertionError("Invalid BabyLand-72 flip mapping permutation.")
     for index, mapped_index in enumerate(mapping, start=1):
         if mapping[mapped_index - 1] != index:
@@ -450,7 +538,11 @@ def flip_landmark_array_72(landmarks: np.ndarray) -> np.ndarray:
         target_row = mapped_index - 1
         visibility = int(source_row[2])
         flipped[target_row, 2] = visibility
-        if visibility == 1 and math.isfinite(float(source_row[0])) and math.isfinite(float(source_row[1])):
+        if (
+            visibility == 1
+            and math.isfinite(float(source_row[0]))
+            and math.isfinite(float(source_row[1]))
+        ):
             flipped[target_row, 0] = 1.0 - float(source_row[0])
             flipped[target_row, 1] = float(source_row[1])
     return flipped
@@ -467,7 +559,10 @@ def _index_source_images(source_images_dir: Path) -> dict[str, Path]:
     """Index supported source images recursively by stem."""
     indexed: dict[str, Path] = {}
     for image_path in sorted(source_images_dir.rglob("*")):
-        if image_path.is_file() and image_path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES:
+        if (
+            image_path.is_file()
+            and image_path.suffix.lower() in SUPPORTED_IMAGE_SUFFIXES
+        ):
             indexed.setdefault(image_path.stem, image_path)
     return indexed
 
@@ -478,6 +573,8 @@ def _append_generated_sample(
     source_image_path: Path,
     output_image_path: Path,
     output_label_path: Path,
+    output_plot_path: Path,
+    plot_generation_status: str,
     is_flipped: bool,
     class_idx: int | None,
     orientation_status: str,
@@ -485,13 +582,18 @@ def _append_generated_sample(
 ) -> None:
     """Append sample and missing-landmark report rows."""
     present = int(np.sum(landmarks[:, 2] == 1.0))
-    missing_indices = [str(index) for index in range(1, NUM_LANDMARKS + 1) if landmarks[index - 1, 2] == 0.0]
+    missing_indices = [
+        str(index)
+        for index in range(1, NUM_LANDMARKS + 1)
+        if landmarks[index - 1, 2] == 0.0
+    ]
     result.generated_samples.append(
         {
             "source_stem": source_stem,
             "source_image_path": str(source_image_path),
             "output_image_path": str(output_image_path),
             "output_label_path": str(output_label_path),
+            "output_plot_path": str(output_plot_path),
             "is_flipped": is_flipped,
             "has_class_idx": class_idx is not None,
             "class_idx": "" if class_idx is None else int(class_idx),
@@ -499,6 +601,7 @@ def _append_generated_sample(
             "num_present_landmarks": present,
             "num_missing_landmarks": NUM_LANDMARKS - present,
             "generation_status": "generated",
+            "plot_generation_status": plot_generation_status,
         }
     )
     result.missing_landmarks_by_image.append(
@@ -516,21 +619,29 @@ def generate_babyland72_test_dataset_from_labelstudio(
     config: BabyLand72GenerationConfig,
 ) -> GenerationResult:
     """Regenerate a BabyLand-72 test dataset from Label Studio JSON exports."""
-    if config.duplicate_policy not in {"report_and_skip_image", "keep_first", "keep_last"}:
+    if config.duplicate_policy not in {
+        "report_and_skip_image",
+        "keep_first",
+        "keep_last",
+    }:
         raise ValueError(f"Unsupported duplicate policy: {config.duplicate_policy}")
     get_horizontal_flip_index_mapping_72()
 
     output_images_dir = config.output_dataset_root / "test" / "images"
     output_labels_dir = config.output_dataset_root / "test" / "labels"
+    output_plots_dir = config.output_dataset_root / "test" / "plots"
     output_images_dir.mkdir(parents=True, exist_ok=True)
     output_labels_dir.mkdir(parents=True, exist_ok=True)
+    output_plots_dir.mkdir(parents=True, exist_ok=True)
 
     result = GenerationResult()
     source_images = _index_source_images(config.source_images_dir)
     landmark_tasks = build_landmark_index_from_labelstudio(config.landmarks_json_path)
-    orientation_index, orientation_conflicts, orientation_entry_count = build_labelstudio_orientation_index(
-        config.orientation_json_path
-    )
+    (
+        orientation_index,
+        orientation_conflicts,
+        orientation_entry_count,
+    ) = build_labelstudio_orientation_index(config.orientation_json_path)
     result.source_image_count = len(source_images)
     result.landmark_task_count = len(landmark_tasks)
     result.orientation_entry_count = orientation_entry_count
@@ -539,7 +650,11 @@ def generate_babyland72_test_dataset_from_labelstudio(
     for stem, source_path in source_images.items():
         if stem not in landmark_tasks:
             result.unmatched_source_images.append(
-                {"source_stem": stem, "source_image_path": str(source_path), "reason": "no_landmark_task"}
+                {
+                    "source_stem": stem,
+                    "source_image_path": str(source_path),
+                    "reason": "no_landmark_task",
+                }
             )
 
     for stem, task in landmark_tasks.items():
@@ -556,14 +671,20 @@ def generate_babyland72_test_dataset_from_labelstudio(
             result.skipped_sample_count += 1
             continue
 
-        landmarks, status = create_landmark_array_72(task, config.duplicate_policy, result)
+        landmarks, status = create_landmark_array_72(
+            task, config.duplicate_policy, result
+        )
         if landmarks is None:
             result.skipped_sample_count += 1
             continue
 
         orientation = orientation_index.get(stem)
         class_idx = orientation.class_idx if orientation is not None else None
-        orientation_status = orientation.status if orientation is not None else "missing_orientation_match"
+        orientation_status = (
+            orientation.status
+            if orientation is not None
+            else "missing_orientation_match"
+        )
         if class_idx is None:
             result.samples_without_orientation.append(
                 {
@@ -579,10 +700,41 @@ def generate_babyland72_test_dataset_from_labelstudio(
 
         image_output_path = output_images_dir / f"{stem}.jpg"
         label_output_path = output_labels_dir / f"{stem}.txt"
-        save_image_as_jpg(source_path, image_output_path, jpeg_quality=config.jpeg_quality)
+        plot_output_path = output_plots_dir / f"{stem}.jpg"
+        save_image_as_jpg(
+            source_path, image_output_path, jpeg_quality=config.jpeg_quality
+        )
         write_landmark_txt(label_output_path, landmarks, class_idx)
+        plot_status = "generated"
+        try:
+            draw_babyland72_landmark_overlay(
+                image_path=image_output_path,
+                output_path=plot_output_path,
+                landmarks=landmarks,
+            )
+        except Exception as error:
+            plot_status = f"failed: {error}"
+            result.plot_failures.append(
+                {
+                    "source_stem": stem,
+                    "output_image_path": str(image_output_path),
+                    "output_plot_path": str(plot_output_path),
+                    "is_flipped": False,
+                    "error": str(error),
+                }
+            )
         _append_generated_sample(
-            result, stem, source_path, image_output_path, label_output_path, False, class_idx, orientation_status, landmarks
+            result,
+            stem,
+            source_path,
+            image_output_path,
+            label_output_path,
+            plot_output_path,
+            plot_status,
+            False,
+            class_idx,
+            orientation_status,
+            landmarks,
         )
 
         flipped_stem = f"flip_{stem}"
@@ -592,14 +744,39 @@ def generate_babyland72_test_dataset_from_labelstudio(
         flipped_landmarks = flip_landmark_array_72(landmarks)
         flipped_image_output_path = output_images_dir / f"{flipped_stem}.jpg"
         flipped_label_output_path = output_labels_dir / f"{flipped_stem}.txt"
-        flip_image_horizontally(source_path, flipped_image_output_path, jpeg_quality=config.jpeg_quality)
-        write_landmark_txt(flipped_label_output_path, flipped_landmarks, flipped_class_idx)
+        flipped_plot_output_path = output_plots_dir / f"{flipped_stem}.jpg"
+        flip_image_horizontally(
+            source_path, flipped_image_output_path, jpeg_quality=config.jpeg_quality
+        )
+        write_landmark_txt(
+            flipped_label_output_path, flipped_landmarks, flipped_class_idx
+        )
+        flipped_plot_status = "generated"
+        try:
+            draw_babyland72_landmark_overlay(
+                image_path=flipped_image_output_path,
+                output_path=flipped_plot_output_path,
+                landmarks=flipped_landmarks,
+            )
+        except Exception as error:
+            flipped_plot_status = f"failed: {error}"
+            result.plot_failures.append(
+                {
+                    "source_stem": stem,
+                    "output_image_path": str(flipped_image_output_path),
+                    "output_plot_path": str(flipped_plot_output_path),
+                    "is_flipped": True,
+                    "error": str(error),
+                }
+            )
         _append_generated_sample(
             result,
             stem,
             source_path,
             flipped_image_output_path,
             flipped_label_output_path,
+            flipped_plot_output_path,
+            flipped_plot_status,
             True,
             flipped_class_idx,
             orientation_status,
@@ -654,8 +831,16 @@ def write_generation_reports(
     original_without_class = [row for row in original if not row["has_class_idx"]]
     flipped_with_class = [row for row in flipped if row["has_class_idx"]]
     flipped_without_class = [row for row in flipped if not row["has_class_idx"]]
+    original_plots = [
+        row for row in original if row["plot_generation_status"] == "generated"
+    ]
+    flipped_plots = [
+        row for row in flipped if row["plot_generation_status"] == "generated"
+    ]
     visible_counts = [int(row["num_present_landmarks"]) for row in generated]
-    missing_distribution = Counter(int(row["num_missing_landmarks"]) for row in generated)
+    missing_distribution = Counter(
+        int(row["num_missing_landmarks"]) for row in generated
+    )
     combined_class_counts = result.class_counts_original + result.class_counts_flipped
 
     summary = {
@@ -666,32 +851,129 @@ def write_generation_reports(
         "flipped_samples_generated": len(flipped),
         "total_images_written": len(generated),
         "total_labels_written": len(generated),
+        "plot_overlays_written": len(original_plots) + len(flipped_plots),
+        "original_plot_overlays_written": len(original_plots),
+        "flipped_plot_overlays_written": len(flipped_plots),
+        "plot_generation_failures": len(result.plot_failures),
         "original_labels_with_class_idx": len(original_with_class),
         "original_labels_without_class_idx": len(original_without_class),
         "flipped_labels_with_class_idx": len(flipped_with_class),
         "flipped_labels_without_class_idx": len(flipped_without_class),
-        "total_labels_with_class_idx": len(original_with_class) + len(flipped_with_class),
-        "total_labels_without_class_idx": len(original_without_class) + len(flipped_without_class),
+        "total_labels_with_class_idx": len(original_with_class)
+        + len(flipped_with_class),
+        "total_labels_without_class_idx": len(original_without_class)
+        + len(flipped_without_class),
         "skipped_samples": result.skipped_sample_count,
         "duplicate_policy": config.duplicate_policy,
-        "warnings_or_conflicts": len(result.orientation_conflicts) + len(result.duplicate_landmarks) + len(result.unknown_keypoint_labels),
+        "warnings_or_conflicts": len(result.orientation_conflicts)
+        + len(result.duplicate_landmarks)
+        + len(result.unknown_keypoint_labels)
+        + len(result.plot_failures),
     }
-    result.summary_rows = [{"metric": key, "value": value} for key, value in summary.items()]
+    result.summary_rows = [
+        {"metric": key, "value": value} for key, value in summary.items()
+    ]
 
-    _write_csv(report_dir / "dataset_generation_summary.csv", result.summary_rows, ["metric", "value"])
-    _write_csv(report_dir / "generated_samples.csv", result.generated_samples, [
-        "source_stem", "source_image_path", "output_image_path", "output_label_path", "is_flipped",
-        "has_class_idx", "class_idx", "orientation_status", "num_present_landmarks",
-        "num_missing_landmarks", "generation_status",
-    ])
-    _write_csv(report_dir / "unmatched_source_images.csv", result.unmatched_source_images, ["source_stem", "source_image_path", "reason"])
-    _write_csv(report_dir / "tasks_without_matching_image.csv", result.tasks_without_matching_image, ["source_stem", "landmark_task_id", "image_field", "reason"])
-    _write_csv(report_dir / "samples_without_orientation.csv", result.samples_without_orientation, ["source_stem", "source_image_path", "landmark_task_id", "reason", "generated_without_class_idx"])
-    _write_csv(report_dir / "orientation_conflicts.csv", result.orientation_conflicts, ["source_stem", "conflict_type", "detected_labels", "selected_class_idx_if_any", "generated_without_class_idx"])
-    _write_csv(report_dir / "duplicate_landmarks.csv", result.duplicate_landmarks, ["source_stem", "task_id", "duplicated_landmark_index", "duplicated_label_name", "duplicate_policy", "action_taken"])
-    _write_csv(report_dir / "unknown_keypoint_labels.csv", result.unknown_keypoint_labels, ["source_stem", "task_id", "unknown_label_name", "action_taken"])
-    _write_csv(report_dir / "missing_landmarks_by_image.csv", result.missing_landmarks_by_image, ["source_stem", "output_label_path", "missing_landmark_indices", "num_missing_landmarks", "has_class_idx"])
-    _write_csv(report_dir / "missing_landmarks_by_index.csv", result.missing_landmarks_by_index, ["landmark_index", "missing_count", "visible_count", "total_generated_original_samples", "missing_percentage"])
+    _write_csv(
+        report_dir / "dataset_generation_summary.csv",
+        result.summary_rows,
+        ["metric", "value"],
+    )
+    _write_csv(
+        report_dir / "generated_samples.csv",
+        result.generated_samples,
+        [
+            "source_stem",
+            "source_image_path",
+            "output_image_path",
+            "output_label_path",
+            "output_plot_path",
+            "is_flipped",
+            "has_class_idx",
+            "class_idx",
+            "orientation_status",
+            "num_present_landmarks",
+            "num_missing_landmarks",
+            "generation_status",
+            "plot_generation_status",
+        ],
+    )
+    _write_csv(
+        report_dir / "unmatched_source_images.csv",
+        result.unmatched_source_images,
+        ["source_stem", "source_image_path", "reason"],
+    )
+    _write_csv(
+        report_dir / "tasks_without_matching_image.csv",
+        result.tasks_without_matching_image,
+        ["source_stem", "landmark_task_id", "image_field", "reason"],
+    )
+    _write_csv(
+        report_dir / "samples_without_orientation.csv",
+        result.samples_without_orientation,
+        [
+            "source_stem",
+            "source_image_path",
+            "landmark_task_id",
+            "reason",
+            "generated_without_class_idx",
+        ],
+    )
+    _write_csv(
+        report_dir / "orientation_conflicts.csv",
+        result.orientation_conflicts,
+        [
+            "source_stem",
+            "conflict_type",
+            "detected_labels",
+            "selected_class_idx_if_any",
+            "generated_without_class_idx",
+        ],
+    )
+    _write_csv(
+        report_dir / "duplicate_landmarks.csv",
+        result.duplicate_landmarks,
+        [
+            "source_stem",
+            "task_id",
+            "duplicated_landmark_index",
+            "duplicated_label_name",
+            "duplicate_policy",
+            "action_taken",
+        ],
+    )
+    _write_csv(
+        report_dir / "unknown_keypoint_labels.csv",
+        result.unknown_keypoint_labels,
+        ["source_stem", "task_id", "unknown_label_name", "action_taken"],
+    )
+    _write_csv(
+        report_dir / "missing_landmarks_by_image.csv",
+        result.missing_landmarks_by_image,
+        [
+            "source_stem",
+            "output_label_path",
+            "missing_landmark_indices",
+            "num_missing_landmarks",
+            "has_class_idx",
+        ],
+    )
+    _write_csv(
+        report_dir / "missing_landmarks_by_index.csv",
+        result.missing_landmarks_by_index,
+        [
+            "landmark_index",
+            "missing_count",
+            "visible_count",
+            "total_generated_original_samples",
+            "missing_percentage",
+        ],
+    )
+    _write_csv(
+        report_dir / "plot_generation_failures.csv",
+        result.plot_failures,
+        ["source_stem", "output_image_path", "output_plot_path", "is_flipped", "error"],
+    )
 
     def class_lines(counter: Counter[int]) -> list[str]:
         return [f"- class_idx {idx}: {counter.get(idx, 0)}" for idx in range(5)]
@@ -733,8 +1015,18 @@ def write_generation_reports(
         f"- min visible landmarks per image: {min(visible_counts) if visible_counts else 0}",
         f"- max visible landmarks per image: {max(visible_counts) if visible_counts else 0}",
         "- distribution of missing landmark counts:",
-        *[f"  - {missing_count} missing: {count}" for missing_count, count in sorted(missing_distribution.items())],
+        *[
+            f"  - {missing_count} missing: {count}"
+            for missing_count, count in sorted(missing_distribution.items())
+        ],
         "- per-landmark missing frequency: see `missing_landmarks_by_index.csv`",
+        "",
+        "## Overlay plots",
+        f"- total plots generated: {len(original_plots) + len(flipped_plots)}",
+        f"- original plots generated: {len(original_plots)}",
+        f"- flipped plots generated: {len(flipped_plots)}",
+        f"- plot generation failures: {len(result.plot_failures)}",
+        "- plot failures: see `plot_generation_failures.csv`",
         "",
         "## Matching diagnostics",
         f"- tasks without source image: {len(result.tasks_without_matching_image)}",
@@ -799,11 +1091,27 @@ def main() -> None:
     result = generate_babyland72_test_dataset_from_labelstudio(config)
     report_path = write_generation_reports(config, result)
 
-    generated_original = sum(1 for row in result.generated_samples if not row["is_flipped"])
+    generated_original = sum(
+        1 for row in result.generated_samples if not row["is_flipped"]
+    )
     generated_flipped = sum(1 for row in result.generated_samples if row["is_flipped"])
-    labels_with_class = sum(1 for row in result.generated_samples if row["has_class_idx"])
-    labels_without_class = sum(1 for row in result.generated_samples if not row["has_class_idx"])
-    warning_count = len(result.orientation_conflicts) + len(result.duplicate_landmarks) + len(result.unknown_keypoint_labels)
+    labels_with_class = sum(
+        1 for row in result.generated_samples if row["has_class_idx"]
+    )
+    labels_without_class = sum(
+        1 for row in result.generated_samples if not row["has_class_idx"]
+    )
+    plot_count = sum(
+        1
+        for row in result.generated_samples
+        if row["plot_generation_status"] == "generated"
+    )
+    warning_count = (
+        len(result.orientation_conflicts)
+        + len(result.duplicate_landmarks)
+        + len(result.unknown_keypoint_labels)
+        + len(result.plot_failures)
+    )
     print("[INFO] BabyLand-72 regeneration finished.")
     print(f"[INFO] Output dataset root: {config.output_dataset_root}")
     print(f"[INFO] Generated original samples: {generated_original}")
@@ -811,6 +1119,7 @@ def main() -> None:
     print(f"[INFO] Skipped samples: {result.skipped_sample_count}")
     print(f"[INFO] Labels with class_idx: {labels_with_class}")
     print(f"[INFO] Labels without class_idx: {labels_without_class}")
+    print(f"[INFO] Overlay plots written: {plot_count}")
     print(f"[INFO] Warning/conflict cases: {warning_count}")
     print(f"[INFO] Markdown report: {report_path}")
 

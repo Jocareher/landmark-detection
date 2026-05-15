@@ -45,6 +45,18 @@ def orientation_from_class_idx(class_idx: int | None) -> str:
     return NATURAL_CLASS_ID_TO_ORIENTATION[class_idx]
 
 
+def compute_natural_valid_landmark_mask(
+    landmarks: np.ndarray,
+    visibility: np.ndarray,
+) -> np.ndarray:
+    """Return the BabyLand/Natural valid mask: finite coordinates and visible flag."""
+    landmarks = np.asarray(landmarks)
+    visibility = np.asarray(visibility)
+    finite_mask = np.isfinite(landmarks[:, 0]) & np.isfinite(landmarks[:, 1])
+    visibility_mask = visibility > 0
+    return finite_mask & visibility_mask
+
+
 def _parse_class_idx(raw_line: str, label_path: Path) -> int:
     tokens = raw_line.split()
     if len(tokens) != 1:

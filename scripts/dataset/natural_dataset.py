@@ -10,7 +10,10 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 from ..config import ExperimentConfig
-from ..utils.natural_labels import parse_natural_landmark_label
+from ..utils.natural_labels import (
+    compute_natural_valid_landmark_mask,
+    parse_natural_landmark_label,
+)
 
 VALID_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
@@ -283,11 +286,14 @@ class NaturalLandmarkEvaluationDataset(Dataset):
             label_path=label_path,
             expected_num_landmarks=self.config.num_landmarks,
         )
-        landmarks = parsed_label.landmarks
-        visibility = parsed_label.visibility
+        landmarks = parsed_label.landmarks.astype(np.float32, copy=True)
+        visibility = parsed_label.visibility.astype(np.float32, copy=True)
 
-        visible_mask = visibility == 1.0
-        landmarks[visible_mask, 0] *= float(image_width)
-        landmarks[visible_mask, 1] *= float(image_height)
-        landmarks[~visible_mask] = 0.0
+        finite_mask = np.isfinite(landmarks[:, 0]) & np.isfinite(landmarks[:, 1])
+        landmarks[finite_mask, 0] *= float(image_width)
+        landmarks[finite_mask, 1] *= float(image_height)
+
+        valid_mask = compute_natural_valid_landmark_mask(landmarks, visibility)
+        visibility[~valid_mask] = 0.0
+        landmarks[~valid_mask] = 0.0
         return landmarks, visibility, parsed_label.class_idx, parsed_label.orientation

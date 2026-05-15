@@ -426,6 +426,9 @@ def draw_landmark_connections(
         points = []
         for idx in connection:
             if np.isnan(coords[idx]).any():
+                if len(points) >= 2:
+                    draw.line(points, fill=color, width=width)
+                points = []
                 continue
             points.append(tuple(coords[idx]))
 
@@ -615,6 +618,8 @@ def load_shape_coordinates_from_label_file(
     visible_mask = np.asarray(
         [visibility == 1 for _, _, visibility in instance], dtype=bool
     )
+    finite_mask = ~np.isnan(coords).any(axis=1)
+    visible_mask &= finite_mask
     return coords, visible_mask
 
 

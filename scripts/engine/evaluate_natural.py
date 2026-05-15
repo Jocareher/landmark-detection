@@ -48,22 +48,43 @@ def compute_visible_only_per_landmark_nme(
     eps: float = 1e-6,
 ) -> tuple[dict[int, float], dict[int, float], float | None, float | None]:
     """Compute visible-visible point-to-point and point-to-line NME values."""
-    visible_gt_mask = target_visibility == 1
-    valid_mask = visible_gt_mask & (predicted_visibility == 1)
+    finite_target_mask = np.isfinite(target_landmarks[:, 0]) & np.isfinite(
+        target_landmarks[:, 1]
+    )
+    finite_prediction_mask = np.isfinite(predicted_landmarks[:, 0]) & np.isfinite(
+        predicted_landmarks[:, 1]
+    )
+    visible_gt_mask = (target_visibility == 1) & finite_target_mask
+    valid_mask = visible_gt_mask & (predicted_visibility == 1) & finite_prediction_mask
 
     if visible_gt_mask.sum() == 0:
         return {}, {}, None, None
 
+    safe_predicted_landmarks = np.nan_to_num(
+        predicted_landmarks.astype(np.float32, copy=True),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+    safe_target_landmarks = np.nan_to_num(
+        target_landmarks.astype(np.float32, copy=True),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+
     normalization = compute_box_normalization_factor(
-        target_landmarks=target_landmarks[visible_gt_mask],
+        target_landmarks=safe_target_landmarks[visible_gt_mask],
         eps=eps,
     )
-    point_errors = np.linalg.norm(predicted_landmarks - target_landmarks, axis=1)
+    point_errors = np.linalg.norm(
+        safe_predicted_landmarks - safe_target_landmarks, axis=1
+    )
     normalized_errors = point_errors / normalization
     point_to_line_errors = (
         compute_per_landmark_point_to_line_distances(
-            predicted_landmarks=predicted_landmarks,
-            target_landmarks=target_landmarks,
+            predicted_landmarks=safe_predicted_landmarks,
+            target_landmarks=safe_target_landmarks,
         )
         / normalization
     )

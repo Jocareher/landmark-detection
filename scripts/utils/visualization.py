@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import math
+import os
 import random
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Sequence
+
+os.environ.setdefault(
+    "MPLCONFIGDIR",
+    str(Path(tempfile.gettempdir()) / "landmarks_detection_matplotlib"),
+)
 
 import matplotlib
 
@@ -252,6 +259,77 @@ def save_overlay_image(image: Image.Image, output_path: Path) -> None:
     )
 
 
+def _is_finite_landmark_point(point: Sequence[float]) -> bool:
+    """Return whether a landmark point can be safely drawn."""
+    return math.isfinite(float(point[0])) and math.isfinite(float(point[1]))
+
+
+def _draw_polyline_segments(
+    draw: ImageDraw.ImageDraw,
+    points: list[tuple[float, float]],
+    fill: str,
+    width: int,
+) -> None:
+    """Draw one or more connected line segments without assuming a full chain."""
+    if len(points) >= 2:
+        draw.line(points, fill=fill, width=width, joint="curve")
+
+
+def _draw_landmark_connections(
+    draw: ImageDraw.ImageDraw,
+    landmarks: np.ndarray,
+    visibility: np.ndarray | None,
+    color: str,
+    line_width: int,
+    draw_all_connections: bool,
+) -> None:
+    """Draw landmark topology while breaking lines at invisible or non-finite points."""
+    for landmark_range, close_loop in get_landmark_connection_definitions():
+        segment: list[tuple[float, float]] = []
+        first_point: tuple[float, float] | None = None
+        last_point: tuple[float, float] | None = None
+        complete_loop = True
+
+        for landmark_index in landmark_range:
+            if landmark_index >= len(landmarks):
+                complete_loop = False
+                _draw_polyline_segments(draw, segment, color, line_width)
+                segment = []
+                continue
+            if (
+                not draw_all_connections
+                and visibility is not None
+                and int(visibility[landmark_index]) != 1
+            ):
+                complete_loop = False
+                _draw_polyline_segments(draw, segment, color, line_width)
+                segment = []
+                continue
+            point = landmarks[landmark_index]
+            if not _is_finite_landmark_point(point):
+                complete_loop = False
+                _draw_polyline_segments(draw, segment, color, line_width)
+                segment = []
+                continue
+
+            current_point = (float(point[0]), float(point[1]))
+            if first_point is None:
+                first_point = current_point
+            last_point = current_point
+            segment.append(current_point)
+
+        _draw_polyline_segments(draw, segment, color, line_width)
+        if (
+            close_loop
+            and complete_loop
+            and first_point is not None
+            and last_point is not None
+        ):
+            draw.line(
+                [last_point, first_point], fill=color, width=line_width, joint="curve"
+            )
+
+
 def save_landmark_overlay_image(
     image_path: Path,
     output_path: Path,
@@ -268,27 +346,18 @@ def save_landmark_overlay_image(
     image = Image.open(image_path).convert("RGB")
     draw = ImageDraw.Draw(image)
 
-    for landmark_range, close_loop in get_landmark_connection_definitions():
-        connected_points = []
-        for landmark_index in landmark_range:
-            if landmark_index >= len(predicted_landmarks):
-                continue
-            x_coord, y_coord = predicted_landmarks[landmark_index]
-            connected_points.append((float(x_coord), float(y_coord)))
-
-        if len(connected_points) >= 2:
-            draw.line(
-                connected_points, fill=line_color, width=line_width, joint="curve"
-            )
-            if close_loop:
-                draw.line(
-                    [connected_points[-1], connected_points[0]],
-                    fill=line_color,
-                    width=line_width,
-                    joint="curve",
-                )
+    _draw_landmark_connections(
+        draw=draw,
+        landmarks=predicted_landmarks,
+        visibility=predicted_visibility,
+        color=line_color,
+        line_width=line_width,
+        draw_all_connections=False,
+    )
 
     for landmark_index, (x_coord, y_coord) in enumerate(predicted_landmarks):
+        if not _is_finite_landmark_point((x_coord, y_coord)):
+            continue
         visibility_value = int(predicted_visibility[landmark_index])
         color = "blue" if visibility_value == 0 else "red"
         outline_color = "white" if visibility_value == 1 else "black"
@@ -362,29 +431,18 @@ def render_landmark_preview_image(
 
     draw = ImageDraw.Draw(rendered_image)
 
-    for landmark_range, close_loop in get_landmark_connection_definitions():
-        connected_points = []
-        for landmark_index in landmark_range:
-            if landmark_index >= len(landmarks):
-                continue
-            if not draw_all_connections and int(visibility[landmark_index]) != 1:
-                continue
-            x_coord, y_coord = landmarks[landmark_index]
-            connected_points.append((float(x_coord), float(y_coord)))
-
-        if len(connected_points) >= 2:
-            draw.line(
-                connected_points, fill=line_color, width=line_width, joint="curve"
-            )
-            if close_loop:
-                draw.line(
-                    [connected_points[-1], connected_points[0]],
-                    fill=line_color,
-                    width=line_width,
-                    joint="curve",
-                )
+    _draw_landmark_connections(
+        draw=draw,
+        landmarks=landmarks,
+        visibility=visibility,
+        color=line_color,
+        line_width=line_width,
+        draw_all_connections=draw_all_connections,
+    )
 
     for landmark_index, (x_coord, y_coord) in enumerate(landmarks):
+        if not _is_finite_landmark_point((x_coord, y_coord)):
+            continue
         visibility_value = int(visibility[landmark_index])
         color = "red" if visibility_value == 1 else "blue"
         outline_color = "white" if visibility_value == 1 else "black"
@@ -486,55 +544,26 @@ def save_landmark_comparison_overlay_image(
     image = Image.open(image_path).convert("RGB")
     draw = ImageDraw.Draw(image)
 
-    def draw_connections(
-        landmarks: np.ndarray,
-        visibility: np.ndarray | None,
-        color: str,
-        draw_all_connections: bool,
-    ) -> None:
-        for landmark_range, close_loop in get_landmark_connection_definitions():
-            connected_points = []
-            for landmark_index in landmark_range:
-                if landmark_index >= len(landmarks):
-                    continue
-                if (
-                    not draw_all_connections
-                    and visibility is not None
-                    and int(visibility[landmark_index]) != 1
-                ):
-                    continue
-                x_coord, y_coord = landmarks[landmark_index]
-                connected_points.append((float(x_coord), float(y_coord)))
-
-            if len(connected_points) >= 2:
-                draw.line(
-                    connected_points,
-                    fill=color,
-                    width=line_width,
-                    joint="curve",
-                )
-                if close_loop:
-                    draw.line(
-                        [connected_points[-1], connected_points[0]],
-                        fill=color,
-                        width=line_width,
-                        joint="curve",
-                    )
-
-    draw_connections(
+    _draw_landmark_connections(
+        draw=draw,
         landmarks=target_landmarks,
         visibility=target_visibility,
         color=target_line_color,
+        line_width=line_width,
         draw_all_connections=False,
     )
-    draw_connections(
+    _draw_landmark_connections(
+        draw=draw,
         landmarks=predicted_landmarks,
         visibility=predicted_visibility,
         color=predicted_line_color,
+        line_width=line_width,
         draw_all_connections=True,
     )
 
     for landmark_index, (x_coord, y_coord) in enumerate(target_landmarks):
+        if not _is_finite_landmark_point((x_coord, y_coord)):
+            continue
         visibility_value = int(target_visibility[landmark_index])
         if visibility_value != 1:
             continue
@@ -556,6 +585,8 @@ def save_landmark_comparison_overlay_image(
             )
 
     for landmark_index, (x_coord, y_coord) in enumerate(predicted_landmarks):
+        if not _is_finite_landmark_point((x_coord, y_coord)):
+            continue
         visibility_value = int(predicted_visibility[landmark_index])
         color = "#FF3D00" if visibility_value == 1 else "#2962FF"
         outline_color = "white" if visibility_value == 1 else "black"

@@ -346,19 +346,41 @@ def compute_masked_per_landmark_metrics(
     eps: float = 1e-6,
 ) -> tuple[dict[int, float], dict[int, float], float | None, float | None]:
     """Compute point-to-point and point-to-line NME for one masked subset."""
+    finite_target_mask = np.isfinite(target_landmarks[:, 0]) & np.isfinite(
+        target_landmarks[:, 1]
+    )
+    finite_prediction_mask = np.isfinite(predicted_landmarks[:, 0]) & np.isfinite(
+        predicted_landmarks[:, 1]
+    )
+    valid_mask = valid_mask & finite_target_mask & finite_prediction_mask
     if valid_mask.sum() == 0:
         return {}, {}, None, None
 
+    safe_predicted_landmarks = np.nan_to_num(
+        predicted_landmarks.astype(np.float32, copy=True),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+    safe_target_landmarks = np.nan_to_num(
+        target_landmarks.astype(np.float32, copy=True),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+
     normalization = compute_box_normalization_factor(
-        target_landmarks=target_landmarks[valid_mask],
+        target_landmarks=safe_target_landmarks[valid_mask],
         eps=eps,
     )
-    point_errors = np.linalg.norm(predicted_landmarks - target_landmarks, axis=1)
+    point_errors = np.linalg.norm(
+        safe_predicted_landmarks - safe_target_landmarks, axis=1
+    )
     normalized_errors = point_errors / normalization
     point_to_line_errors = (
         compute_per_landmark_point_to_line_distances(
-            predicted_landmarks=predicted_landmarks,
-            target_landmarks=target_landmarks,
+            predicted_landmarks=safe_predicted_landmarks,
+            target_landmarks=safe_target_landmarks,
         )
         / normalization
     )
