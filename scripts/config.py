@@ -115,6 +115,15 @@ SAVE_TEST_PREDICTIONS_AFTER_TRAINING = True
 SAVE_TEST_OVERLAYS_AFTER_TRAINING = True
 SHOW_LANDMARK_INDICES = False
 USE_LANDMARK_NAMES_IN_BOXPLOT = False
+EVALUATE_SYNBABY = True
+EVALUATE_BABYLAND = True
+EVALUATE_INFANFACE = True
+BABYLAND_CROP_ROOT = None
+BABYLAND_GT_ROOT = None
+BABYLAND_SOURCE_ROOT = None
+INFANFACE_CROP_ROOT = None
+INFANFACE_GT_ROOT = None
+INFANFACE_SOURCE_ROOT = None
 
 
 # ---------------------------------------------------------------------------
@@ -204,6 +213,15 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "save_test_overlays_after_training": SAVE_TEST_OVERLAYS_AFTER_TRAINING,
     "show_landmark_indices": SHOW_LANDMARK_INDICES,
     "use_landmark_names_in_boxplot": USE_LANDMARK_NAMES_IN_BOXPLOT,
+    "evaluate_synbaby": EVALUATE_SYNBABY,
+    "evaluate_babyland": EVALUATE_BABYLAND,
+    "evaluate_infanface": EVALUATE_INFANFACE,
+    "babyland_crop_root": BABYLAND_CROP_ROOT,
+    "babyland_gt_root": BABYLAND_GT_ROOT,
+    "babyland_source_root": BABYLAND_SOURCE_ROOT,
+    "infanface_crop_root": INFANFACE_CROP_ROOT,
+    "infanface_gt_root": INFANFACE_GT_ROOT,
+    "infanface_source_root": INFANFACE_SOURCE_ROOT,
     "visualize_every_n_epochs": VISUALIZE_EVERY_N_EPOCHS,
     "num_visualization_images": NUM_VISUALIZATION_IMAGES,
     "overlay_point_radius": OVERLAY_POINT_RADIUS,

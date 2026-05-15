@@ -297,6 +297,60 @@ def parse_args() -> argparse.Namespace:
         default=defaults.geometric_max_rotation_deg,
         help="Maximum absolute rotation in degrees for geometric augmentation.",
     )
+    parser.add_argument(
+        "--evaluate-synbaby",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.evaluate_synbaby,
+        help="Enable or disable SynBaby evaluation in the full evaluation pipeline.",
+    )
+    parser.add_argument(
+        "--evaluate-babyland",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.evaluate_babyland,
+        help="Enable or disable BabyLand evaluation in the full evaluation pipeline.",
+    )
+    parser.add_argument(
+        "--evaluate-infanface",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.evaluate_infanface,
+        help="Enable or disable InfAnFace evaluation in the full evaluation pipeline.",
+    )
+    parser.add_argument(
+        "--babyland-crop-root",
+        type=Path,
+        default=defaults.babyland_crop_root,
+        help="BabyLand detector-export crop root containing images/ and metadata/.",
+    )
+    parser.add_argument(
+        "--babyland-gt-root",
+        type=Path,
+        default=defaults.babyland_gt_root,
+        help="BabyLand original-image GT label root.",
+    )
+    parser.add_argument(
+        "--babyland-source-root",
+        type=Path,
+        default=defaults.babyland_source_root,
+        help="Optional root used to resolve BabyLand original source image paths.",
+    )
+    parser.add_argument(
+        "--infanface-crop-root",
+        type=Path,
+        default=defaults.infanface_crop_root,
+        help="InfAnFace detector-export crop root containing images/ and metadata/.",
+    )
+    parser.add_argument(
+        "--infanface-gt-root",
+        type=Path,
+        default=defaults.infanface_gt_root,
+        help="InfAnFace original-image GT label root.",
+    )
+    parser.add_argument(
+        "--infanface-source-root",
+        type=Path,
+        default=defaults.infanface_source_root,
+        help="Optional root used to resolve InfAnFace original source image paths.",
+    )
     return parser.parse_args()
 
 
@@ -345,6 +399,15 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.geometric_scale_min = args.geometric_scale_min
     config.geometric_scale_max = args.geometric_scale_max
     config.geometric_max_rotation_deg = args.geometric_max_rotation_deg
+    config.evaluate_synbaby = args.evaluate_synbaby
+    config.evaluate_babyland = args.evaluate_babyland
+    config.evaluate_infanface = args.evaluate_infanface
+    config.babyland_crop_root = args.babyland_crop_root
+    config.babyland_gt_root = args.babyland_gt_root
+    config.babyland_source_root = args.babyland_source_root
+    config.infanface_crop_root = args.infanface_crop_root
+    config.infanface_gt_root = args.infanface_gt_root
+    config.infanface_source_root = args.infanface_source_root
     return config
 
 
@@ -355,6 +418,47 @@ def maybe_save_config(config: ExperimentConfig) -> None:
     (config.output_dir / "resolved_config.json").write_text(
         json.dumps(serialized, indent=2), encoding="utf-8"
     )
+
+
+def validate_full_evaluation_paths(config: ExperimentConfig) -> None:
+    """Fail early when an enabled evaluation dataset is missing required paths."""
+    required_fields = []
+    if config.evaluate_babyland:
+        required_fields.extend(
+            [
+                ("babyland_crop_root", "BabyLand detector-export crop root", "BabyLand"),
+                ("babyland_gt_root", "BabyLand GT label root", "BabyLand"),
+            ]
+        )
+    if config.evaluate_infanface:
+        required_fields.extend(
+            [
+                (
+                    "infanface_crop_root",
+                    "InfAnFace detector-export crop root",
+                    "InfAnFace",
+                ),
+                ("infanface_gt_root", "InfAnFace GT label root", "InfAnFace"),
+            ]
+        )
+
+    for field_name, description, dataset_name in required_fields:
+        value = getattr(config, field_name, None)
+        if value is None:
+            raise ValueError(
+                f"{description} is required because {dataset_name} evaluation is enabled."
+            )
+        path = Path(value)
+        if not path.exists():
+            raise FileNotFoundError(f"{description} not found: {path}")
+
+    for field_name, description in (
+        ("babyland_source_root", "BabyLand source image root"),
+        ("infanface_source_root", "InfAnFace source image root"),
+    ):
+        value = getattr(config, field_name, None)
+        if value is not None and not Path(value).exists():
+            raise FileNotFoundError(f"{description} not found: {value}")
 
 
 def build_model(config: ExperimentConfig) -> HRNetLandmarkVisibility:
@@ -375,31 +479,14 @@ def build_model(config: ExperimentConfig) -> HRNetLandmarkVisibility:
     return model
 
 
-def print_visibility_metrics(summary: dict, prefix: str = "") -> None:
-    """Print visibility precision, recall, and F1 metrics."""
-    metrics = summary.get("visibility_metrics", {})
-    label_prefix = f"{prefix} " if prefix else ""
-    for label, display_name in (
-        ("global", "Global"),
-        ("visible", "Visible class"),
-        ("invisible", "Invisible class"),
-    ):
-        current = metrics.get(label, {})
-        print(
-            f"[INFO] {label_prefix}Visibility {display_name}: "
-            f"precision={current.get('precision', 0.0):.4f} "
-            f"recall={current.get('recall', 0.0):.4f} "
-            f"f1={current.get('f1', 0.0):.4f}"
-        )
-
-
 def main() -> None:
     """Execute the end-to-end experiment pipeline from the command line."""
     args = parse_args()
-    from scripts.engine import evaluate_checkpoint, smoke_test_single_batch, train_model
+    from scripts.engine import run_full_evaluation, smoke_test_single_batch, train_model
 
     config = build_config_from_args(args)
     resolve_output_dir(config)
+    validate_full_evaluation_paths(config)
     config.output_dir.mkdir(parents=True, exist_ok=True)
     with tee_terminal_output(config.output_dir / "train.log") as train_log_path:
         print("[INFO] Parsing CLI arguments...")
@@ -575,46 +662,16 @@ def main() -> None:
         model.load_state_dict(best_checkpoint["model_state_dict"])
         model.to(device)
 
-        test_output_dir = config.output_dir / config.evaluation_dirname
-        print("[INFO] Evaluating best model on test split...")
-        test_summary = evaluate_checkpoint(
+        full_evaluation_summary = run_full_evaluation(
             model=model,
-            dataloader=dataloaders["test"],
+            synbaby_dataloader=dataloaders["test"],
             device=device,
-            output_dir=test_output_dir,
-            visibility_threshold=config.visibility_threshold,
-            save_predictions=config.save_test_predictions_after_training,
-            save_overlays=config.save_test_overlays_after_training,
-            show_indices=config.show_landmark_indices,
-            use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
-            point_radius=config.overlay_point_radius,
-            line_width=config.overlay_line_width,
-            line_color=config.overlay_connection_color,
+            config=config,
         )
-        print("[INFO] Test evaluation finished.")
-        print(f"[INFO] Test mean NME box: {test_summary['mean_nme_box']:.4f}")
-        print(f"[INFO] Test median NME box: {test_summary['median_nme_box']:.4f}")
-        if test_summary.get("mean_nme_box_point_to_line") is not None:
-            print(
-                "[INFO] Test mean NME box point-to-line: "
-                f"{test_summary['mean_nme_box_point_to_line']:.4f}"
-            )
-        if test_summary.get("median_nme_box_point_to_line") is not None:
-            print(
-                "[INFO] Test median NME box point-to-line: "
-                f"{test_summary['median_nme_box_point_to_line']:.4f}"
-            )
-        if test_summary["mean_nme_interocular"] is not None:
-            print(
-                f"[INFO] Test mean NME interocular: {test_summary['mean_nme_interocular']:.4f}"
-            )
-        print_visibility_metrics(test_summary, prefix="Test")
-        print(f"[INFO] Test evaluation dir: {test_output_dir}")
-        print(f"[INFO] Test labels dir: {test_summary['prediction_labels_dir']}")
-        if test_summary["prediction_overlays_dir"] is not None:
-            print(
-                f"[INFO] Test overlays dir: {test_summary['prediction_overlays_dir']}"
-            )
+        print(
+            "[INFO] Full evaluation summary available for datasets: "
+            f"{', '.join(full_evaluation_summary['summaries'])}"
+        )
 
 
 if __name__ == "__main__":
