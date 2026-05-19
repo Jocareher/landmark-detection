@@ -477,6 +477,8 @@ def train_model(
                 num_images=num_visualization_images,
                 grid_cols=min(num_visualization_images, 4),
                 use_wandb=use_wandb and wandb is not None,
+                coordinate_decoder=coordinate_decoder,
+                wasserstein_softmax_temperature=wasserstein_softmax_temperature,
             )
             print(f"Saved predicted heatmap visualizations for epoch {epoch + 1}.")
 

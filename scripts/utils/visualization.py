@@ -69,8 +69,11 @@ def visualize_predicted_heatmaps_on_train_batch(
     use_max_projection: bool = True,
     normalize_heatmap: bool = True,
     use_wandb: bool = False,
+    coordinate_decoder: str = "argmax_subpixel",
+    wasserstein_softmax_temperature: float = 1.0,
+    visibility_threshold: float = 0.5,
 ) -> Path:
-    """Overlay predicted heatmaps on a fixed set of samples and save the figure."""
+    """Save a fixed-batch prediction preview matched to the active decoder."""
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -94,6 +97,25 @@ def visualize_predicted_heatmaps_on_train_batch(
         outputs = model(images)
 
     predicted_heatmaps = outputs["heatmaps"].detach().cpu()
+    predicted_visibility = (
+        torch.sigmoid(outputs["visibility_logits"].detach().cpu())
+        >= visibility_threshold
+    ).to(torch.int64)
+    decoded_landmarks = None
+    if coordinate_decoder == "barycenter":
+        from scripts.engine.metrics import decode_heatmaps_to_image_coords
+
+        decoded_landmarks = (
+            decode_heatmaps_to_image_coords(
+                heatmaps=outputs["heatmaps"].detach(),
+                image_height=images.shape[2],
+                image_width=images.shape[3],
+                decoder=coordinate_decoder,
+                softmax_temperature=wasserstein_softmax_temperature,
+            )
+            .cpu()
+            .numpy()
+        )
     images_cpu = images.detach().cpu()
     num_images = min(num_images, images_cpu.shape[0])
     num_rows = math.ceil(num_images / grid_cols)
@@ -107,24 +129,40 @@ def visualize_predicted_heatmaps_on_train_batch(
         )
         image_np = image_tensor.permute(1, 2, 0).clamp(0, 1).numpy()
         image_height, image_width = image_np.shape[:2]
-        current_heatmaps = predicted_heatmaps[image_index]
-        aggregated_heatmap = (
-            current_heatmaps.max(dim=0).values
-            if use_max_projection
-            else current_heatmaps.sum(dim=0)
-        )
-        heatmap_np = _resize_heatmap_to_image(
-            aggregated_heatmap, image_height, image_width
-        )
+        if decoded_landmarks is not None:
+            rendered_image = render_landmark_preview_image(
+                image=(image_np * 255.0).astype(np.uint8),
+                landmarks=decoded_landmarks[image_index],
+                visibility=predicted_visibility[image_index].numpy(),
+                point_radius=3,
+                line_width=2,
+                line_color="#00C853",
+                draw_all_connections=True,
+                mean=mean,
+                std=std,
+            )
+            axes[image_index].imshow(np.asarray(rendered_image))
+        else:
+            current_heatmaps = predicted_heatmaps[image_index]
+            aggregated_heatmap = (
+                current_heatmaps.max(dim=0).values
+                if use_max_projection
+                else current_heatmaps.sum(dim=0)
+            )
+            heatmap_np = _resize_heatmap_to_image(
+                aggregated_heatmap, image_height, image_width
+            )
 
-        if normalize_heatmap:
-            heatmap_min = float(heatmap_np.min())
-            heatmap_max = float(heatmap_np.max())
-            if heatmap_max > heatmap_min:
-                heatmap_np = (heatmap_np - heatmap_min) / (heatmap_max - heatmap_min)
+            if normalize_heatmap:
+                heatmap_min = float(heatmap_np.min())
+                heatmap_max = float(heatmap_np.max())
+                if heatmap_max > heatmap_min:
+                    heatmap_np = (heatmap_np - heatmap_min) / (
+                        heatmap_max - heatmap_min
+                    )
 
-        axes[image_index].imshow(image_np)
-        axes[image_index].imshow(heatmap_np, cmap="jet", alpha=overlay_alpha)
+            axes[image_index].imshow(image_np)
+            axes[image_index].imshow(heatmap_np, cmap="jet", alpha=overlay_alpha)
         axes[image_index].axis("off")
         sample_title = metadata_list[image_index].get(
             "sample_id", f"sample_{fixed_sample_indices[image_index]}"
