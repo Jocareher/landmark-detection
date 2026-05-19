@@ -22,6 +22,8 @@ def run_inference(
     dataloader: torch.utils.data.DataLoader,
     device: torch.device,
     compute_nme: bool = True,
+    coordinate_decoder: str = "argmax_subpixel",
+    wasserstein_softmax_temperature: float = 1.0,
 ) -> dict[str, Any]:
     """Run model inference on a dataloader and optionally compute mean NME."""
     model.eval()
@@ -36,7 +38,9 @@ def run_inference(
                 heatmaps=outputs["heatmaps"],
                 image_height=images.shape[2],
                 image_width=images.shape[3],
-                use_subpixel=False,
+                use_subpixel=True,
+                decoder=coordinate_decoder,
+                softmax_temperature=wasserstein_softmax_temperature,
             )
             all_predictions.append(pred_landmarks.cpu())
             if compute_nme and "landmarks" in batch:
@@ -66,6 +70,9 @@ def export_inference_outputs(
     line_color: str = "#FFD400",
     project_to_original: bool = False,
     save_crop_overlays: bool = False,
+    landmark_loss: str | None = None,
+    coordinate_decoder: str = "argmax_subpixel",
+    wasserstein_softmax_temperature: float = 1.0,
 ) -> dict[str, Any]:
     """Run inference and persist predicted labels and optional overlays."""
     output_dir = Path(output_dir)
@@ -100,7 +107,9 @@ def export_inference_outputs(
                 heatmaps=outputs["heatmaps"],
                 image_height=images.shape[2],
                 image_width=images.shape[3],
-                use_subpixel=False,
+                use_subpixel=True,
+                decoder=coordinate_decoder,
+                softmax_temperature=wasserstein_softmax_temperature,
             ).cpu()
             all_predictions.append(predicted_landmarks_batch)
 
@@ -218,4 +227,6 @@ def export_inference_outputs(
         "prediction_crop_overlays_dir": str(prediction_crops_dir)
         if save_overlays and project_to_original and save_crop_overlays
         else None,
+        "landmark_loss": landmark_loss,
+        "coordinate_decoder": coordinate_decoder,
     }

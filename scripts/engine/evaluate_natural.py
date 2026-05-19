@@ -122,6 +122,9 @@ def evaluate_natural_checkpoint(
     line_width: int = 4,
     line_color: str = "#FFD400",
     save_crop_overlays: bool = False,
+    landmark_loss: str | None = None,
+    coordinate_decoder: str = "argmax_subpixel",
+    wasserstein_softmax_temperature: float = 1.0,
 ) -> dict[str, Any]:
     """Evaluate a checkpoint on detector-export crops and original-image GT."""
     output_dir = Path(output_dir)
@@ -177,6 +180,8 @@ def evaluate_natural_checkpoint(
                 image_height=images.shape[2],
                 image_width=images.shape[3],
                 use_subpixel=True,
+                decoder=coordinate_decoder,
+                softmax_temperature=wasserstein_softmax_temperature,
             ).cpu()
 
             predicted_visibility_logits = outputs["visibility_logits"].cpu()
@@ -499,6 +504,8 @@ def evaluate_natural_checkpoint(
         "mean_nme_interocular": None,
         "visibility_metrics": visibility_metrics,
         "visibility_threshold": float(visibility_threshold),
+        "landmark_loss": landmark_loss,
+        "coordinate_decoder": coordinate_decoder,
         "confusion_matrix_raw": confusion_matrix_raw.tolist(),
         "confusion_matrix_normalized": confusion_matrix_normalized.tolist(),
         "predictions_dir": str(predictions_dir)

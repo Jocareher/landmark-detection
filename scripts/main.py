@@ -17,6 +17,8 @@ from scripts.config import (
     resolve_output_dir,
 )
 from scripts.dataset import build_dataloaders
+from scripts.engine.landmark_losses import build_landmark_heatmap_loss
+from scripts.engine.metrics import decoder_from_landmark_loss
 from scripts.models import HRNetLandmarkVisibility
 from scripts.utils import (
     get_default_device,
@@ -88,6 +90,48 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=defaults.learning_rate,
         help="Learning rate for the optimizer.",
+    )
+    parser.add_argument(
+        "--landmark-loss",
+        choices=["mse", "adaptive_wing", "wasserstein"],
+        default=defaults.landmark_loss,
+        help="Heatmap landmark loss regime.",
+    )
+    parser.add_argument(
+        "--adaptive-wing-omega",
+        type=float,
+        default=defaults.adaptive_wing_omega,
+        help="Adaptive Wing Loss omega parameter.",
+    )
+    parser.add_argument(
+        "--adaptive-wing-theta",
+        type=float,
+        default=defaults.adaptive_wing_theta,
+        help="Adaptive Wing Loss theta threshold.",
+    )
+    parser.add_argument(
+        "--adaptive-wing-epsilon",
+        type=float,
+        default=defaults.adaptive_wing_epsilon,
+        help="Adaptive Wing Loss epsilon parameter.",
+    )
+    parser.add_argument(
+        "--adaptive-wing-alpha",
+        type=float,
+        default=defaults.adaptive_wing_alpha,
+        help="Adaptive Wing Loss alpha parameter.",
+    )
+    parser.add_argument(
+        "--wasserstein-softmax-temperature",
+        type=float,
+        default=defaults.wasserstein_softmax_temperature,
+        help="Spatial softmax temperature used by Wasserstein loss and barycenter decoding.",
+    )
+    parser.add_argument(
+        "--wasserstein-epsilon",
+        type=float,
+        default=defaults.wasserstein_epsilon,
+        help="Numerical epsilon used by Wasserstein heatmap normalization.",
     )
     parser.add_argument(
         "--pca-prior-path",
@@ -365,6 +409,14 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.eval_batch_size = args.eval_batch_size
     config.num_epochs = args.epochs
     config.learning_rate = args.lr
+    config.landmark_loss = args.landmark_loss
+    config.coordinate_decoder = decoder_from_landmark_loss(args.landmark_loss)
+    config.adaptive_wing_omega = args.adaptive_wing_omega
+    config.adaptive_wing_theta = args.adaptive_wing_theta
+    config.adaptive_wing_epsilon = args.adaptive_wing_epsilon
+    config.adaptive_wing_alpha = args.adaptive_wing_alpha
+    config.wasserstein_softmax_temperature = args.wasserstein_softmax_temperature
+    config.wasserstein_epsilon = args.wasserstein_epsilon
     config.pca_prior_path = args.pca_prior_path
     config.lambda_pca_projection = args.lambda_pca_projection
     config.seed = args.seed
@@ -595,7 +647,7 @@ def main() -> None:
             milestones=list(config.lr_milestones),
             gamma=config.lr_gamma,
         )
-        heatmap_loss_fn = torch.nn.MSELoss()
+        heatmap_loss_fn = build_landmark_heatmap_loss(config)
         visibility_loss_fn = torch.nn.BCEWithLogitsLoss()
         print(
             "[INFO] Training setup ready | "
@@ -605,9 +657,25 @@ def main() -> None:
             f"lambda_vis={config.lambda_vis} "
             f"lambda_lmk_vis={config.lambda_lmk_vis} "
             f"lambda_lmk_full={config.lambda_lmk_full} "
+            f"landmark_loss={config.landmark_loss} "
+            f"coordinate_decoder={config.coordinate_decoder} "
             f"lambda_pca_projection={config.lambda_pca_projection} "
             f"pca_prior_path={config.pca_prior_path} "
         )
+        if config.landmark_loss == "adaptive_wing":
+            print(
+                "[INFO] Adaptive Wing hyperparameters | "
+                f"omega={config.adaptive_wing_omega} "
+                f"theta={config.adaptive_wing_theta} "
+                f"epsilon={config.adaptive_wing_epsilon} "
+                f"alpha={config.adaptive_wing_alpha}"
+            )
+        if config.landmark_loss == "wasserstein":
+            print(
+                "[INFO] Wasserstein hyperparameters | "
+                f"softmax_temperature={config.wasserstein_softmax_temperature} "
+                f"epsilon={config.wasserstein_epsilon}"
+            )
 
         if config.run_smoke_test:
             print("[INFO] Running smoke test on one training batch...")
@@ -624,6 +692,8 @@ def main() -> None:
                 lambda_lmk_full=config.lambda_lmk_full,
                 lambda_pca_projection=config.lambda_pca_projection,
                 pca_prior_path=config.pca_prior_path,
+                coordinate_decoder=config.coordinate_decoder,
+                wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
             )
 
         print("[INFO] Starting training loop...")
@@ -648,6 +718,9 @@ def main() -> None:
             run_name=config.wandb_run_name,
             use_wandb=config.use_wandb,
             use_amp=config.use_amp,
+            landmark_loss=config.landmark_loss,
+            coordinate_decoder=config.coordinate_decoder,
+            wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
             visualize_every_n_epochs=config.visualize_every_n_epochs,
             num_visualization_images=config.num_visualization_images,
         )

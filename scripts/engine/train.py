@@ -34,6 +34,8 @@ def run_epoch(
     training: bool = True,
     use_subpixel_decode: bool = False,
     use_amp: bool = True,
+    coordinate_decoder: str = "argmax_subpixel",
+    wasserstein_softmax_temperature: float = 1.0,
     progress_desc: str | None = None,
 ) -> dict[str, float]:
     """Run one full training or validation epoch and aggregate split metrics."""
@@ -137,6 +139,8 @@ def run_epoch(
                 image_height=images.shape[2],
                 image_width=images.shape[3],
                 use_subpixel=use_subpixel_decode,
+                decoder=coordinate_decoder,
+                softmax_temperature=wasserstein_softmax_temperature,
             )
             nme_values = compute_box_normalized_nme(
                 preds=pred_landmarks, targets=batch_on_device["landmarks"]
@@ -248,13 +252,21 @@ def initialize_results_csv(csv_path: str | Path) -> None:
                 "pca_loss",
                 "nme",
                 "lr",
+                "landmark_loss",
+                "coordinate_decoder",
                 "epoch_time",
             ]
         )
 
 
 def append_results_row(
-    csv_path: str | Path, epoch: int, split: str, metrics: dict[str, float], lr: float
+    csv_path: str | Path,
+    epoch: int,
+    split: str,
+    metrics: dict[str, float],
+    lr: float,
+    landmark_loss: str,
+    coordinate_decoder: str,
 ) -> None:
     """Append one train or validation metrics row to the experiment CSV."""
     csv_path = Path(csv_path)
@@ -271,6 +283,8 @@ def append_results_row(
                 metrics["pca_loss"],
                 metrics["nme"],
                 lr,
+                landmark_loss,
+                coordinate_decoder,
                 metrics["epoch_time"],
             ]
         )
@@ -297,6 +311,9 @@ def train_model(
     run_name: str | None = None,
     use_wandb: bool = True,
     use_amp: bool = True,
+    landmark_loss: str = "mse",
+    coordinate_decoder: str = "argmax_subpixel",
+    wasserstein_softmax_temperature: float = 1.0,
     visualize_every_n_epochs: int = 5,
     num_visualization_images: int = 4,
 ) -> dict[str, Any]:
@@ -354,8 +371,10 @@ def train_model(
             lambda_pca_projection=lambda_pca_projection,
             pca_shape_prior=pca_shape_prior,
             training=True,
-            use_subpixel_decode=False,
+            use_subpixel_decode=True,
             use_amp=amp_enabled,
+            coordinate_decoder=coordinate_decoder,
+            wasserstein_softmax_temperature=wasserstein_softmax_temperature,
             progress_desc=f"Train {epoch + 1:03d}",
         )
         val_metrics = run_epoch(
@@ -372,15 +391,33 @@ def train_model(
             lambda_pca_projection=lambda_pca_projection,
             pca_shape_prior=pca_shape_prior,
             training=False,
-            use_subpixel_decode=False,
+            use_subpixel_decode=True,
             use_amp=amp_enabled,
+            coordinate_decoder=coordinate_decoder,
+            wasserstein_softmax_temperature=wasserstein_softmax_temperature,
             progress_desc=f"Val   {epoch + 1:03d}",
         )
 
         history["train"].append(train_metrics)
         history["val"].append(val_metrics)
-        append_results_row(results_csv_path, epoch, "train", train_metrics, current_lr)
-        append_results_row(results_csv_path, epoch, "val", val_metrics, current_lr)
+        append_results_row(
+            results_csv_path,
+            epoch,
+            "train",
+            train_metrics,
+            current_lr,
+            landmark_loss,
+            coordinate_decoder,
+        )
+        append_results_row(
+            results_csv_path,
+            epoch,
+            "val",
+            val_metrics,
+            current_lr,
+            landmark_loss,
+            coordinate_decoder,
+        )
 
         metrics_payload = {"train": train_metrics, "val": val_metrics, "lr": current_lr}
         save_checkpoint(
@@ -471,6 +508,8 @@ def smoke_test_single_batch(
     lambda_lmk_full: float = 1.0,
     lambda_pca_projection: float = 0.0,
     pca_prior_path: str | Path | None = None,
+    coordinate_decoder: str = "argmax_subpixel",
+    wasserstein_softmax_temperature: float = 1.0,
 ) -> None:
     """Run a single optimization step to validate the end-to-end training path."""
     model.train()
@@ -508,7 +547,9 @@ def smoke_test_single_batch(
         heatmaps=outputs["heatmaps"].detach(),
         image_height=images.shape[2],
         image_width=images.shape[3],
-        use_subpixel=False,
+        use_subpixel=True,
+        decoder=coordinate_decoder,
+        softmax_temperature=wasserstein_softmax_temperature,
     )
     nme_values = compute_box_normalized_nme(preds=pred_landmarks, targets=landmarks)
     print("Smoke test passed.")

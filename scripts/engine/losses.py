@@ -3,44 +3,18 @@ from __future__ import annotations
 from typing import Any
 
 import torch
-import torch.nn.functional as F
 
+from .landmark_losses import PerLandmarkHeatmapLoss, compute_masked_heatmap_loss
 from .pca_shape_prior import (
     compute_pca_projection_loss,
     softargmax_heatmaps_to_image_coords,
 )
 
 
-def compute_visible_landmark_heatmap_loss(
-    predicted_heatmaps: torch.Tensor,
-    target_heatmaps: torch.Tensor,
-    target_visibility: torch.Tensor,
-) -> torch.Tensor:
-    """Compute heatmap MSE only for landmark channels marked visible in GT."""
-    channel_mask = (
-        target_visibility.to(
-            device=predicted_heatmaps.device,
-            dtype=predicted_heatmaps.dtype,
-        )
-        .unsqueeze(-1)
-        .unsqueeze(-1)
-    )
-    squared_error = F.mse_loss(
-        predicted_heatmaps,
-        target_heatmaps,
-        reduction="none",
-    )
-    masked_error = squared_error * channel_mask
-    normalizer = (
-        channel_mask.sum() * predicted_heatmaps.shape[-1] * predicted_heatmaps.shape[-2]
-    )
-    return masked_error.sum() / normalizer.clamp_min(1.0)
-
-
 def compute_multitask_loss(
     outputs: dict[str, torch.Tensor],
     batch: dict[str, torch.Tensor],
-    heatmap_loss_fn: torch.nn.Module,
+    heatmap_loss_fn: PerLandmarkHeatmapLoss,
     visibility_loss_fn: torch.nn.Module,
     lambda_vis: float = 1.0,
     lambda_lmk_vis: float = 1.0,
@@ -57,8 +31,14 @@ def compute_multitask_loss(
     target_heatmaps = batch["heatmaps"]
     target_visibility = batch["visibility"]
 
-    full_landmark_loss = heatmap_loss_fn(predicted_full_heatmaps, target_heatmaps)
-    visible_landmark_loss = compute_visible_landmark_heatmap_loss(
+    full_landmark_loss = compute_masked_heatmap_loss(
+        loss_fn=heatmap_loss_fn,
+        predicted_heatmaps=predicted_full_heatmaps,
+        target_heatmaps=target_heatmaps,
+        target_visibility=None,
+    )
+    visible_landmark_loss = compute_masked_heatmap_loss(
+        loss_fn=heatmap_loss_fn,
         predicted_heatmaps=predicted_visible_heatmaps,
         target_heatmaps=target_heatmaps,
         target_visibility=target_visibility,

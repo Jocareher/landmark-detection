@@ -21,6 +21,7 @@ from scripts.config import (
     resolve_inference_output_dir,
 )
 from scripts.engine.inference import export_inference_outputs
+from scripts.engine.metrics import decoder_from_landmark_loss
 from scripts.models import HRNetLandmarkVisibility
 from scripts.utils import get_default_device, set_seed
 
@@ -259,6 +260,18 @@ def parse_args() -> argparse.Namespace:
         help="Threshold applied to visibility logits to obtain binary predictions.",
     )
     parser.add_argument(
+        "--landmark-loss",
+        choices=["mse", "adaptive_wing", "wasserstein"],
+        default=defaults.landmark_loss,
+        help="Loss regime used by the checkpoint; controls coordinate decoding.",
+    )
+    parser.add_argument(
+        "--wasserstein-softmax-temperature",
+        type=float,
+        default=defaults.wasserstein_softmax_temperature,
+        help="Spatial softmax temperature used by barycenter decoding.",
+    )
+    parser.add_argument(
         "--disable-overlays",
         action="store_true",
         default=not defaults.save_inference_overlays,
@@ -305,6 +318,9 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.device = args.device
     config.seed = args.seed
     config.visibility_threshold = args.visibility_threshold
+    config.landmark_loss = args.landmark_loss
+    config.coordinate_decoder = decoder_from_landmark_loss(args.landmark_loss)
+    config.wasserstein_softmax_temperature = args.wasserstein_softmax_temperature
     config.save_inference_overlays = not args.disable_overlays
     config.show_landmark_indices = args.show_indices
     config.project_to_original = args.project_to_original
@@ -375,6 +391,11 @@ def main() -> None:
     print(f"[INFO] Input dir: {args.input_dir}")
     print(f"[INFO] Checkpoint: {args.checkpoint}")
     print(f"[INFO] Output dir: {output_dir}")
+    print(
+        "[INFO] Loss/decoder: "
+        f"landmark_loss={config.landmark_loss}, "
+        f"coordinate_decoder={config.coordinate_decoder}"
+    )
 
     dataloader = build_inference_dataloader(args.input_dir, config)
 
@@ -399,6 +420,9 @@ def main() -> None:
         line_color=config.overlay_connection_color,
         project_to_original=config.project_to_original,
         save_crop_overlays=config.save_natural_crop_overlays,
+        landmark_loss=config.landmark_loss,
+        coordinate_decoder=config.coordinate_decoder,
+        wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
     )
 
     print("[INFO] Inference finished.")

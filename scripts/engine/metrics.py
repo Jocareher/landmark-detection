@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 import numpy as np
 import torch
+
+CoordinateDecoder = Literal["argmax_subpixel", "barycenter"]
 
 
 @dataclass
@@ -50,6 +53,9 @@ def decode_heatmaps_to_image_coords(
     image_height: int,
     image_width: int,
     use_subpixel: bool = True,
+    decoder: CoordinateDecoder = "argmax_subpixel",
+    softmax_temperature: float = 1.0,
+    eps: float = 1e-8,
 ) -> torch.Tensor:
     """Convert heatmap-space landmark coordinates to image-space pixel coordinates.
 
@@ -63,14 +69,29 @@ def decode_heatmaps_to_image_coords(
                     heatmap spatial dimensions.
         image_height: Height of the original input image in pixels.
         image_width: Width of the original input image in pixels.
-        use_subpixel: If True, refine predictions using local gradient information
+        use_subpixel: If True, refine argmax predictions using local gradient information
                         for improved subpixel accuracy. Default is True.
+        decoder: Coordinate decoder. ``argmax_subpixel`` preserves the legacy
+                    argmax path. ``barycenter`` computes the spatial expectation
+                    after a softmax over each heatmap.
+        softmax_temperature: Spatial softmax temperature for barycenter decoding.
+        eps: Minimum denominator used by barycenter normalization.
 
     Returns:
         Tensor of shape (B, K, 2) with landmark coordinates in image space,
         where coordinates are (x, y) format.
     """
-    # Extract integer argmax coordinates from heatmaps
+    if decoder == "barycenter":
+        return decode_heatmaps_to_image_coords_barycenter(
+            heatmaps=heatmaps,
+            image_height=image_height,
+            image_width=image_width,
+            temperature=softmax_temperature,
+            eps=eps,
+        )
+    if decoder != "argmax_subpixel":
+        raise ValueError(f"Unsupported coordinate decoder: {decoder}")
+
     preds = get_preds_from_heatmaps(heatmaps)
     batch_size, num_landmarks, heatmap_height, heatmap_width = heatmaps.shape
 
@@ -104,6 +125,86 @@ def decode_heatmaps_to_image_coords(
     preds_image[..., 0] *= scale_x
     preds_image[..., 1] *= scale_y
     return preds_image
+
+
+def spatial_softmax_2d(
+    heatmaps: torch.Tensor,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Normalize heatmaps into per-channel spatial probability distributions."""
+    if heatmaps.ndim != 4:
+        raise ValueError(
+            f"Expected heatmaps with shape (B, K, H, W), got {tuple(heatmaps.shape)}."
+        )
+    if temperature <= 0:
+        raise ValueError(f"temperature must be > 0, got {temperature}.")
+    batch_size, num_landmarks, heatmap_height, heatmap_width = heatmaps.shape
+    logits = heatmaps.float() / float(temperature)
+    probabilities = torch.softmax(
+        logits.reshape(batch_size, num_landmarks, -1),
+        dim=-1,
+    )
+    return probabilities.reshape(
+        batch_size, num_landmarks, heatmap_height, heatmap_width
+    )
+
+
+def normalize_heatmaps_to_probabilities(
+    heatmaps: torch.Tensor,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """Normalize non-negative target heatmaps to sum to 1 per landmark channel."""
+    clamped = heatmaps.float().clamp_min(0.0)
+    denominator = clamped.flatten(start_dim=2).sum(dim=-1).clamp_min(float(eps))
+    return clamped / denominator[..., None, None]
+
+
+def decode_heatmaps_to_image_coords_barycenter(
+    heatmaps: torch.Tensor,
+    image_height: int,
+    image_width: int,
+    temperature: float = 1.0,
+    eps: float = 1e-8,
+    already_normalized: bool = False,
+) -> torch.Tensor:
+    """Decode heatmaps by computing each landmark distribution barycenter."""
+    if heatmaps.ndim != 4:
+        raise ValueError(
+            f"Expected heatmaps with shape (B, K, H, W), got {tuple(heatmaps.shape)}."
+        )
+    probabilities = (
+        heatmaps.float()
+        if already_normalized
+        else spatial_softmax_2d(heatmaps, temperature=temperature)
+    )
+    probabilities = (
+        probabilities
+        / probabilities.flatten(start_dim=2)
+        .sum(dim=-1)
+        .clamp_min(float(eps))[..., None, None]
+    )
+    _, _, heatmap_height, heatmap_width = probabilities.shape
+    x_coords = torch.arange(
+        heatmap_width, device=probabilities.device, dtype=probabilities.dtype
+    )
+    y_coords = torch.arange(
+        heatmap_height, device=probabilities.device, dtype=probabilities.dtype
+    )
+    expected_x = (probabilities.sum(dim=2) * x_coords).sum(dim=-1)
+    expected_y = (probabilities.sum(dim=3) * y_coords).sum(dim=-1)
+    coords = torch.stack([expected_x, expected_y], dim=-1)
+    coords[..., 0] *= image_width / float(heatmap_width)
+    coords[..., 1] *= image_height / float(heatmap_height)
+    return coords
+
+
+def decoder_from_landmark_loss(landmark_loss: str) -> CoordinateDecoder:
+    """Return the coordinate decoder paired with a landmark heatmap loss regime."""
+    if landmark_loss in {"mse", "adaptive_wing"}:
+        return "argmax_subpixel"
+    if landmark_loss == "wasserstein":
+        return "barycenter"
+    raise ValueError(f"Unsupported landmark loss regime: {landmark_loss}")
 
 
 def compute_box_normalized_nme(

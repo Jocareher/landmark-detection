@@ -75,6 +75,15 @@ LR_GAMMA = 0.1
 LAMBDA_VIS = 1.0
 LAMBDA_LMK_VIS = 1.0
 LAMBDA_LMK_FULL = 1.0
+LANDMARK_LOSS = "mse"
+COORDINATE_DECODER = "argmax_subpixel"
+ADAPTIVE_WING_OMEGA = 14.0
+ADAPTIVE_WING_THETA = 0.5
+ADAPTIVE_WING_EPSILON = 1.0
+ADAPTIVE_WING_ALPHA = 2.1
+WASSERSTEIN_SOFTMAX_TEMPERATURE = 1.0
+WASSERSTEIN_EPSILON = 1e-8
+WASSERSTEIN_VALIDATE_NORMALIZATION = False
 PCA_PRIOR_PATH = None
 LAMBDA_PCA_PROJECTION = 0.0
 PATIENCE = 15
@@ -188,6 +197,15 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "lambda_vis": LAMBDA_VIS,
     "lambda_lmk_vis": LAMBDA_LMK_VIS,
     "lambda_lmk_full": LAMBDA_LMK_FULL,
+    "landmark_loss": LANDMARK_LOSS,
+    "coordinate_decoder": COORDINATE_DECODER,
+    "adaptive_wing_omega": ADAPTIVE_WING_OMEGA,
+    "adaptive_wing_theta": ADAPTIVE_WING_THETA,
+    "adaptive_wing_epsilon": ADAPTIVE_WING_EPSILON,
+    "adaptive_wing_alpha": ADAPTIVE_WING_ALPHA,
+    "wasserstein_softmax_temperature": WASSERSTEIN_SOFTMAX_TEMPERATURE,
+    "wasserstein_epsilon": WASSERSTEIN_EPSILON,
+    "wasserstein_validate_normalization": WASSERSTEIN_VALIDATE_NORMALIZATION,
     "pca_prior_path": PCA_PRIOR_PATH,
     "lambda_pca_projection": LAMBDA_PCA_PROJECTION,
     "patience": PATIENCE,

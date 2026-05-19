@@ -19,6 +19,7 @@ from scripts.config import (
 from scripts.dataset import build_dataloaders, build_natural_evaluation_dataloader
 from scripts.engine.evaluate import evaluate_checkpoint
 from scripts.engine.evaluate_natural import evaluate_natural_checkpoint
+from scripts.engine.metrics import decoder_from_landmark_loss
 from scripts.models import HRNetLandmarkVisibility
 from scripts.utils import get_default_device, set_seed
 
@@ -110,6 +111,18 @@ def parse_args() -> argparse.Namespace:
         help="Threshold applied to visibility logits to obtain binary predictions.",
     )
     parser.add_argument(
+        "--landmark-loss",
+        choices=["mse", "adaptive_wing", "wasserstein"],
+        default=defaults.landmark_loss,
+        help="Loss regime used by the checkpoint; controls coordinate decoding.",
+    )
+    parser.add_argument(
+        "--wasserstein-softmax-temperature",
+        type=float,
+        default=defaults.wasserstein_softmax_temperature,
+        help="Spatial softmax temperature used by barycenter decoding.",
+    )
+    parser.add_argument(
         "--use-landmark-names",
         action="store_true",
         default=defaults.use_landmark_names_in_boxplot,
@@ -156,6 +169,9 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.target_mode = "regression"
     config.seed = args.seed
     config.visibility_threshold = args.visibility_threshold
+    config.landmark_loss = args.landmark_loss
+    config.coordinate_decoder = decoder_from_landmark_loss(args.landmark_loss)
+    config.wasserstein_softmax_temperature = args.wasserstein_softmax_temperature
     config.use_landmark_names_in_boxplot = args.use_landmark_names
     config.save_natural_crop_overlays = args.save_crop_overlays
 
@@ -245,6 +261,11 @@ def main() -> None:
     print(f"[INFO] Dataset root: {config.dataset_root}")
     print(f"[INFO] Checkpoint: {args.checkpoint}")
     print(f"[INFO] Output dir: {output_dir}")
+    print(
+        "[INFO] Loss/decoder: "
+        f"landmark_loss={config.landmark_loss}, "
+        f"coordinate_decoder={config.coordinate_decoder}"
+    )
 
     model = build_model(config)
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
@@ -269,6 +290,9 @@ def main() -> None:
             point_radius=config.overlay_point_radius,
             line_width=config.overlay_line_width,
             line_color=config.overlay_connection_color,
+            landmark_loss=config.landmark_loss,
+            coordinate_decoder=config.coordinate_decoder,
+            wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
         )
     else:
         dataloader = build_natural_evaluation_dataloader(
@@ -291,6 +315,9 @@ def main() -> None:
             line_width=config.overlay_line_width,
             line_color=config.overlay_connection_color,
             save_crop_overlays=config.save_natural_crop_overlays,
+            landmark_loss=config.landmark_loss,
+            coordinate_decoder=config.coordinate_decoder,
+            wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
         )
 
     print("[INFO] Evaluation finished.")

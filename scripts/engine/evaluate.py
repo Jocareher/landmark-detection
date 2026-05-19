@@ -288,6 +288,8 @@ def save_metrics_summary_csv(
             summary.get("median_nme_box_point_to_line"),
         ),
         ("mean_nme_interocular", summary.get("mean_nme_interocular")),
+        ("landmark_loss", summary.get("landmark_loss")),
+        ("coordinate_decoder", summary.get("coordinate_decoder")),
         (
             "visibility_global_precision",
             summary.get("visibility_metrics", {}).get("global", {}).get("precision"),
@@ -654,6 +656,9 @@ def evaluate_checkpoint(
     point_radius: int = 10,
     line_width: int = 4,
     line_color: str = "#FFD400",
+    landmark_loss: str | None = None,
+    coordinate_decoder: str = "argmax_subpixel",
+    wasserstein_softmax_temperature: float = 1.0,
 ) -> dict[str, Any]:
     """
     Evaluate a trained checkpoint on a dataset and save all requested artifacts.
@@ -727,6 +732,8 @@ def evaluate_checkpoint(
                 image_height=images.shape[2],
                 image_width=images.shape[3],
                 use_subpixel=True,
+                decoder=coordinate_decoder,
+                softmax_temperature=wasserstein_softmax_temperature,
             ).cpu()
 
             predicted_visibility_logits = outputs["visibility_logits"].cpu()
@@ -1071,6 +1078,8 @@ def evaluate_checkpoint(
         ),
         "visibility_metrics": visibility_metrics,
         "visibility_threshold": float(visibility_threshold),
+        "landmark_loss": landmark_loss,
+        "coordinate_decoder": coordinate_decoder,
         "confusion_matrix_raw": confusion_matrix_raw.tolist(),
         "confusion_matrix_normalized": confusion_matrix_normalized.tolist(),
         "predictions_dir": str(predictions_dir)

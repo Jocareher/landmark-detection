@@ -111,6 +111,10 @@ def evaluate_synbaby(
     print(f"[INFO] SynBaby output dir: {output_dir}")
     print(f"[INFO] SynBaby samples queued: {len(dataloader.dataset)}")
     print(
+        "[INFO] SynBaby decoder: "
+        f"{config.coordinate_decoder} (landmark_loss={config.landmark_loss})"
+    )
+    print(
         "[INFO] SynBaby metrics, reports, predictions, and plots are being generated..."
     )
     summary = evaluate_checkpoint(
@@ -126,6 +130,9 @@ def evaluate_synbaby(
         point_radius=config.overlay_point_radius,
         line_width=config.overlay_line_width,
         line_color=config.overlay_connection_color,
+        landmark_loss=config.landmark_loss,
+        coordinate_decoder=config.coordinate_decoder,
+        wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
     )
     print("[INFO] SynBaby evaluation finished.")
     print_evaluation_summary("SynBaby", summary, output_dir)
@@ -158,6 +165,10 @@ def evaluate_babyland(
         config=config,
     )
     print(f"[INFO] BabyLand samples queued: {len(dataloader.dataset)}")
+    print(
+        "[INFO] BabyLand decoder: "
+        f"{config.coordinate_decoder} (landmark_loss={config.landmark_loss})"
+    )
     print("[INFO] BabyLand inference started on crop images...")
     print(
         "[INFO] BabyLand reprojection started from crop to original-image coordinates..."
@@ -177,6 +188,9 @@ def evaluate_babyland(
         line_width=config.overlay_line_width,
         line_color=config.overlay_connection_color,
         save_crop_overlays=config.save_natural_crop_overlays,
+        landmark_loss=config.landmark_loss,
+        coordinate_decoder=config.coordinate_decoder,
+        wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
     )
     print("[INFO] BabyLand metrics computed.")
     print("[INFO] BabyLand evaluation finished.")
@@ -213,6 +227,10 @@ def evaluate_infanface(
     print("[INFO] InfAnFace dataloader construction started...")
     dataloader = build_inference_dataloader(crop_root, inference_config)
     print(f"[INFO] InfAnFace samples queued: {len(dataloader.dataset)}")
+    print(
+        "[INFO] InfAnFace decoder: "
+        f"{config.coordinate_decoder} (landmark_loss={config.landmark_loss})"
+    )
     print("[INFO] InfAnFace inference started on crop images...")
     print(
         "[INFO] InfAnFace reprojection started from crop to original-image coordinates..."
@@ -230,6 +248,9 @@ def evaluate_infanface(
         line_color=config.overlay_connection_color,
         project_to_original=True,
         save_crop_overlays=config.save_natural_crop_overlays,
+        landmark_loss=config.landmark_loss,
+        coordinate_decoder=config.coordinate_decoder,
+        wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
     )
     inference_summary_for_return = {
         key: value for key, value in inference_summary.items() if key != "predictions"
@@ -267,6 +288,11 @@ def run_full_evaluation(
     evaluation_root.mkdir(parents=True, exist_ok=True)
 
     print("[INFO] Full evaluation started...")
+    print(
+        "[INFO] Full evaluation loss/decoder: "
+        f"landmark_loss={config.landmark_loss}, "
+        f"coordinate_decoder={config.coordinate_decoder}"
+    )
     summaries: dict[str, Any] = {}
     output_dirs = {
         "synbaby": evaluation_root / "synbaby",
