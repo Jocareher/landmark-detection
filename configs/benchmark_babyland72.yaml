@@ -11,8 +11,8 @@ dataset:
     - "mediapipe"
     - "dlib"
   model_order:
+    - "BabyLand-72 Exp11"
     - "vggheads"
-    - "Exp11"
     - "dslpt"
     - "mediapipe"
     - "dlib"
@@ -40,7 +40,7 @@ dataset:
   ced_zoom_max_nme: 0.40
   annotate_bars: true
   annotate_boxplot_means: true
-  show_violin_plots: false
+  show_violin_plots: true
   landmark_count: 72
   landmark_index_base: "auto"
   image_id_strip_regexes:
