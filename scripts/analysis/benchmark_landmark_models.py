@@ -38,6 +38,28 @@ LANDMARK_INDEX_ALIASES = ("landmark_index", "landmark_idx", "landmark_id", "land
 ORIENTATION_ALIASES = ("orientation", "yaw_group", "yaw_angle", "class_idx", "pose")
 DETECTED_ALIASES = ("detected", "is_detected", "success", "valid_detection")
 
+ORIENTATION_ORDER = ["left", "quarter_left", "frontal", "quarter_right", "right"]
+
+DEFAULT_MODEL_ORDER = ["vggheads", "Exp11", "dslpt", "mediapipe", "dlib"]
+DEFAULT_MODEL_COLORS = {
+    "vggheads": "#4C78A8",
+    "Exp11": "#F58518",
+    "BabyLand-72 Exp11": "#F58518",
+    "dslpt": "#54A24B",
+    "mediapipe": "#B279A2",
+    "dlib": "#E45756",
+}
+FALLBACK_COLORS = [
+    "#72B7B2",
+    "#FF9DA6",
+    "#9D755D",
+    "#BAB0AC",
+    "#A0CBE8",
+    "#FFBE7D",
+    "#8CD17D",
+    "#D4A6C8",
+]
+
 DEFAULT_BABYLAND_ORIENTATION_MAPPING = {
     "0": "left",
     "1": "quarter_left",
@@ -72,6 +94,7 @@ class ModelBenchmarkConfig:
     per_landmark_csv: Path | None = None
     detection_rate: float | None = None
     landmark_format: str | None = None
+    display_name: str | None = None
     columns: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
@@ -89,6 +112,17 @@ class DatasetBenchmarkConfig:
     landmark_index_base: str = "auto"
     image_id_strip_regexes: list[str] = field(default_factory=lambda: [r"__det_\\d+$"])
     suspicious_nme_threshold: float = 1.0
+    model_order: list[str] = field(default_factory=list)
+    model_display_names: dict[str, str] = field(default_factory=dict)
+    model_colors: dict[str, str] = field(default_factory=dict)
+    orientation_order: list[str] = field(default_factory=lambda: list(ORIENTATION_ORDER))
+    include_unknown_orientations: bool = False
+    ced_zoom_max_nme: float = 0.40
+    plot_dpi: int = 300
+    use_percent_axis: bool = False
+    annotate_bars: bool = True
+    annotate_boxplot_means: bool = True
+    show_violin_plots: bool = False
 
 
 @dataclass
@@ -111,6 +145,7 @@ class LoadedModelResults:
     per_image: pd.DataFrame | None
     per_landmark: pd.DataFrame | None
     warnings: list[str] = field(default_factory=list)
+    orientation_warnings: list[dict[str, Any]] = field(default_factory=list)
 
 
 def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -> BenchmarkAnalysisConfig:
@@ -149,6 +184,27 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
         landmark_index_base=str(dataset_raw.get("landmark_index_base", "auto")),
         image_id_strip_regexes=list(dataset_raw.get("image_id_strip_regexes", [r"__det_\\d+$"])),
         suspicious_nme_threshold=float(dataset_raw.get("suspicious_nme_threshold", 1.0)),
+        model_order=list(dataset_raw.get("model_order", raw.get("model_order", []))),
+        model_display_names={
+            str(key): str(value)
+            for key, value in dataset_raw.get("model_display_names", raw.get("model_display_names", {})).items()
+        },
+        model_colors={
+            str(key): str(value)
+            for key, value in dataset_raw.get("model_colors", raw.get("model_colors", {})).items()
+        },
+        orientation_order=list(dataset_raw.get("orientation_order", raw.get("orientation_order", ORIENTATION_ORDER))),
+        include_unknown_orientations=bool(
+            dataset_raw.get("include_unknown_orientations", raw.get("include_unknown_orientations", False))
+        ),
+        ced_zoom_max_nme=float(dataset_raw.get("ced_zoom_max_nme", raw.get("ced_zoom_max_nme", 0.40))),
+        plot_dpi=int(dataset_raw.get("plot_dpi", raw.get("plot_dpi", 300))),
+        use_percent_axis=bool(dataset_raw.get("use_percent_axis", raw.get("use_percent_axis", False))),
+        annotate_bars=bool(dataset_raw.get("annotate_bars", raw.get("annotate_bars", True))),
+        annotate_boxplot_means=bool(
+            dataset_raw.get("annotate_boxplot_means", raw.get("annotate_boxplot_means", True))
+        ),
+        show_violin_plots=bool(dataset_raw.get("show_violin_plots", raw.get("show_violin_plots", False))),
     )
 
     models = []
@@ -162,6 +218,7 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
                 per_image_csv=Path(item["per_image_csv"]) if item.get("per_image_csv") else None,
                 per_landmark_csv=Path(item["per_landmark_csv"]) if item.get("per_landmark_csv") else None,
                 landmark_format=None if item.get("landmark_format") is None else str(item["landmark_format"]),
+                display_name=item.get("display_name"),
                 columns=dict(item.get("columns", {})),
             )
         )
@@ -187,6 +244,62 @@ def normalize_image_id(value: Any, strip_regexes: list[str] | None = None) -> st
     for pattern in strip_regexes or []:
         text = re.sub(pattern, "", text)
     return text.strip()
+
+
+def get_model_display_name(model_name: str, config: BenchmarkAnalysisConfig | DatasetBenchmarkConfig) -> str:
+    """Return the configured display name for a raw model name."""
+    dataset = config.dataset if isinstance(config, BenchmarkAnalysisConfig) else config
+    return dataset.model_display_names.get(model_name, model_name)
+
+
+def get_ordered_model_names(
+    models: list[str],
+    dataset_config: DatasetBenchmarkConfig,
+) -> list[str]:
+    """Order raw model names using configured raw or display-name order."""
+    available = list(dict.fromkeys(models))
+    configured = dataset_config.model_order or DEFAULT_MODEL_ORDER
+    display_to_raw = {
+        get_model_display_name(name, dataset_config): name for name in available
+    }
+    ordered = []
+    for item in configured:
+        if item in available and item not in ordered:
+            ordered.append(item)
+        elif item in display_to_raw and display_to_raw[item] not in ordered:
+            ordered.append(display_to_raw[item])
+    ordered.extend([name for name in available if name not in ordered])
+    return ordered
+
+
+def build_model_style_maps(
+    model_names: list[str],
+    dataset_config: DatasetBenchmarkConfig,
+) -> tuple[dict[str, str], dict[str, str], list[str]]:
+    """Build display-name and color maps for all models, with deterministic fallbacks."""
+    ordered = get_ordered_model_names(model_names, dataset_config)
+    display_names = {name: get_model_display_name(name, dataset_config) for name in ordered}
+    colors = dict(DEFAULT_MODEL_COLORS)
+    colors.update(dataset_config.model_colors)
+    fallback_warnings = []
+    fallback_index = 0
+    color_map = {}
+    for raw_name in ordered:
+        display_name = display_names[raw_name]
+        color = colors.get(raw_name, colors.get(display_name))
+        if color is None:
+            color = FALLBACK_COLORS[fallback_index % len(FALLBACK_COLORS)]
+            fallback_index += 1
+            fallback_warnings.append(
+                f"No configured color for model {raw_name!r}; assigned fallback color {color}."
+            )
+        color_map[raw_name] = color
+    return display_names, color_map, fallback_warnings
+
+
+def label_for_model(model_name: str, display_names: dict[str, str]) -> str:
+    """Return display label for a raw model name."""
+    return display_names.get(model_name, model_name)
 
 
 def resolve_column(
@@ -217,23 +330,63 @@ def resolve_column(
     return None
 
 
+def normalize_orientation_value(value: Any, mapping: dict[str, str]) -> str:
+    """Normalize orientation labels, treating yaw_plus_*deg values as class labels."""
+    if pd.isna(value):
+        return ""
+    raw = str(value).strip()
+    if not raw:
+        return ""
+    lower = raw.lower()
+    canonical = {
+        "left": "left",
+        "quarter_left": "quarter_left",
+        "quarter left": "quarter_left",
+        "frontal": "frontal",
+        "front": "frontal",
+        "quarter_right": "quarter_right",
+        "quarter right": "quarter_right",
+        "right": "right",
+    }
+    if lower in canonical:
+        return canonical[lower]
+
+    yaw_class_match = re.fullmatch(r"yaw_(?:plus|minus)_([0-4])deg", lower)
+    if yaw_class_match:
+        return mapping.get(yaw_class_match.group(1), "")
+
+    try:
+        numeric = str(int(float(raw)))
+    except ValueError:
+        numeric = raw
+    return mapping.get(raw, mapping.get(numeric, ""))
+
+
 def map_orientation_labels(series: pd.Series, mapping: dict[str, str]) -> pd.Series:
-    """Map numeric or string orientation labels to display labels."""
+    """Map numeric or string orientation labels to canonical class labels."""
     if series.empty:
         return series
+    return series.map(lambda value: normalize_orientation_value(value, mapping))
 
-    def _map_one(value: Any) -> str:
-        if pd.isna(value):
-            return ""
-        raw = str(value).strip()
-        numeric = raw
-        try:
-            numeric = str(int(float(raw)))
-        except ValueError:
-            pass
-        return mapping.get(raw, mapping.get(numeric, raw))
 
-    return series.map(_map_one)
+def collect_orientation_warnings(
+    raw: pd.DataFrame,
+    orientation_col: str | None,
+    mapped: pd.Series,
+    model_name: str,
+) -> list[dict[str, Any]]:
+    """Collect unknown orientation labels for reporting."""
+    if orientation_col is None:
+        return []
+    raw_values = raw[orientation_col]
+    unknown_mask = raw_values.notna() & raw_values.astype(str).str.strip().ne("") & mapped.eq("")
+    if not unknown_mask.any():
+        return []
+    rows = []
+    counts = raw_values[unknown_mask].astype(str).value_counts()
+    for label, count in counts.items():
+        rows.append({"model": model_name, "raw_orientation": label, "count": int(count)})
+    return rows
 
 
 def _read_csv(path: Path) -> pd.DataFrame:
@@ -250,6 +403,7 @@ def load_model_results(
 ) -> LoadedModelResults:
     """Load, normalize, and validate result CSVs for one model."""
     warnings: list[str] = []
+    orientation_warnings: list[dict[str, Any]] = []
     per_image = None
     per_landmark = None
 
@@ -274,6 +428,9 @@ def load_model_results(
         if orientation_col is not None:
             per_image["orientation"] = map_orientation_labels(
                 raw[orientation_col], dataset_config.orientation_mapping
+            )
+            orientation_warnings.extend(
+                collect_orientation_warnings(raw, orientation_col, per_image["orientation"], model_config.name)
             )
         else:
             per_image["orientation"] = ""
@@ -318,6 +475,9 @@ def load_model_results(
             per_landmark["orientation"] = map_orientation_labels(
                 raw[orientation_col], dataset_config.orientation_mapping
             )
+            orientation_warnings.extend(
+                collect_orientation_warnings(raw, orientation_col, per_landmark["orientation"], model_config.name)
+            )
         else:
             per_landmark["orientation"] = ""
         if valid_col is not None:
@@ -333,7 +493,7 @@ def load_model_results(
                 np.isfinite(per_landmark["nme"]) & per_landmark["landmark_index"].notna()
             ].copy()
 
-    return LoadedModelResults(model_config, per_image, per_landmark, warnings)
+    return LoadedModelResults(model_config, per_image, per_landmark, warnings, orientation_warnings)
 
 
 def normalize_landmark_index(
@@ -447,7 +607,10 @@ def compute_global_image_metrics(results: list[LoadedModelResults]) -> pd.DataFr
     return pd.DataFrame(rows).sort_values("mean_image_nme", na_position="last")
 
 
-def compute_orientation_metrics(results: list[LoadedModelResults]) -> pd.DataFrame:
+def compute_orientation_metrics(
+    results: list[LoadedModelResults],
+    dataset_config: DatasetBenchmarkConfig,
+) -> pd.DataFrame:
     """Compute image-level metrics grouped by orientation."""
     rows = []
     for result in results:
@@ -455,11 +618,21 @@ def compute_orientation_metrics(results: list[LoadedModelResults]) -> pd.DataFra
             continue
         data = finite_nme(result.per_image)
         data = data[data["orientation"].astype(str).str.len() > 0]
+        if not dataset_config.include_unknown_orientations:
+            data = data[data["orientation"].isin(dataset_config.orientation_order)]
         for orientation, group in data.groupby("orientation", dropna=True):
             row = {"model": result.config.name, "orientation": orientation}
             row.update(summarize_nme(group["nme"], "image"))
             rows.append(row)
-    return pd.DataFrame(rows)
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out["orientation"] = pd.Categorical(
+        out["orientation"],
+        categories=dataset_config.orientation_order,
+        ordered=True,
+    )
+    return out.sort_values(["orientation", "model"]).reset_index(drop=True)
 
 
 def compute_landmark_pooled_metrics(results: list[LoadedModelResults]) -> pd.DataFrame:
@@ -546,10 +719,23 @@ def compute_pairwise_image_comparisons(
         for model_b in names[i + 1 :]:
             groups = [("", None)]
             if by_orientation:
-                orientations = sorted(
+                common_orientations = (
                     set(image_tables[model_a]["orientation"].dropna().astype(str))
                     & set(image_tables[model_b]["orientation"].dropna().astype(str))
                 )
+                orientations = [
+                    orientation
+                    for orientation in dataset_config.orientation_order
+                    if orientation in common_orientations
+                ]
+                if dataset_config.include_unknown_orientations:
+                    orientations.extend(
+                        sorted(
+                            orientation
+                            for orientation in common_orientations
+                            if orientation and orientation not in dataset_config.orientation_order
+                        )
+                    )
                 groups = [(orientation, orientation) for orientation in orientations if orientation]
             for orientation_label, orientation_value in groups:
                 left = image_tables[model_a]
@@ -802,17 +988,60 @@ def import_scipy_stats() -> Any | None:
     return _SCIPY_STATS
 
 
-def save_figure(fig: Any, path: Path, save_pdf: bool = False) -> None:
+def save_figure(fig: Any, path: Path, save_pdf: bool = False, dpi: int = 300) -> None:
     """Save a matplotlib figure as PNG and optionally PDF."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(path, dpi=200)
+    fig.savefig(path, dpi=dpi)
     if save_pdf:
-        fig.savefig(path.with_suffix(".pdf"))
+        fig.savefig(path.with_suffix(".pdf"), dpi=dpi)
     try:
         import_matplotlib_pyplot().close(fig)
     except ImportError:
         pass
+
+
+def apply_axis_style(ax: Any, grid_axis: str = "y") -> None:
+    """Apply a simple presentation-friendly axis style."""
+    ax.grid(True, axis=grid_axis, linestyle="--", linewidth=0.6, alpha=0.35)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
+def maybe_percent(values: pd.Series | np.ndarray, use_percent_axis: bool) -> pd.Series | np.ndarray:
+    """Scale values to percent when configured."""
+    return values * 100.0 if use_percent_axis else values
+
+
+def format_metric_label(value: float, use_percent_axis: bool, digits: int = 1) -> str:
+    """Format plot annotations for NME or percentage axes."""
+    if not np.isfinite(value):
+        return ""
+    return f"{value * 100:.{digits}f}%" if use_percent_axis else f"{value:.3f}"
+
+
+def annotate_bars(ax: Any, bars: Any, labels: list[str], padding: float = 3.0) -> None:
+    """Annotate a bar container with preformatted labels."""
+    for bar, label in zip(bars, labels):
+        if not label:
+            continue
+        height = bar.get_height()
+        ax.annotate(
+            label,
+            xy=(bar.get_x() + bar.get_width() / 2, height),
+            xytext=(0, padding),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+
+
+def add_ced_reference_lines(ax: Any) -> None:
+    """Add common NME reference lines to a CED plot."""
+    for threshold, label in [(0.05, "5%"), (0.10, "10%"), (0.20, "20%")]:
+        ax.axvline(threshold, color="0.45", linestyle="--", linewidth=0.9, alpha=0.8)
+        ax.text(threshold, 0.03, label, rotation=90, va="bottom", ha="right", color="0.35", fontsize=8)
 
 
 def generate_benchmark_plots(
@@ -832,175 +1061,310 @@ def generate_benchmark_plots(
         print(f"[WARNING] Skipping plot generation. {error}")
         return []
 
+    plt.rcParams.update(
+        {
+            "figure.dpi": config.dataset.plot_dpi,
+            "savefig.dpi": config.dataset.plot_dpi,
+            "font.size": 11,
+            "axes.titlesize": 14,
+            "axes.labelsize": 12,
+            "xtick.labelsize": 10,
+            "ytick.labelsize": 10,
+            "legend.fontsize": 9,
+        }
+    )
+
     plot_dir = output_dir / "plots"
     plot_paths: list[str] = []
     if global_metrics.empty:
         return plot_paths
 
-    models = global_metrics["model"].tolist()
-    x = np.arange(len(models))
+    model_order = get_ordered_model_names(global_metrics["model"].tolist(), config.dataset)
+    global_metrics = global_metrics.set_index("model").reindex(model_order).dropna(how="all").reset_index()
+    model_order = global_metrics["model"].tolist()
+    display_names, color_map, _ = build_model_style_maps(model_order, config.dataset)
+    labels = [label_for_model(model, display_names) for model in model_order]
+    colors = [color_map[model] for model in model_order]
+    x = np.arange(len(model_order))
+    use_percent = config.dataset.use_percent_axis
 
-    fig, ax = plt.subplots(figsize=(max(7, len(models) * 1.2), 4))
-    ax.bar(x, global_metrics["detection_rate"])
-    ax.set_xticks(x, models, rotation=30, ha="right")
-    ax.set_ylabel("Detection rate")
-    ax.set_ylim(0, min(1.05, max(1.0, global_metrics["detection_rate"].max() * 1.1)))
+    fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 4.5))
+    values = global_metrics["detection_rate"].to_numpy() * 100.0
+    bars = ax.bar(x, values, color=colors)
+    ax.set_xticks(x, labels, rotation=30, ha="right")
+    ax.set_ylabel("Detection rate (%)")
+    ax.set_ylim(0, min(105, max(100, np.nanmax(values) * 1.1)))
     ax.set_title("Detection rate by model")
+    apply_axis_style(ax)
+    if config.dataset.annotate_bars:
+        annotate_bars(ax, bars, [f"{value:.1f}%" for value in values])
     path = plot_dir / "detection_rate_bar.png"
-    save_figure(fig, path, config.save_pdf)
+    save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
     plot_paths.append(str(path.relative_to(output_dir)))
 
-    fig, ax = plt.subplots(figsize=(max(7, len(models) * 1.2), 4))
-    ax.bar(x, global_metrics["mean_image_nme"])
-    ax.set_xticks(x, models, rotation=30, ha="right")
-    ax.set_ylabel("Mean image NME")
+    fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 4.5))
+    values = maybe_percent(global_metrics["mean_image_nme"].to_numpy(), use_percent)
+    bars = ax.bar(x, values, color=colors)
+    ax.set_xticks(x, labels, rotation=30, ha="right")
+    ax.set_ylabel("Mean image-level NME (%)" if use_percent else "Mean image-level NME")
     ax.set_title("Mean image-level NME by model")
+    apply_axis_style(ax)
+    if config.dataset.annotate_bars:
+        ann = [format_metric_label(value, use_percent) for value in global_metrics["mean_image_nme"]]
+        annotate_bars(ax, bars, ann)
+        for idx, det in enumerate(global_metrics["detection_rate"]):
+            ax.text(idx, 0, f"det {det * 100:.1f}%", rotation=90, ha="center", va="bottom", fontsize=8, color="0.35")
     path = plot_dir / "mean_image_nme_bar.png"
-    save_figure(fig, path, config.save_pdf)
+    save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
     plot_paths.append(str(path.relative_to(output_dir)))
 
-    fig, ax = plt.subplots(figsize=(6, 5))
-    ax.scatter(global_metrics["detection_rate"], global_metrics["mean_image_nme"])
-    for _, row in global_metrics.iterrows():
-        ax.annotate(row["model"], (row["detection_rate"], row["mean_image_nme"]), xytext=(4, 4), textcoords="offset points")
-    ax.set_xlabel("Detection rate")
-    ax.set_ylabel("Mean image NME")
-    ax.set_title("Accuracy vs coverage")
+    fig, ax = plt.subplots(figsize=(6.5, 5.2))
+    y_values = maybe_percent(global_metrics["mean_image_nme"].to_numpy(), use_percent)
+    ax.scatter(global_metrics["detection_rate"] * 100.0, y_values, color=colors, s=70)
+    for idx, row in global_metrics.iterrows():
+        ax.annotate(labels[idx], (row["detection_rate"] * 100.0, y_values[idx]), xytext=(5, 5), textcoords="offset points")
+    ax.set_xlabel("Detection rate (%)")
+    ax.set_ylabel("Mean image-level NME (%)" if use_percent else "Mean image-level NME")
+    ax.set_title("Mean NME vs detection rate")
+    apply_axis_style(ax)
     path = plot_dir / "mean_nme_vs_detection_rate.png"
-    save_figure(fig, path, config.save_pdf)
+    save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
     plot_paths.append(str(path.relative_to(output_dir)))
 
     image_frames = [finite_nme(result.per_image) for result in results if result.per_image is not None]
     if image_frames:
         image_all = pd.concat(image_frames, ignore_index=True)
-        ordered_data = [image_all.loc[image_all["model"] == model, "nme"].to_numpy() for model in models]
-        fig, ax = plt.subplots(figsize=(max(7, len(models) * 1.2), 4.5))
-        ax.boxplot(ordered_data, labels=models, showfliers=False)
-        ax.set_xticklabels(models, rotation=30, ha="right")
-        ax.set_ylabel("Image-level NME")
-        ax.set_title("Image-level NME distribution")
+        ordered_data = [image_all.loc[image_all["model"] == model, "nme"].to_numpy() for model in model_order]
+        plot_data = [maybe_percent(values, use_percent) for values in ordered_data]
+
+        fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 5.0))
+        box = ax.boxplot(
+            plot_data,
+            labels=labels,
+            showfliers=False,
+            showmeans=True,
+            meanprops={"marker": "D", "markerfacecolor": "white", "markeredgecolor": "black", "markersize": 6},
+            medianprops={"color": "black", "linewidth": 1.8},
+            patch_artist=True,
+        )
+        for patch, color in zip(box["boxes"], colors):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.55)
+        ax.set_xticklabels(labels, rotation=30, ha="right")
+        ax.set_ylabel("Image-level NME (%)" if use_percent else "Image-level NME")
+        ax.set_title("Image-level NME distribution by model")
+        ax.plot([], [], color="black", linewidth=1.8, label="Median")
+        ax.plot([], [], marker="D", markerfacecolor="white", markeredgecolor="black", linestyle="None", label="Mean")
+        ax.legend(loc="upper right")
+        apply_axis_style(ax)
+        if config.dataset.annotate_boxplot_means:
+            for idx, values in enumerate(ordered_data, start=1):
+                if len(values):
+                    mean = float(np.mean(values))
+                    display_value = mean * 100.0 if use_percent else mean
+                    ax.annotate(format_metric_label(mean, use_percent), xy=(idx, display_value), xytext=(0, 12), textcoords="offset points", ha="center", fontsize=8)
         path = plot_dir / "image_nme_boxplot_by_model.png"
-        save_figure(fig, path, config.save_pdf)
+        save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
         plot_paths.append(str(path.relative_to(output_dir)))
 
-        fig, ax = plt.subplots(figsize=(max(7, len(models) * 1.2), 4.5))
-        ax.violinplot(ordered_data, showmeans=True, showextrema=True)
-        ax.set_xticks(np.arange(1, len(models) + 1), models, rotation=30, ha="right")
-        ax.set_ylabel("Image-level NME")
-        ax.set_title("Image-level NME violin plot")
-        path = plot_dir / "image_nme_violin_by_model.png"
-        save_figure(fig, path, config.save_pdf)
-        plot_paths.append(str(path.relative_to(output_dir)))
+        if any(np.nanmax(values) / max(np.nanmedian(values), 1e-8) > 4 for values in ordered_data if len(values)):
+            fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 5.0))
+            box = ax.boxplot(plot_data, labels=labels, showfliers=False, showmeans=True, patch_artist=True)
+            for patch, color in zip(box["boxes"], colors):
+                patch.set_facecolor(color)
+                patch.set_alpha(0.55)
+            ax.set_yscale("log")
+            ax.set_xticklabels(labels, rotation=30, ha="right")
+            ax.set_ylabel("Image-level NME (%)" if use_percent else "Image-level NME")
+            ax.set_title("Image-level NME distribution by model (log scale)")
+            apply_axis_style(ax)
+            path = plot_dir / "image_nme_boxplot_by_model_log.png"
+            save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
+            plot_paths.append(str(path.relative_to(output_dir)))
 
-        fig, ax = plt.subplots(figsize=(7, 5))
-        for model in models:
-            values = np.sort(image_all.loc[image_all["model"] == model, "nme"].to_numpy())
-            if len(values) == 0:
-                continue
-            y = np.arange(1, len(values) + 1) / len(values)
-            ax.plot(values, y, label=model)
-        ax.set_xlabel("Image-level NME")
-        ax.set_ylabel("Cumulative fraction")
-        ax.set_title("CED curves")
-        ax.legend(fontsize=8)
+        if config.dataset.show_violin_plots:
+            fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 5.0))
+            violin = ax.violinplot(plot_data, showmeans=False, showmedians=False, showextrema=False)
+            for body, color in zip(violin["bodies"], colors):
+                body.set_facecolor(color)
+                body.set_edgecolor("black")
+                body.set_alpha(0.45)
+            for idx, values in enumerate(plot_data, start=1):
+                if len(values) == 0:
+                    continue
+                q1, median, q3 = np.percentile(values, [25, 50, 75])
+                mean = np.mean(values)
+                ax.vlines(idx, q1, q3, color="black", linewidth=3)
+                ax.scatter(idx, median, marker="_", color="black", s=120, zorder=3, label="Median" if idx == 1 else None)
+                ax.scatter(idx, mean, marker="D", facecolor="white", edgecolor="black", s=36, zorder=3, label="Mean" if idx == 1 else None)
+            ax.set_xticks(np.arange(1, len(model_order) + 1), labels, rotation=30, ha="right")
+            ax.set_ylabel("Image-level NME (%)" if use_percent else "Image-level NME")
+            ax.set_title("Image-level NME distribution by model")
+            ax.legend(loc="upper right")
+            apply_axis_style(ax)
+            path = plot_dir / "image_nme_violin_by_model.png"
+            save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
+            plot_paths.append(str(path.relative_to(output_dir)))
+
+        def plot_ced(path: Path, zoom: bool = False) -> None:
+            fig, ax = plt.subplots(figsize=(7.2, 5.0))
+            for model, label, color in zip(model_order, labels, colors):
+                values = np.sort(image_all.loc[image_all["model"] == model, "nme"].to_numpy())
+                if len(values) == 0:
+                    continue
+                y = np.arange(1, len(values) + 1) / len(values)
+                ax.plot(values, y, label=label, color=color, linewidth=2.2)
+            add_ced_reference_lines(ax)
+            if zoom:
+                ax.set_xlim(0, config.dataset.ced_zoom_max_nme)
+            ax.set_ylim(0, 1.01)
+            ax.set_xlabel("Image-level NME threshold")
+            ax.set_ylabel("Fraction of images with NME <= threshold")
+            ax.set_title("Cumulative Error Distribution (Image-level NME)")
+            ax.legend(fontsize=9)
+            apply_axis_style(ax)
+            save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
+
         path = plot_dir / "ced_curves_image_nme.png"
-        save_figure(fig, path, config.save_pdf)
+        plot_ced(path, zoom=False)
+        plot_paths.append(str(path.relative_to(output_dir)))
+        path = plot_dir / "ced_curves_image_nme_zoomed.png"
+        plot_ced(path, zoom=True)
         plot_paths.append(str(path.relative_to(output_dir)))
 
     if not orientation_metrics.empty:
-        pivot = orientation_metrics.pivot(index="model", columns="orientation", values="mean_image_nme")
-        fig, ax = plt.subplots(figsize=(max(7, pivot.shape[1] * 1.1), max(4, pivot.shape[0] * 0.5)))
-        image = ax.imshow(pivot.to_numpy(), aspect="auto", cmap="viridis")
-        ax.set_xticks(np.arange(pivot.shape[1]), pivot.columns, rotation=30, ha="right")
-        ax.set_yticks(np.arange(pivot.shape[0]), pivot.index)
-        ax.set_title("Orientation-wise mean image NME")
-        fig.colorbar(image, ax=ax, label="Mean image NME")
-        path = plot_dir / "orientation_mean_nme_heatmap.png"
-        save_figure(fig, path, config.save_pdf)
-        plot_paths.append(str(path.relative_to(output_dir)))
+        orient = orientation_metrics.copy()
+        orient = orient[orient["orientation"].isin(config.dataset.orientation_order)]
+        pivot = orient.pivot(index="model", columns="orientation", values="mean_image_nme")
+        pivot = pivot.reindex(index=model_order, columns=config.dataset.orientation_order).dropna(how="all")
+        if not pivot.empty:
+            fig, ax = plt.subplots(figsize=(max(7, pivot.shape[1] * 1.15), max(4, pivot.shape[0] * 0.55)))
+            values = pivot.to_numpy() * (100.0 if use_percent else 1.0)
+            image = ax.imshow(values, aspect="auto", cmap="viridis")
+            ax.set_xticks(np.arange(pivot.shape[1]), pivot.columns, rotation=30, ha="right")
+            ax.set_yticks(np.arange(pivot.shape[0]), [label_for_model(model, display_names) for model in pivot.index])
+            ax.set_title("Orientation-wise mean image NME")
+            fig.colorbar(image, ax=ax, label="Mean image NME (%)" if use_percent else "Mean image NME")
+            path = plot_dir / "orientation_mean_nme_heatmap.png"
+            save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
+            plot_paths.append(str(path.relative_to(output_dir)))
 
-        fig, ax = plt.subplots(figsize=(max(8, pivot.shape[1] * 1.5), 5))
-        pivot.T.plot(kind="bar", ax=ax)
-        ax.set_ylabel("Mean image NME")
-        ax.set_title("Orientation-wise mean image NME")
-        ax.legend(title="Model", fontsize=8)
-        path = plot_dir / "orientation_mean_nme_grouped_bar.png"
-        save_figure(fig, path, config.save_pdf)
-        plot_paths.append(str(path.relative_to(output_dir)))
+            fig, ax = plt.subplots(figsize=(max(8, pivot.shape[1] * 1.6), 5))
+            width = 0.8 / max(len(pivot.index), 1)
+            orientation_x = np.arange(len(pivot.columns))
+            for idx, model in enumerate(pivot.index):
+                offset = (idx - (len(pivot.index) - 1) / 2) * width
+                ax.bar(orientation_x + offset, pivot.loc[model].to_numpy() * (100.0 if use_percent else 1.0), width, label=label_for_model(model, display_names), color=color_map[model])
+            ax.set_xticks(orientation_x, pivot.columns, rotation=30, ha="right")
+            ax.set_ylabel("Mean image NME (%)" if use_percent else "Mean image NME")
+            ax.set_title("Orientation-wise mean image NME")
+            ax.legend(title="Model", fontsize=8)
+            apply_axis_style(ax)
+            path = plot_dir / "orientation_mean_nme_grouped_bar.png"
+            save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
+            plot_paths.append(str(path.relative_to(output_dir)))
 
     primary = config.dataset.primary_model
     if primary and not per_landmark_metrics.empty:
-        primary_landmarks = per_landmark_metrics[per_landmark_metrics["model"] == primary]
         primary_raw = next((finite_nme(r.per_landmark) for r in results if r.config.name == primary and r.per_landmark is not None), pd.DataFrame())
         if not primary_raw.empty:
             landmark_indices = sorted(primary_raw["landmark_index"].dropna().unique())
             data = [primary_raw.loc[primary_raw["landmark_index"] == idx, "nme"].to_numpy() for idx in landmark_indices]
-            fig, ax = plt.subplots(figsize=(max(10, len(landmark_indices) * 0.22), 4.5))
+            fig, ax = plt.subplots(figsize=(max(10, len(landmark_indices) * 0.22), 4.8))
             ax.boxplot(data, labels=[str(int(idx)) for idx in landmark_indices], showfliers=False)
             ax.set_xlabel("Landmark index (0-based)")
             ax.set_ylabel("Per-landmark NME")
-            ax.set_title(f"Per-landmark NME for {primary}")
+            ax.set_title(f"Per-landmark NME for {label_for_model(primary, display_names)}")
+            apply_axis_style(ax)
             path = plot_dir / "primary_per_landmark_nme_boxplot.png"
-            save_figure(fig, path, config.save_pdf)
+            save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
             plot_paths.append(str(path.relative_to(output_dir)))
 
         fig, ax = plt.subplots(figsize=(10, 5))
         common_limit = min(
-            [
-                int(pd.to_numeric(m.landmark_format, errors="coerce"))
-                for m in (r.config for r in results)
-                if m.landmark_format and str(m.landmark_format).isdigit()
-            ]
+            [int(pd.to_numeric(m.landmark_format, errors="coerce")) for m in (r.config for r in results) if m.landmark_format and str(m.landmark_format).isdigit()]
             or [int(per_landmark_metrics["landmark_index"].max()) + 1]
         )
-        for model in models:
-            model_rows = per_landmark_metrics[
-                (per_landmark_metrics["model"] == model)
-                & (per_landmark_metrics["landmark_index"] < common_limit)
-            ].sort_values("landmark_index")
+        for model, color in zip(model_order, colors):
+            model_rows = per_landmark_metrics[(per_landmark_metrics["model"] == model) & (per_landmark_metrics["landmark_index"] < common_limit)].sort_values("landmark_index")
             if not model_rows.empty:
-                ax.plot(model_rows["landmark_index"], model_rows["mean_landmark_nme"], label=model)
+                ax.plot(model_rows["landmark_index"], model_rows["mean_landmark_nme"], label=label_for_model(model, display_names), color=color, linewidth=1.8)
         ax.set_xlabel("Landmark index (0-based)")
         ax.set_ylabel("Mean landmark NME")
         ax.set_title("Per-landmark mean NME across models")
         ax.legend(fontsize=8)
+        apply_axis_style(ax)
         path = plot_dir / "per_landmark_mean_nme_lines_common_landmarks.png"
-        save_figure(fig, path, config.save_pdf)
+        save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
         plot_paths.append(str(path.relative_to(output_dir)))
 
     if not region_metrics.empty:
-        pivot = region_metrics.pivot(index="region", columns="model", values="mean_nme")
-        fig, ax = plt.subplots(figsize=(max(9, len(pivot) * 0.8), 5))
-        pivot.plot(kind="bar", ax=ax)
-        ax.set_ylabel("Mean NME")
-        ax.set_title("Anatomical-region mean NME")
-        ax.legend(title="Model", fontsize=8)
-        path = plot_dir / "anatomical_region_mean_nme_bar.png"
-        save_figure(fig, path, config.save_pdf)
-        plot_paths.append(str(path.relative_to(output_dir)))
+        region_order = list(config.dataset.anatomical_regions.keys()) or sorted(region_metrics["region"].unique())
+        pivot = region_metrics.pivot(index="region", columns="model", values="mean_nme").reindex(index=region_order, columns=model_order)
+        pivot = pivot.dropna(how="all")
+        if not pivot.empty:
+            fig, ax = plt.subplots(figsize=(max(11, len(pivot) * 0.75), 5.5))
+            pivot.rename(columns=display_names).plot(kind="bar", ax=ax, color=[color_map[m] for m in pivot.columns])
+            ax.set_ylabel("Mean NME")
+            ax.set_title("Anatomical-region mean NME")
+            ax.legend(title="Model", fontsize=8)
+            ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
+            apply_axis_style(ax)
+            path = plot_dir / "anatomical_region_mean_nme_bar.png"
+            save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
+            plot_paths.append(str(path.relative_to(output_dir)))
+
+            common68_regions = [region for region in pivot.index if max(config.dataset.anatomical_regions.get(region, [-1])) < 68]
+            pivot68 = pivot.loc[common68_regions]
+            if not pivot68.empty:
+                fig, ax = plt.subplots(figsize=(max(10, len(pivot68) * 0.85), 5.2))
+                pivot68.rename(columns=display_names).plot(kind="bar", ax=ax, color=[color_map[m] for m in pivot68.columns])
+                ax.set_ylabel("Mean NME")
+                ax.set_title("Anatomical-region mean NME (common 68 landmarks)")
+                ax.legend(title="Model", fontsize=8)
+                ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
+                apply_axis_style(ax)
+                path = plot_dir / "anatomical_region_mean_nme_bar_common68.png"
+                save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
+                plot_paths.append(str(path.relative_to(output_dir)))
 
     if not primary_vs_baselines.empty:
-        fig, ax = plt.subplots(figsize=(max(6, len(primary_vs_baselines) * 1.2), 4))
-        ax.bar(primary_vs_baselines["baseline_model"], primary_vs_baselines["primary_win_rate"])
-        ax.axhline(0.5, color="black", linestyle="--", linewidth=1)
-        ax.set_ylim(0, 1)
-        ax.set_ylabel("Primary win rate")
-        ax.set_title(f"{primary} pairwise win rate")
-        ax.set_xticklabels(primary_vs_baselines["baseline_model"], rotation=30, ha="right")
+        primary_color = color_map.get(primary, "#333333")
+        baselines = primary_vs_baselines["baseline_model"].tolist()
+        x_win = np.arange(len(baselines))
+        fig, ax = plt.subplots(figsize=(max(6.5, len(baselines) * 1.35), 4.8))
+        values = primary_vs_baselines["primary_win_rate"].to_numpy() * 100.0
+        bars = ax.bar(x_win, values, color=primary_color, alpha=0.85)
+        ax.axhline(50.0, color="black", linestyle="--", linewidth=1.1, label="50%")
+        ax.set_ylim(0, 100)
+        ax.set_xticks(x_win, [label_for_model(model, display_names) for model in baselines], rotation=30, ha="right")
+        ax.set_ylabel("Images where primary model has lower NME (%)")
+        ax.set_title(f"{label_for_model(primary, display_names)} pairwise win rate on common images")
+        if config.dataset.annotate_bars:
+            ann = [f"{rate:.1f}%\n(n={int(n)})" for rate, n in zip(values, primary_vs_baselines["n_common_images"])]
+            annotate_bars(ax, bars, ann)
+        ax.legend(loc="upper right")
+        apply_axis_style(ax)
         path = plot_dir / "primary_pairwise_win_rate.png"
-        save_figure(fig, path, config.save_pdf)
+        save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
         plot_paths.append(str(path.relative_to(output_dir)))
 
-    fig, ax = plt.subplots(figsize=(max(7, len(models) * 1.2), 4))
+    fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 4.8))
     width = 0.35
-    ax.bar(x - width / 2, global_metrics["FRI_0.10"], width, label="FRI > 0.10")
-    ax.bar(x + width / 2, global_metrics["FRI_0.20"], width, label="FRI > 0.20")
-    ax.set_xticks(x, models, rotation=30, ha="right")
-    ax.set_ylabel("Failure rate")
+    fri10 = global_metrics["FRI_0.10"].to_numpy() * 100.0
+    fri20 = global_metrics["FRI_0.20"].to_numpy() * 100.0
+    bars10 = ax.bar(x - width / 2, fri10, width, label="NME > 10%", color="#6B8EC1")
+    bars20 = ax.bar(x + width / 2, fri20, width, label="NME > 20%", color="#D65F5F")
+    ax.set_xticks(x, labels, rotation=30, ha="right")
+    ax.set_ylabel("Image failure rate (%)")
     ax.set_title("Image-level failure rates")
+    if config.dataset.annotate_bars:
+        annotate_bars(ax, bars10, [f"{value:.1f}%" for value in fri10])
+        annotate_bars(ax, bars20, [f"{value:.1f}%" for value in fri20])
     ax.legend()
+    apply_axis_style(ax)
     path = plot_dir / "image_failure_rate_bar.png"
-    save_figure(fig, path, config.save_pdf)
+    save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
     plot_paths.append(str(path.relative_to(output_dir)))
 
     return plot_paths
@@ -1073,6 +1437,23 @@ def write_markdown_report(
         "- `FRI_0.10`: fraction of images with image-level NME greater than 0.10.",
         "- Detection rate is reported separately from accuracy on detected/evaluated images.",
         "",
+        "Boxplot interpretation: the box shows the interquartile range, the line inside "
+        "the box is the median, and the diamond marker is the mean. A large separation "
+        "between mean and median indicates skew or outlier-heavy behavior.",
+        "",
+        "Failure-rate interpretation: lower is better. `FRI > 0.10` is the percentage "
+        "of images with NME greater than 10%, which captures moderate/severe failures; "
+        "`FRI > 0.20` captures severe failures.",
+        "",
+        "CED interpretation: a Cumulative Error Distribution plots the image-level NME "
+        "threshold on the x-axis and the fraction of images with NME less than or equal "
+        "to that threshold on the y-axis. Curves farther left and higher are better; "
+        "long right tails indicate outliers.",
+        "",
+        "Violin plot interpretation: violin width indicates density. Wider regions mean "
+        "more images in that error range, while long upper tails indicate difficult cases "
+        "or outliers.",
+        "",
         "## Orientation analysis",
         "",
     ]
@@ -1093,6 +1474,14 @@ def write_markdown_report(
         lines.append(dataframe_to_markdown(primary_vs, max_rows=50))
         lines.append("")
         lines.append("Negative signed differences mean the primary model has lower NME than the baseline.")
+        lines.append(
+            "Primary win rate is computed only on common images: it is the percentage "
+            "of shared images where the primary model has lower image-level NME than "
+            "the baseline. Values above 50% mean the primary model wins on most shared "
+            "images, but this should be interpreted together with mean NME, P95/P99 and "
+            "CED curves because a model can win often and still lose badly on a smaller "
+            "set of outlier cases."
+        )
 
     lines.extend(["", "## Per-landmark analysis", ""])
     if tables["per_landmark_metrics"].empty:
@@ -1247,9 +1636,17 @@ def run_benchmark_analysis(config: BenchmarkAnalysisConfig) -> dict[str, pd.Data
         for model in config.models
     ]
     warnings = [warning for result in results for warning in result.warnings]
+    _, _, style_warnings = build_model_style_maps(
+        [result.config.name for result in results],
+        config.dataset,
+    )
+    warnings.extend(style_warnings)
+    orientation_warning_table = pd.DataFrame(
+        [row for result in results for row in result.orientation_warnings]
+    )
 
     global_metrics = compute_global_image_metrics(results)
-    orientation_metrics = compute_orientation_metrics(results)
+    orientation_metrics = compute_orientation_metrics(results, config.dataset)
     landmark_pooled = compute_landmark_pooled_metrics(results)
     per_landmark = compute_per_landmark_metrics(results)
     region_metrics = compute_anatomical_region_metrics(results, config.dataset.anatomical_regions)
@@ -1291,6 +1688,7 @@ def run_benchmark_analysis(config: BenchmarkAnalysisConfig) -> dict[str, pd.Data
         "primary_model_vs_baselines": primary_vs,
         "model_ranking_summary": rankings,
         "dataset_input_summary": input_summary,
+        "orientation_label_warnings": orientation_warning_table,
     }
     write_tables(output_dir, tables)
     plot_paths = generate_benchmark_plots(

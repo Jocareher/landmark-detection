@@ -3,13 +3,44 @@
 
 dataset:
   name: "BabyLand-72"
-  output_dir: "runs/benchmark_babyland72"
-  primary_model: "exp11"
+  output_dir: "/Users/jocareher/Documents/benchmark_output"
+  primary_model: "BabyLand-72 Exp11"
   reference_models:
     - "vggheads"
     - "dslpt"
     - "mediapipe"
     - "dlib"
+  model_order:
+    - "vggheads"
+    - "Exp11"
+    - "dslpt"
+    - "mediapipe"
+    - "dlib"
+  model_display_names:
+    "BabyLand-72 Exp11": "Exp11"
+    "vggheads": "VGGHeads"
+    "dslpt": "DSLPT"
+    "mediapipe": "MediaPipe"
+    "dlib": "Dlib"
+  model_colors:
+    "VGGHeads": "#4C78A8"
+    "Exp11": "#F58518"
+    "DSLPT": "#54A24B"
+    "MediaPipe": "#B279A2"
+    "Dlib": "#E45756"
+  orientation_order:
+    - "left"
+    - "quarter_left"
+    - "frontal"
+    - "quarter_right"
+    - "right"
+  include_unknown_orientations: false
+  plot_dpi: 300
+  use_percent_axis: false
+  ced_zoom_max_nme: 0.40
+  annotate_bars: true
+  annotate_boxplot_means: true
+  show_violin_plots: false
   landmark_count: 72
   landmark_index_base: "auto"
   image_id_strip_regexes:
@@ -39,32 +70,32 @@ dataset:
 models:
   - name: "dlib"
     detection_rate: 0.0916
-    per_image_csv: "/path/to/dlib_per_image_nme.csv"
-    per_landmark_csv: "/path/to/dlib_per_image_per_landmark_nme.csv"
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dlib/dlib_per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dlib/dlib_per_image_per_landmark_nme.csv"
     landmark_format: "68"
 
   - name: "mediapipe"
     detection_rate: 0.6640
-    per_image_csv: "/path/to/mediapipe_per_image_nme.csv"
-    per_landmark_csv: "/path/to/mediapipe_per_image_per_landmark_nme.csv"
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/mediapipe/mediapipe_per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/mediapipe/mediapipe_per_image_per_landmark_nme.csv"
     landmark_format: "68"
 
   - name: "vggheads"
     detection_rate: 0.9984
-    per_image_csv: "/path/to/vggheads_per_image_nme.csv"
-    per_landmark_csv: "/path/to/vggheads_per_image_per_landmark_nme.csv"
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/vgg/vgg_per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/vgg/vgg_per_image_per_landmark_nme.csv"
     landmark_format: "68"
 
   - name: "dslpt"
     detection_rate: 1.0000
-    per_image_csv: "/path/to/dslpt_per_image_nme.csv"
-    per_landmark_csv: "/path/to/dslpt_per_image_per_landmark_nme.csv"
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dslpt/dslpt_per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dslpt/dslpt_per_image_per_landmark_nme.csv"
     landmark_format: "68"
 
-  - name: "exp11"
+  - name: "BabyLand-72 Exp11"
     detection_rate: 1.0000
-    per_image_csv: "/path/to/exp11_per_image_nme.csv"
-    per_landmark_csv: "/path/to/exp11_per_image_per_landmark_nme.csv"
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/exp11/exp11_per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/exp11/exp11_per_image_per_landmark_nme.csv"
     landmark_format: "72"
 
 drop_invalid_nme: false
