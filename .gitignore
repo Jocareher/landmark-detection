@@ -170,4 +170,5 @@ data/*
 weights/*
 !weights/.gitkeep
 *.csv
-external_repos/
+external_repos/*
+!external_repos/.gitkeep
