@@ -25,9 +25,16 @@ _SCIPY_IMPORT_ATTEMPTED = False
 
 
 IMAGE_ID_ALIASES = ("image_id", "sample_id", "stem", "filename", "file", "image")
-IMAGE_NME_ALIASES = ("nme", "image_nme", "mean_nme", "box_nme", "nme_box")
+IMAGE_NME_ALIASES = (
+    "nme",
+    "image_nme",
+    "mean_nme",
+    "mean_nme_box",
+    "box_nme",
+    "nme_box",
+)
 LANDMARK_NME_ALIASES = ("nme", "point_to_point_nme_box", "landmark_nme", "nme_box")
-LANDMARK_INDEX_ALIASES = ("landmark_index", "landmark_id", "landmark", "point_index")
+LANDMARK_INDEX_ALIASES = ("landmark_index", "landmark_idx", "landmark_id", "landmark", "point_index")
 ORIENTATION_ALIASES = ("orientation", "yaw_group", "yaw_angle", "class_idx", "pose")
 DETECTED_ALIASES = ("detected", "is_detected", "success", "valid_detection")
 
