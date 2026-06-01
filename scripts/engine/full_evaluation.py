@@ -110,6 +110,16 @@ def print_evaluation_summary(
             "median_nme_box_point_to_line_gt_valid",
             "median NME box point-to-line GT-valid",
         ),
+        ("mean_nme_box_non_contour", "mean NME box without contour"),
+        ("median_nme_box_non_contour", "median NME box without contour"),
+        (
+            "mean_nme_box_point_to_line_non_contour",
+            "mean NME box point-to-line without contour",
+        ),
+        (
+            "median_nme_box_point_to_line_non_contour",
+            "median NME box point-to-line without contour",
+        ),
         ("mean_nme_interocular", "mean NME interocular"),
     )
     has_explicit_visible_intersection = (

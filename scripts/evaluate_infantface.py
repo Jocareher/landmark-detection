@@ -103,27 +103,30 @@ def main() -> None:
         f"{summary['images_with_prediction']}/{summary['total_images']} "
         f"({summary['detection_rate'] * 100.0:.2f}%)"
     )
-    if summary["mean_nme_box"] is not None:
-        print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.4f}")
-    else:
-        print("[INFO] Mean NME box: n/a")
-    if summary["mean_nme_box_point_to_line"] is not None:
-        print(
-            "[INFO] Mean NME box point-to-line: "
-            f"{summary['mean_nme_box_point_to_line']:.4f}"
-        )
-    else:
-        print("[INFO] Mean NME box point-to-line: n/a")
-    if summary.get("mean_nme_box_non_contour") is not None:
-        print(
-            "[INFO] Mean NME box non-contour (landmarks 17-67): "
-            f"{summary['mean_nme_box_non_contour']:.4f}"
-        )
-    if summary.get("mean_nme_box_point_to_line_non_contour") is not None:
-        print(
-            "[INFO] Mean NME box point-to-line non-contour (landmarks 17-67): "
-            f"{summary['mean_nme_box_point_to_line_non_contour']:.4f}"
-        )
+    for key, label in (
+        ("mean_nme_box", "Mean NME box with contour"),
+        ("median_nme_box", "Median NME box with contour"),
+        ("mean_nme_box_point_to_line", "Mean NME box point-to-line with contour"),
+        (
+            "median_nme_box_point_to_line",
+            "Median NME box point-to-line with contour",
+        ),
+        ("mean_nme_box_non_contour", "Mean NME box without contour"),
+        ("median_nme_box_non_contour", "Median NME box without contour"),
+        (
+            "mean_nme_box_point_to_line_non_contour",
+            "Mean NME box point-to-line without contour",
+        ),
+        (
+            "median_nme_box_point_to_line_non_contour",
+            "Median NME box point-to-line without contour",
+        ),
+    ):
+        metric_value = summary.get(key)
+        if metric_value is not None:
+            print(f"[INFO] {label}: {metric_value:.4f}")
+        else:
+            print(f"[INFO] {label}: n/a")
     print(f"[INFO] Valid landmarks used: {summary['valid_landmarks_used']}")
     print(f"[INFO] Output dir: {output_dir}")
     if summary["images_with_invalid_prediction"] > 0:
