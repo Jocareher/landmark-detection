@@ -172,8 +172,6 @@ def load_ground_truth_landmarks(
     visibility = parsed_label.visibility.astype(np.int64)
     landmarks[:, 0] *= float(image_width)
     landmarks[:, 1] *= float(image_height)
-    invisible_mask = visibility == 0
-    landmarks[invisible_mask] = 0.0
     return (
         landmarks.astype(np.float32),
         visibility,
@@ -432,10 +430,36 @@ def save_benchmark_summary_csv(output_path: Path, summary: dict[str, Any]) -> No
         ("detection_rate", summary.get("detection_rate")),
         ("mean_nme_box", summary.get("mean_nme_box")),
         ("median_nme_box", summary.get("median_nme_box")),
+        (
+            "mean_nme_box_visible_intersection",
+            summary.get("mean_nme_box_visible_intersection"),
+        ),
+        (
+            "median_nme_box_visible_intersection",
+            summary.get("median_nme_box_visible_intersection"),
+        ),
         ("mean_nme_box_point_to_line", summary.get("mean_nme_box_point_to_line")),
         (
             "median_nme_box_point_to_line",
             summary.get("median_nme_box_point_to_line"),
+        ),
+        (
+            "mean_nme_box_point_to_line_visible_intersection",
+            summary.get("mean_nme_box_point_to_line_visible_intersection"),
+        ),
+        (
+            "median_nme_box_point_to_line_visible_intersection",
+            summary.get("median_nme_box_point_to_line_visible_intersection"),
+        ),
+        ("mean_nme_box_gt_valid", summary.get("mean_nme_box_gt_valid")),
+        ("median_nme_box_gt_valid", summary.get("median_nme_box_gt_valid")),
+        (
+            "mean_nme_box_point_to_line_gt_valid",
+            summary.get("mean_nme_box_point_to_line_gt_valid"),
+        ),
+        (
+            "median_nme_box_point_to_line_gt_valid",
+            summary.get("median_nme_box_point_to_line_gt_valid"),
         ),
         ("mean_nme_box_non_contour", summary.get("mean_nme_box_non_contour")),
         ("median_nme_box_non_contour", summary.get("median_nme_box_non_contour")),
@@ -554,6 +578,9 @@ def benchmark_prediction_directory(
     valid_non_contour_landmarks_used = 0
     non_contour_image_nme_values: list[float] = []
     non_contour_image_point_to_line_values: list[float] = []
+    gt_valid_landmarks_used = 0
+    gt_valid_image_nme_values: list[float] = []
+    gt_valid_image_point_to_line_values: list[float] = []
 
     for sample in samples:
         sample_id = sample["sample_id"]
@@ -594,6 +621,8 @@ def benchmark_prediction_directory(
                     "orientation": gt_orientation,
                     "mean_nme_box": None,
                     "mean_nme_box_point_to_line": None,
+                    "mean_nme_box_gt_valid": None,
+                    "mean_nme_box_point_to_line_gt_valid": None,
                     "mean_nme_interocular": None,
                 }
             )
@@ -619,7 +648,18 @@ def benchmark_prediction_directory(
             landmark_count = parsed_prediction.num_landmarks
             gt_landmarks = gt_landmarks_all[:landmark_count]
             gt_visibility = gt_visibility_all[:landmark_count]
-            valid_mask = gt_visibility == 1
+            gt_visible_mask = gt_visibility == 1
+            if parsed_prediction.visibility is not None:
+                pred_visibility = parsed_prediction.visibility[:landmark_count]
+                valid_mask = gt_visible_mask & (pred_visibility == 1)
+            else:
+                pred_visibility = None
+                valid_mask = gt_visible_mask
+            gt_valid_mask = np.isfinite(gt_landmarks[:, 0]) & np.isfinite(
+                gt_landmarks[:, 1]
+            )
+            gt_landmarks_visible_mode = gt_landmarks.astype(np.float32, copy=True)
+            gt_landmarks_visible_mode[~gt_visible_mask] = 0.0
             per_landmark_errors = (
                 per_landmark_errors_68
                 if landmark_count == 68
@@ -643,9 +683,26 @@ def benchmark_prediction_directory(
                 mean_box_nme_point_to_line,
             ) = compute_masked_per_landmark_metrics(
                 predicted_landmarks=parsed_prediction.landmarks,
-                target_landmarks=gt_landmarks,
+                target_landmarks=gt_landmarks_visible_mode,
                 valid_mask=valid_mask,
             )
+            (
+                gt_valid_errors,
+                gt_valid_point_to_line_errors,
+                mean_box_nme_gt_valid,
+                mean_box_nme_point_to_line_gt_valid,
+            ) = compute_masked_per_landmark_metrics(
+                predicted_landmarks=parsed_prediction.landmarks,
+                target_landmarks=gt_landmarks,
+                valid_mask=gt_valid_mask,
+            )
+            gt_valid_landmarks_used += len(gt_valid_errors)
+            if mean_box_nme_gt_valid is not None:
+                gt_valid_image_nme_values.append(mean_box_nme_gt_valid)
+            if mean_box_nme_point_to_line_gt_valid is not None:
+                gt_valid_image_point_to_line_values.append(
+                    mean_box_nme_point_to_line_gt_valid
+                )
             valid_landmarks_used += len(visible_errors)
             for landmark_index, error_value in visible_errors.items():
                 per_landmark_errors[landmark_index].append(error_value)
@@ -670,6 +727,32 @@ def benchmark_prediction_directory(
                         "point_to_line_nme_box": float(
                             visible_point_to_line_errors[landmark_index]
                         ),
+                        "evaluation_landmark_inclusion": "visible_intersection",
+                        "gt_visibility": int(gt_visibility[landmark_index]),
+                        "pred_visibility": pred_visibility_value,
+                        "landmark_count": int(landmark_count),
+                    }
+                )
+            for landmark_index, error_value in gt_valid_errors.items():
+                pred_visibility_value = (
+                    int(parsed_prediction.visibility[landmark_index])
+                    if parsed_prediction.visibility is not None
+                    else None
+                )
+                per_image_per_landmark_nme.append(
+                    {
+                        "image_id": sample_id,
+                        "prediction_id": prediction_path.stem,
+                        "evaluation_mode": "sota",
+                        "split": "benchmark",
+                        "orientation": gt_orientation,
+                        "class_idx": gt_class_idx,
+                        "landmark_idx": int(landmark_index),
+                        "point_to_point_nme_box": float(error_value),
+                        "point_to_line_nme_box": float(
+                            gt_valid_point_to_line_errors[landmark_index]
+                        ),
+                        "evaluation_landmark_inclusion": "gt_valid",
                         "gt_visibility": int(gt_visibility[landmark_index]),
                         "pred_visibility": pred_visibility_value,
                         "landmark_count": int(landmark_count),
@@ -692,6 +775,8 @@ def benchmark_prediction_directory(
                     "orientation": gt_orientation,
                     "mean_nme_box": mean_box_nme,
                     "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
+                    "mean_nme_box_gt_valid": mean_box_nme_gt_valid,
+                    "mean_nme_box_point_to_line_gt_valid": mean_box_nme_point_to_line_gt_valid,
                     "mean_nme_interocular": None,
                 }
             )
@@ -706,6 +791,8 @@ def benchmark_prediction_directory(
                     "orientation": gt_orientation,
                     "mean_nme_box": None,
                     "mean_nme_box_point_to_line": None,
+                    "mean_nme_box_gt_valid": None,
+                    "mean_nme_box_point_to_line_gt_valid": None,
                     "mean_nme_interocular": None,
                 }
             )
@@ -900,7 +987,48 @@ def benchmark_prediction_directory(
             if valid_image_point_to_line_values
             else None
         ),
+        "mean_nme_box_visible_intersection": (
+            float(np.mean(valid_image_nme_values)) if valid_image_nme_values else None
+        ),
+        "median_nme_box_visible_intersection": (
+            float(np.median(valid_image_nme_values)) if valid_image_nme_values else None
+        ),
+        "mean_nme_box_point_to_line_visible_intersection": (
+            float(np.mean(valid_image_point_to_line_values))
+            if valid_image_point_to_line_values
+            else None
+        ),
+        "median_nme_box_point_to_line_visible_intersection": (
+            float(np.median(valid_image_point_to_line_values))
+            if valid_image_point_to_line_values
+            else None
+        ),
+        "mean_nme_box_gt_valid": (
+            float(np.mean(gt_valid_image_nme_values))
+            if gt_valid_image_nme_values
+            else None
+        ),
+        "median_nme_box_gt_valid": (
+            float(np.median(gt_valid_image_nme_values))
+            if gt_valid_image_nme_values
+            else None
+        ),
+        "mean_nme_box_point_to_line_gt_valid": (
+            float(np.mean(gt_valid_image_point_to_line_values))
+            if gt_valid_image_point_to_line_values
+            else None
+        ),
+        "median_nme_box_point_to_line_gt_valid": (
+            float(np.median(gt_valid_image_point_to_line_values))
+            if gt_valid_image_point_to_line_values
+            else None
+        ),
         "valid_landmarks_used": int(valid_landmarks_used),
+        "gt_valid_landmarks_used": int(gt_valid_landmarks_used),
+        "evaluation_modes": {
+            "visible_intersection": "gt_visibility == 1 and pred_visibility == 1 when prediction visibility is available; otherwise GT-visible landmarks",
+            "gt_valid": "finite GT coordinates, regardless of predicted visibility",
+        },
         "invalid_prediction_files": invalid_prediction_files,
         "unmatched_prediction_files": unmatched_prediction_files,
         "orientation_sample_counts": {

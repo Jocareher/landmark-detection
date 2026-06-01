@@ -108,7 +108,33 @@ def main() -> None:
         )
     else:
         print("[INFO] Mean NME box point-to-line: n/a")
+    if summary.get("mean_nme_box_gt_valid") is not None:
+        print(
+            "[INFO] Mean NME box GT-valid: "
+            f"{summary['mean_nme_box_gt_valid']:.4f}"
+        )
+    else:
+        print("[INFO] Mean NME box GT-valid: n/a")
+    if summary.get("median_nme_box_gt_valid") is not None:
+        print(
+            "[INFO] Median NME box GT-valid: "
+            f"{summary['median_nme_box_gt_valid']:.4f}"
+        )
+    if summary.get("mean_nme_box_point_to_line_gt_valid") is not None:
+        print(
+            "[INFO] Mean NME box point-to-line GT-valid: "
+            f"{summary['mean_nme_box_point_to_line_gt_valid']:.4f}"
+        )
+    else:
+        print("[INFO] Mean NME box point-to-line GT-valid: n/a")
+    if summary.get("median_nme_box_point_to_line_gt_valid") is not None:
+        print(
+            "[INFO] Median NME box point-to-line GT-valid: "
+            f"{summary['median_nme_box_point_to_line_gt_valid']:.4f}"
+        )
     print(f"[INFO] Valid landmarks used: {summary['valid_landmarks_used']}")
+    if summary.get("gt_valid_landmarks_used") is not None:
+        print(f"[INFO] GT-valid landmarks used: {summary['gt_valid_landmarks_used']}")
     print(f"[INFO] Output dir: {output_dir}")
     if summary["images_with_invalid_prediction"] > 0:
         print(
