@@ -469,6 +469,10 @@ def save_per_image_nme_csv(
                 "yaw_group",
                 "mean_nme_box",
                 "mean_nme_box_point_to_line",
+                "mean_nme_box_gt_valid",
+                "mean_nme_box_point_to_line_gt_valid",
+                "mean_nme_box_non_contour",
+                "mean_nme_box_point_to_line_non_contour",
                 "mean_nme_interocular",
             ]
         )
@@ -491,6 +495,34 @@ def save_per_image_nme_csv(
                             round_metric_value(float(row["mean_nme_box_point_to_line"]))
                         )
                         if row.get("mean_nme_box_point_to_line") is not None
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(float(row["mean_nme_box_gt_valid"]))
+                        )
+                        if row.get("mean_nme_box_gt_valid") is not None
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(float(row["mean_nme_box_point_to_line_gt_valid"]))
+                        )
+                        if row.get("mean_nme_box_point_to_line_gt_valid") is not None
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(float(row["mean_nme_box_non_contour"]))
+                        )
+                        if row.get("mean_nme_box_non_contour") is not None
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(float(row["mean_nme_box_point_to_line_non_contour"]))
+                        )
+                        if row.get("mean_nme_box_point_to_line_non_contour") is not None
                         else None
                     ),
                     (
@@ -523,6 +555,7 @@ def save_per_image_per_landmark_nme_csv(
         "anatomical_label",
         "point_to_point_nme_box",
         "point_to_line_nme_box",
+        "evaluation_landmark_inclusion",
         "gt_visibility",
         "pred_visibility",
         "landmark_count",
@@ -872,6 +905,7 @@ def evaluate_checkpoint(
                             "point_to_line_nme_box": float(
                                 current_point_to_line_errors[landmark_index]
                             ),
+                            "evaluation_landmark_inclusion": "gt_valid",
                             "gt_visibility": int(target_visibility[landmark_index]),
                             "pred_visibility": int(
                                 predicted_visibility[landmark_index]
@@ -894,6 +928,8 @@ def evaluate_checkpoint(
                         "yaw_group": yaw_group,
                         "mean_nme_box": current_mean_box_nme,
                         "mean_nme_box_point_to_line": current_mean_box_nme_point_to_line,
+                        "mean_nme_box_gt_valid": current_mean_box_nme,
+                        "mean_nme_box_point_to_line_gt_valid": current_mean_box_nme_point_to_line,
                         "mean_nme_interocular": current_mean_interocular_nme,
                     }
                 )
@@ -1076,6 +1112,22 @@ def evaluate_checkpoint(
             if global_interocular_nme_values
             else None
         ),
+        "mean_nme_box_gt_valid": float(
+            np.mean([row["mean_nme_box_gt_valid"] for row in per_image_nme])
+        ),
+        "median_nme_box_gt_valid": float(
+            np.median([row["mean_nme_box_gt_valid"] for row in per_image_nme])
+        ),
+        "mean_nme_box_point_to_line_gt_valid": float(
+            np.mean([row["mean_nme_box_point_to_line_gt_valid"] for row in per_image_nme])
+        ),
+        "median_nme_box_point_to_line_gt_valid": float(
+            np.median([row["mean_nme_box_point_to_line_gt_valid"] for row in per_image_nme])
+        ),
+        "evaluation_modes": {
+            "visible_intersection": "not applicable for synthetic final evaluation unless visibility masks are used",
+            "gt_valid": "all finite GT landmarks",
+        },
         "visibility_metrics": visibility_metrics,
         "visibility_threshold": float(visibility_threshold),
         "landmark_loss": landmark_loss,

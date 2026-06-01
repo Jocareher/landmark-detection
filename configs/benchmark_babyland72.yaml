@@ -112,3 +112,26 @@ drop_invalid_nme: false
 bootstrap_iterations: 2000
 random_seed: 12345
 save_pdf: false
+
+metrics:
+  - name: "point_to_point"
+    display_name: "Point-to-point"
+    per_image_column_candidates:
+      - "image_nme"
+      - "mean_nme_box"
+      - "point_to_point_nme"
+      - "point_to_point_nme_box"
+      - "nme"
+    per_landmark_column_candidates:
+      - "point_to_point_nme_box"
+      - "point_to_point_nme"
+      - "nme"
+  - name: "point_to_line"
+    display_name: "Point-to-line"
+    per_image_column_candidates:
+      - "mean_nme_box_point_to_line"
+      - "point_to_line_nme_box"
+      - "point_to_line_nme"
+    per_landmark_column_candidates:
+      - "point_to_line_nme_box"
+      - "point_to_line_nme"

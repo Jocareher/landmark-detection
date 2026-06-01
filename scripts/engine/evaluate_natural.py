@@ -20,7 +20,7 @@ from .evaluate import (
     save_per_image_per_landmark_nme_csv,
     save_per_landmark_nme_csv,
 )
-from .geometry_metrics import compute_per_landmark_point_to_line_distances
+from .evaluation_modes import compute_masked_natural_per_landmark_nme
 from .metrics import decode_heatmaps_to_image_coords
 from .postprocessing import (
     apply_homogeneous_transform,
@@ -48,63 +48,14 @@ def compute_visible_only_per_landmark_nme(
     eps: float = 1e-6,
 ) -> tuple[dict[int, float], dict[int, float], float | None, float | None]:
     """Compute visible-visible point-to-point and point-to-line NME values."""
-    finite_target_mask = np.isfinite(target_landmarks[:, 0]) & np.isfinite(
-        target_landmarks[:, 1]
-    )
-    finite_prediction_mask = np.isfinite(predicted_landmarks[:, 0]) & np.isfinite(
-        predicted_landmarks[:, 1]
-    )
-    visible_gt_mask = (target_visibility == 1) & finite_target_mask
-    valid_mask = visible_gt_mask & (predicted_visibility == 1) & finite_prediction_mask
-
-    if visible_gt_mask.sum() == 0:
-        return {}, {}, None, None
-
-    safe_predicted_landmarks = np.nan_to_num(
-        predicted_landmarks.astype(np.float32, copy=True),
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0,
-    )
-    safe_target_landmarks = np.nan_to_num(
-        target_landmarks.astype(np.float32, copy=True),
-        nan=0.0,
-        posinf=0.0,
-        neginf=0.0,
-    )
-
-    normalization = compute_box_normalization_factor(
-        target_landmarks=safe_target_landmarks[visible_gt_mask],
+    return compute_masked_natural_per_landmark_nme(
+        predicted_landmarks=predicted_landmarks,
+        target_landmarks=target_landmarks,
+        target_visibility=target_visibility,
+        predicted_visibility=predicted_visibility,
+        normalization_fn=compute_box_normalization_factor,
+        inclusion_mode="visible_intersection",
         eps=eps,
-    )
-    point_errors = np.linalg.norm(
-        safe_predicted_landmarks - safe_target_landmarks, axis=1
-    )
-    normalized_errors = point_errors / normalization
-    point_to_line_errors = (
-        compute_per_landmark_point_to_line_distances(
-            predicted_landmarks=safe_predicted_landmarks,
-            target_landmarks=safe_target_landmarks,
-        )
-        / normalization
-    )
-
-    per_landmark_errors = {
-        int(landmark_index): float(normalized_errors[landmark_index])
-        for landmark_index in np.flatnonzero(valid_mask)
-    }
-    per_landmark_point_to_line_errors = {
-        int(landmark_index): float(point_to_line_errors[landmark_index])
-        for landmark_index in np.flatnonzero(valid_mask)
-    }
-    if not per_landmark_errors:
-        return {}, {}, None, None
-
-    return (
-        per_landmark_errors,
-        per_landmark_point_to_line_errors,
-        float(np.mean(list(per_landmark_errors.values()))),
-        float(np.mean(list(per_landmark_point_to_line_errors.values()))),
     )
 
 
@@ -160,6 +111,8 @@ def evaluate_natural_checkpoint(
     all_visibility_predictions: list[np.ndarray] = []
     num_samples_with_geometric_metrics = 0
     num_visible_visible_landmarks = 0
+    num_samples_with_gt_valid_metrics = 0
+    num_gt_valid_landmarks = 0
     orientation_names = [*NATURAL_ORIENTATION_NAMES, UNKNOWN_ORIENTATION]
     orientation_to_errors: dict[str, list[list[float]]] = {}
     orientation_to_box_nme_values: dict[str, list[float]] = {
@@ -299,6 +252,22 @@ def evaluate_natural_checkpoint(
                     target_visibility=target_visibility,
                     predicted_visibility=predicted_visibility,
                 )
+                (
+                    gt_valid_errors,
+                    gt_valid_point_to_line_errors,
+                    mean_box_nme_gt_valid,
+                    mean_box_nme_point_to_line_gt_valid,
+                ) = compute_masked_natural_per_landmark_nme(
+                    predicted_landmarks=predicted_landmarks_original,
+                    target_landmarks=target_landmarks_original,
+                    target_visibility=target_visibility,
+                    predicted_visibility=predicted_visibility,
+                    normalization_fn=compute_box_normalization_factor,
+                    inclusion_mode="gt_valid",
+                )
+                if mean_box_nme_gt_valid is not None:
+                    num_samples_with_gt_valid_metrics += 1
+                    num_gt_valid_landmarks += len(gt_valid_errors)
 
                 if mean_box_nme is not None:
                     num_samples_with_geometric_metrics += 1
@@ -327,6 +296,7 @@ def evaluate_natural_checkpoint(
                                 "point_to_line_nme_box": float(
                                     visible_point_to_line_errors[landmark_index]
                                 ),
+                                "evaluation_landmark_inclusion": "visible_intersection",
                                 "gt_visibility": int(target_visibility[landmark_index]),
                                 "pred_visibility": int(
                                     predicted_visibility[landmark_index]
@@ -343,6 +313,26 @@ def evaluate_natural_checkpoint(
                         orientation_to_box_nme_point_to_line_values[orientation].append(
                             mean_box_nme_point_to_line
                         )
+                for landmark_index, error_value in gt_valid_errors.items():
+                    per_image_per_landmark_nme.append(
+                        {
+                            "image_id": source_image_name,
+                            "prediction_id": sample_id,
+                            "evaluation_mode": "natural",
+                            "split": "natural",
+                            "orientation": orientation,
+                            "class_idx": class_idx if class_idx >= 0 else None,
+                            "landmark_idx": int(landmark_index),
+                            "point_to_point_nme_box": float(error_value),
+                            "point_to_line_nme_box": float(
+                                gt_valid_point_to_line_errors[landmark_index]
+                            ),
+                            "evaluation_landmark_inclusion": "gt_valid",
+                            "gt_visibility": int(target_visibility[landmark_index]),
+                            "pred_visibility": int(predicted_visibility[landmark_index]),
+                            "landmark_count": int(len(target_visibility)),
+                        }
+                    )
 
                 per_image_nme.append(
                     {
@@ -350,6 +340,8 @@ def evaluate_natural_checkpoint(
                         "orientation": orientation,
                         "mean_nme_box": mean_box_nme,
                         "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
+                        "mean_nme_box_gt_valid": mean_box_nme_gt_valid,
+                        "mean_nme_box_point_to_line_gt_valid": mean_box_nme_point_to_line_gt_valid,
                         "mean_nme_interocular": None,
                     }
                 )
@@ -383,6 +375,16 @@ def evaluate_natural_checkpoint(
         row["mean_nme_box_point_to_line"]
         for row in per_image_nme
         if row["mean_nme_box_point_to_line"] is not None
+    ]
+    valid_image_gt_valid_values = [
+        row["mean_nme_box_gt_valid"]
+        for row in per_image_nme
+        if row.get("mean_nme_box_gt_valid") is not None
+    ]
+    valid_image_point_to_line_gt_valid_values = [
+        row["mean_nme_box_point_to_line_gt_valid"]
+        for row in per_image_nme
+        if row.get("mean_nme_box_point_to_line_gt_valid") is not None
     ]
 
     all_grouped_errors = [per_landmark_errors] + list(orientation_to_errors.values())
@@ -484,6 +486,8 @@ def evaluate_natural_checkpoint(
         "num_samples": int(len(per_image_nme)),
         "num_samples_with_geometric_metrics": int(num_samples_with_geometric_metrics),
         "num_visible_visible_landmarks": int(num_visible_visible_landmarks),
+        "num_samples_with_gt_valid_metrics": int(num_samples_with_gt_valid_metrics),
+        "num_gt_valid_landmarks": int(num_gt_valid_landmarks),
         "num_landmarks": int(len(per_landmark_errors)),
         "mean_nme_box": (
             float(np.mean(valid_image_nme_values)) if valid_image_nme_values else None
@@ -501,6 +505,30 @@ def evaluate_natural_checkpoint(
             if valid_image_point_to_line_values
             else None
         ),
+        "mean_nme_box_gt_valid": (
+            float(np.mean(valid_image_gt_valid_values))
+            if valid_image_gt_valid_values
+            else None
+        ),
+        "median_nme_box_gt_valid": (
+            float(np.median(valid_image_gt_valid_values))
+            if valid_image_gt_valid_values
+            else None
+        ),
+        "mean_nme_box_point_to_line_gt_valid": (
+            float(np.mean(valid_image_point_to_line_gt_valid_values))
+            if valid_image_point_to_line_gt_valid_values
+            else None
+        ),
+        "median_nme_box_point_to_line_gt_valid": (
+            float(np.median(valid_image_point_to_line_gt_valid_values))
+            if valid_image_point_to_line_gt_valid_values
+            else None
+        ),
+        "evaluation_modes": {
+            "visible_intersection": "gt_visibility == 1 and pred_visibility == 1",
+            "gt_valid": "finite GT coordinates, regardless of predicted visibility",
+        },
         "mean_nme_interocular": None,
         "visibility_metrics": visibility_metrics,
         "visibility_threshold": float(visibility_threshold),

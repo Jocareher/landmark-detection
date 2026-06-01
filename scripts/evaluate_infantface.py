@@ -114,6 +114,16 @@ def main() -> None:
         )
     else:
         print("[INFO] Mean NME box point-to-line: n/a")
+    if summary.get("mean_nme_box_non_contour") is not None:
+        print(
+            "[INFO] Mean NME box non-contour (landmarks 17-67): "
+            f"{summary['mean_nme_box_non_contour']:.4f}"
+        )
+    if summary.get("mean_nme_box_point_to_line_non_contour") is not None:
+        print(
+            "[INFO] Mean NME box point-to-line non-contour (landmarks 17-67): "
+            f"{summary['mean_nme_box_point_to_line_non_contour']:.4f}"
+        )
     print(f"[INFO] Valid landmarks used: {summary['valid_landmarks_used']}")
     print(f"[INFO] Output dir: {output_dir}")
     if summary["images_with_invalid_prediction"] > 0:

@@ -26,6 +26,7 @@ from ..utils.natural_labels import (
     orientation_from_class_idx,
     parse_natural_landmark_label,
 )
+from ..utils.orientation import ORIENTATION_ORDER, normalize_orientation_label
 from ..utils.synthetic_labels import (
     format_synthetic_yaw_group,
     parse_synthetic_landmark_label,
@@ -53,6 +54,14 @@ def format_yaw_filename_key(yaw_angle: float) -> str:
         .replace("-", "minus_")
         .replace(".", "p")
     )
+
+
+def normalize_benchmark_orientation(value: Any) -> str:
+    """Normalize benchmark orientation labels and preserve true yaw-angle labels."""
+    normalized = normalize_orientation_label(value)
+    if normalized is not None:
+        return normalized
+    return str(value) if value is not None else UNKNOWN_ORIENTATION
 
 
 @dataclass
@@ -169,7 +178,7 @@ def load_ground_truth_landmarks(
         landmarks.astype(np.float32),
         visibility,
         None,
-        (
+        normalize_benchmark_orientation(
             format_yaw_filename_key(float(parsed_label.yaw_angle))
             if parsed_label.yaw_angle is not None
             else UNKNOWN_ORIENTATION
@@ -217,7 +226,7 @@ def load_infantface_ground_truth_landmarks(
                 f"Expected integer class_idx in first line of {label_path}, "
                 f"got {first_tokens[0]!r}."
             )
-        orientation = orientation_from_class_idx(class_idx)
+        orientation = normalize_benchmark_orientation(class_idx)
         landmark_lines = lines[1:]
     elif len(first_tokens) == 2:
         class_idx = None
@@ -428,7 +437,21 @@ def save_benchmark_summary_csv(output_path: Path, summary: dict[str, Any]) -> No
             "median_nme_box_point_to_line",
             summary.get("median_nme_box_point_to_line"),
         ),
+        ("mean_nme_box_non_contour", summary.get("mean_nme_box_non_contour")),
+        ("median_nme_box_non_contour", summary.get("median_nme_box_non_contour")),
+        (
+            "mean_nme_box_point_to_line_non_contour",
+            summary.get("mean_nme_box_point_to_line_non_contour"),
+        ),
+        (
+            "median_nme_box_point_to_line_non_contour",
+            summary.get("median_nme_box_point_to_line_non_contour"),
+        ),
         ("valid_landmarks_used", summary.get("valid_landmarks_used")),
+        (
+            "valid_non_contour_landmarks_used",
+            summary.get("valid_non_contour_landmarks_used"),
+        ),
     ]
     orientation_sample_counts = summary.get("orientation_sample_counts")
     if orientation_sample_counts is not None:
@@ -528,6 +551,9 @@ def benchmark_prediction_directory(
     images_without_prediction = 0
     images_with_invalid_prediction = 0
     valid_landmarks_used = 0
+    valid_non_contour_landmarks_used = 0
+    non_contour_image_nme_values: list[float] = []
+    non_contour_image_point_to_line_values: list[float] = []
 
     for sample in samples:
         sample_id = sample["sample_id"]
@@ -691,14 +717,18 @@ def benchmark_prediction_directory(
     orientation_names = sorted(
         orientation_names,
         key=lambda name: (
-            float(
-                name.removeprefix("yaw_")
-                .removesuffix("deg")
-                .replace("plus_", "+")
-                .replace("minus_", "-")
+            ORIENTATION_ORDER.index(name)
+            if name in ORIENTATION_ORDER
+            else (
+                float(
+                    name.removeprefix("yaw_")
+                    .removesuffix("deg")
+                    .replace("plus_", "+")
+                    .replace("minus_", "-")
+                )
+                if name.startswith("yaw_")
+                else float("inf")
             )
-            if name.startswith("yaw_")
-            else float("inf")
         ),
     )
 
@@ -980,6 +1010,9 @@ def benchmark_infantface_prediction_directory(
     images_without_prediction = 0
     images_with_invalid_prediction = 0
     valid_landmarks_used = 0
+    valid_non_contour_landmarks_used = 0
+    non_contour_image_nme_values: list[float] = []
+    non_contour_image_point_to_line_values: list[float] = []
 
     for gt_path in gt_paths:
         sample_id = gt_path.stem
@@ -1038,7 +1071,26 @@ def benchmark_infantface_prediction_directory(
                 target_landmarks=gt_landmarks,
                 valid_mask=valid_mask,
             )
+            non_contour_mask = np.zeros(68, dtype=bool)
+            non_contour_mask[17:68] = True
+            (
+                non_contour_errors,
+                non_contour_point_to_line_errors,
+                mean_box_nme_non_contour,
+                mean_box_nme_point_to_line_non_contour,
+            ) = compute_masked_per_landmark_metrics(
+                predicted_landmarks=predicted_landmarks,
+                target_landmarks=gt_landmarks,
+                valid_mask=non_contour_mask,
+            )
             valid_landmarks_used += len(current_errors)
+            valid_non_contour_landmarks_used += len(non_contour_errors)
+            if mean_box_nme_non_contour is not None:
+                non_contour_image_nme_values.append(mean_box_nme_non_contour)
+            if mean_box_nme_point_to_line_non_contour is not None:
+                non_contour_image_point_to_line_values.append(
+                    mean_box_nme_point_to_line_non_contour
+                )
             for landmark_index, error_value in current_errors.items():
                 per_landmark_errors[landmark_index].append(error_value)
                 orientation_to_errors[gt_orientation][landmark_index].append(
@@ -1082,11 +1134,13 @@ def benchmark_infantface_prediction_directory(
                 {
                     "sample_id": prediction_path.stem,
                     "orientation": gt_orientation,
-                    "mean_nme_box": mean_box_nme,
-                    "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
-                    "mean_nme_interocular": None,
-                }
-            )
+                        "mean_nme_box": mean_box_nme,
+                        "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
+                        "mean_nme_box_non_contour": mean_box_nme_non_contour,
+                        "mean_nme_box_point_to_line_non_contour": mean_box_nme_point_to_line_non_contour,
+                        "mean_nme_interocular": None,
+                    }
+                )
 
         if sample_has_valid_prediction:
             images_with_prediction += 1
@@ -1249,6 +1303,28 @@ def benchmark_infantface_prediction_directory(
             else None
         ),
         "valid_landmarks_used": int(valid_landmarks_used),
+        "valid_non_contour_landmarks_used": int(valid_non_contour_landmarks_used),
+        "excluded_non_contour_landmarks": "0-16 excluded; 17-67 evaluated",
+        "mean_nme_box_non_contour": (
+            float(np.mean(non_contour_image_nme_values))
+            if non_contour_image_nme_values
+            else None
+        ),
+        "median_nme_box_non_contour": (
+            float(np.median(non_contour_image_nme_values))
+            if non_contour_image_nme_values
+            else None
+        ),
+        "mean_nme_box_point_to_line_non_contour": (
+            float(np.mean(non_contour_image_point_to_line_values))
+            if non_contour_image_point_to_line_values
+            else None
+        ),
+        "median_nme_box_point_to_line_non_contour": (
+            float(np.median(non_contour_image_point_to_line_values))
+            if non_contour_image_point_to_line_values
+            else None
+        ),
         "invalid_prediction_files": invalid_prediction_files,
         "unmatched_prediction_files": unmatched_prediction_files,
         "orientation_sample_counts": {

@@ -6,6 +6,7 @@ import io
 import json
 import math
 import re
+import sys
 import warnings
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -14,6 +15,11 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+
+if __package__ is None or __package__ == "":
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.utils.orientation import ORIENTATION_ORDER, normalize_orientation_label
 
 try:
     import yaml
@@ -25,7 +31,7 @@ _SCIPY_IMPORT_ATTEMPTED = False
 
 
 IMAGE_ID_ALIASES = ("image_id", "sample_id", "stem", "filename", "file", "image")
-IMAGE_NME_ALIASES = (
+POINT_TO_POINT_IMAGE_NME_ALIASES = (
     "nme",
     "image_nme",
     "mean_nme",
@@ -33,12 +39,16 @@ IMAGE_NME_ALIASES = (
     "box_nme",
     "nme_box",
 )
-LANDMARK_NME_ALIASES = ("nme", "point_to_point_nme_box", "landmark_nme", "nme_box")
+POINT_TO_POINT_LANDMARK_NME_ALIASES = ("nme", "point_to_point_nme_box", "landmark_nme", "nme_box")
+POINT_TO_LINE_IMAGE_NME_ALIASES = (
+    "mean_nme_box_point_to_line",
+    "point_to_line_nme_box",
+    "point_to_line_nme",
+)
+POINT_TO_LINE_LANDMARK_NME_ALIASES = ("point_to_line_nme_box", "point_to_line_nme")
 LANDMARK_INDEX_ALIASES = ("landmark_index", "landmark_idx", "landmark_id", "landmark", "point_index")
 ORIENTATION_ALIASES = ("orientation", "yaw_group", "yaw_angle", "class_idx", "pose")
 DETECTED_ALIASES = ("detected", "is_detected", "success", "valid_detection")
-
-ORIENTATION_ORDER = ["left", "quarter_left", "frontal", "quarter_right", "right"]
 
 DEFAULT_MODEL_ORDER = ["vggheads", "Exp11", "dslpt", "mediapipe", "dlib"]
 DEFAULT_MODEL_COLORS = {
@@ -83,6 +93,16 @@ DEFAULT_BABYLAND72_REGIONS = {
     "left_chin": [70],
     "right_chin": [71],
 }
+
+
+@dataclass
+class BenchmarkMetricConfig:
+    """Configuration for one geometric benchmark metric."""
+
+    name: str
+    display_name: str
+    per_image_column_candidates: tuple[str, ...]
+    per_landmark_column_candidates: tuple[str, ...]
 
 
 @dataclass
@@ -135,6 +155,7 @@ class BenchmarkAnalysisConfig:
     bootstrap_iterations: int = 2000
     random_seed: int = 12345
     save_pdf: bool = False
+    metrics: list[BenchmarkMetricConfig] = field(default_factory=list)
 
 
 @dataclass
@@ -146,6 +167,22 @@ class LoadedModelResults:
     per_landmark: pd.DataFrame | None
     warnings: list[str] = field(default_factory=list)
     orientation_warnings: list[dict[str, Any]] = field(default_factory=list)
+
+
+DEFAULT_BENCHMARK_METRICS = [
+    BenchmarkMetricConfig(
+        name="point_to_point",
+        display_name="Point-to-point",
+        per_image_column_candidates=POINT_TO_POINT_IMAGE_NME_ALIASES,
+        per_landmark_column_candidates=POINT_TO_POINT_LANDMARK_NME_ALIASES,
+    ),
+    BenchmarkMetricConfig(
+        name="point_to_line",
+        display_name="Point-to-line",
+        per_image_column_candidates=POINT_TO_LINE_IMAGE_NME_ALIASES,
+        per_landmark_column_candidates=POINT_TO_LINE_LANDMARK_NME_ALIASES,
+    ),
+]
 
 
 def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -> BenchmarkAnalysisConfig:
@@ -226,6 +263,23 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
     if not models:
         raise ValueError("Config must contain at least one model.")
 
+    metric_configs = []
+    for item in raw.get("metrics", []):
+        metric_configs.append(
+            BenchmarkMetricConfig(
+                name=str(item["name"]),
+                display_name=str(item.get("display_name", item["name"])),
+                per_image_column_candidates=tuple(
+                    str(value) for value in item.get("per_image_column_candidates", [])
+                ),
+                per_landmark_column_candidates=tuple(
+                    str(value) for value in item.get("per_landmark_column_candidates", [])
+                ),
+            )
+        )
+    if not metric_configs:
+        metric_configs = DEFAULT_BENCHMARK_METRICS
+
     return BenchmarkAnalysisConfig(
         dataset=dataset,
         models=models,
@@ -233,6 +287,7 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
         bootstrap_iterations=int(raw.get("bootstrap_iterations", 2000)),
         random_seed=int(raw.get("random_seed", 12345)),
         save_pdf=bool(raw.get("save_pdf", False)),
+        metrics=metric_configs,
     )
 
 
@@ -334,27 +389,10 @@ def normalize_orientation_value(value: Any, mapping: dict[str, str]) -> str:
     """Normalize orientation labels, treating yaw_plus_*deg values as class labels."""
     if pd.isna(value):
         return ""
+    normalized = normalize_orientation_label(value)
+    if normalized is not None:
+        return normalized
     raw = str(value).strip()
-    if not raw:
-        return ""
-    lower = raw.lower()
-    canonical = {
-        "left": "left",
-        "quarter_left": "quarter_left",
-        "quarter left": "quarter_left",
-        "frontal": "frontal",
-        "front": "frontal",
-        "quarter_right": "quarter_right",
-        "quarter right": "quarter_right",
-        "right": "right",
-    }
-    if lower in canonical:
-        return canonical[lower]
-
-    yaw_class_match = re.fullmatch(r"yaw_(?:plus|minus)_([0-4])deg", lower)
-    if yaw_class_match:
-        return mapping.get(yaw_class_match.group(1), "")
-
     try:
         numeric = str(int(float(raw)))
     except ValueError:
@@ -399,6 +437,7 @@ def _read_csv(path: Path) -> pd.DataFrame:
 def load_model_results(
     model_config: ModelBenchmarkConfig,
     dataset_config: DatasetBenchmarkConfig,
+    metric_config: BenchmarkMetricConfig,
     drop_invalid_nme: bool = False,
 ) -> LoadedModelResults:
     """Load, normalize, and validate result CSVs for one model."""
@@ -411,7 +450,7 @@ def load_model_results(
         raw = _read_csv(model_config.per_image_csv)
         mapping = model_config.columns.get("per_image", {})
         image_col = resolve_column(raw, "image_id", IMAGE_ID_ALIASES, mapping)
-        nme_col = resolve_column(raw, "nme", IMAGE_NME_ALIASES, mapping)
+        nme_col = resolve_column(raw, "nme", metric_config.per_image_column_candidates, mapping)
         orientation_col = resolve_column(raw, "orientation", ORIENTATION_ALIASES, mapping, required=False)
         detected_col = resolve_column(raw, "detected", DETECTED_ALIASES, mapping, required=False)
 
@@ -449,7 +488,7 @@ def load_model_results(
         raw = _read_csv(model_config.per_landmark_csv)
         mapping = model_config.columns.get("per_landmark", {})
         image_col = resolve_column(raw, "image_id", IMAGE_ID_ALIASES, mapping)
-        nme_col = resolve_column(raw, "nme", LANDMARK_NME_ALIASES, mapping)
+        nme_col = resolve_column(raw, "nme", metric_config.per_landmark_column_candidates, mapping)
         landmark_col = resolve_column(raw, "landmark_index", LANDMARK_INDEX_ALIASES, mapping)
         orientation_col = resolve_column(raw, "orientation", ORIENTATION_ALIASES, mapping, required=False)
         valid_col = resolve_column(raw, "valid", ("valid", "is_valid"), mapping, required=False)
@@ -605,6 +644,65 @@ def compute_global_image_metrics(results: list[LoadedModelResults]) -> pd.DataFr
         row.update({key: value for key, value in summarize_nme(data["nme"], "image").items() if key != "n_image"})
         rows.append(row)
     return pd.DataFrame(rows).sort_values("mean_image_nme", na_position="last")
+
+
+def _safe_filename_token(value: str) -> str:
+    """Return a filesystem-friendly token."""
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "model"
+
+
+def compute_best_worst_cases(
+    results: list[LoadedModelResults],
+    dataset_config: DatasetBenchmarkConfig,
+    metric_config: BenchmarkMetricConfig,
+    top_k: int = 10,
+) -> pd.DataFrame:
+    """Extract the best and worst image-level cases per model."""
+    rows: list[dict[str, Any]] = []
+    for result in results:
+        if result.per_image is None:
+            continue
+        data = finite_nme(result.per_image).sort_values("nme", ascending=True)
+        for rank_type, subset in (
+            ("best", data.head(top_k)),
+            ("worst", data.tail(top_k).sort_values("nme", ascending=False)),
+        ):
+            for rank, (_, row) in enumerate(subset.iterrows(), start=1):
+                rows.append(
+                    {
+                        "model_name": result.config.name,
+                        "dataset_name": dataset_config.name,
+                        "metric_name": metric_config.name,
+                        "metric_display_name": metric_config.display_name,
+                        "image_id": row.get("image_id"),
+                        "sample_id": row.get("image_id"),
+                        "stem": row.get("image_key"),
+                        "orientation": row.get("orientation", ""),
+                        "image_level_nme": row.get("nme"),
+                        "rank_type": rank_type,
+                        "rank": rank,
+                        "detection_status": row.get("detected", True),
+                        "original_image_path": row.get("original_image_path", ""),
+                        "prediction_overlay_path": row.get("prediction_overlay_path", ""),
+                        "gt_overlay_path": row.get("gt_overlay_path", ""),
+                        "comparison_overlay_path": row.get("comparison_overlay_path", ""),
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def write_best_worst_case_tables(output_dir: Path, best_worst_cases: pd.DataFrame) -> None:
+    """Write combined and per-model best/worst CSV tables."""
+    tables_dir = output_dir / "tables"
+    if best_worst_cases.empty:
+        return
+    best_worst_cases.to_csv(tables_dir / "best_worst_cases_per_model.csv", index=False)
+    for model_name, model_rows in best_worst_cases.groupby("model_name"):
+        safe_name = _safe_filename_token(str(model_name))
+        best = model_rows[model_rows["rank_type"] == "best"].sort_values("rank")
+        worst = model_rows[model_rows["rank_type"] == "worst"].sort_values("rank")
+        best.to_csv(tables_dir / f"best_cases_{safe_name}.csv", index=False)
+        worst.to_csv(tables_dir / f"worst_cases_{safe_name}.csv", index=False)
 
 
 def compute_orientation_metrics(
@@ -1402,6 +1500,7 @@ def write_markdown_report(
     tables: dict[str, pd.DataFrame],
     plot_paths: list[str],
     warnings: list[str],
+    metric_config: BenchmarkMetricConfig | None = None,
 ) -> None:
     """Write the benchmark Markdown report."""
     dataset = config.dataset
@@ -1416,6 +1515,7 @@ def write_markdown_report(
         "",
         "## Inputs",
         f"- Dataset name: `{dataset.name}`",
+        f"- Geometric metric: `{metric_config.display_name if metric_config else 'NME'}`",
         f"- Generated: `{datetime.now().isoformat(timespec='seconds')}`",
         f"- Output directory: `{output_dir}`",
         f"- Primary model: `{dataset.primary_model or ''}`",
@@ -1482,6 +1582,24 @@ def write_markdown_report(
             "CED curves because a model can win often and still lose badly on a smaller "
             "set of outlier cases."
         )
+
+    lines.extend(["", "## Best and worst cases per model", ""])
+    best_worst_cases = tables.get("best_worst_cases_per_model", pd.DataFrame())
+    if best_worst_cases.empty:
+        lines.append("_Best/worst case extraction was unavailable._")
+    else:
+        for model_name in best_worst_cases["model_name"].drop_duplicates():
+            model_rows = best_worst_cases[best_worst_cases["model_name"] == model_name]
+            lines.extend(["", f"### {model_name}", "", "10 best cases:"])
+            best = model_rows[model_rows["rank_type"] == "best"][
+                ["rank", "image_id", "orientation", "image_level_nme", "prediction_overlay_path", "comparison_overlay_path"]
+            ]
+            lines.append(dataframe_to_markdown(best, max_rows=10))
+            lines.extend(["", "10 worst cases:"])
+            worst = model_rows[model_rows["rank_type"] == "worst"][
+                ["rank", "image_id", "orientation", "image_level_nme", "prediction_overlay_path", "comparison_overlay_path"]
+            ]
+            lines.append(dataframe_to_markdown(worst, max_rows=10))
 
     lines.extend(["", "## Per-landmark analysis", ""])
     if tables["per_landmark_metrics"].empty:
@@ -1626,13 +1744,38 @@ def generate_recommended_claims(
 
 def run_benchmark_analysis(config: BenchmarkAnalysisConfig) -> dict[str, pd.DataFrame]:
     """Run the complete benchmark analysis pipeline."""
+    all_tables: dict[str, pd.DataFrame] = {}
+    for metric_config in config.metrics:
+        metric_output_dir = config.dataset.output_dir / metric_config.name
+        metric_config_dataset = dataclasses_replace_dataset_output(config, metric_output_dir)
+        tables = run_benchmark_analysis_for_metric(metric_config_dataset, metric_config)
+        all_tables.update({f"{metric_config.name}/{key}": value for key, value in tables.items()})
+    return all_tables
+
+
+def dataclasses_replace_dataset_output(
+    config: BenchmarkAnalysisConfig,
+    output_dir: Path,
+) -> BenchmarkAnalysisConfig:
+    """Return a shallow config copy with a metric-specific output directory."""
+    import dataclasses
+
+    dataset = dataclasses.replace(config.dataset, output_dir=output_dir)
+    return dataclasses.replace(config, dataset=dataset)
+
+
+def run_benchmark_analysis_for_metric(
+    config: BenchmarkAnalysisConfig,
+    metric_config: BenchmarkMetricConfig,
+) -> dict[str, pd.DataFrame]:
+    """Run the complete benchmark analysis pipeline for one geometric metric."""
     output_dir = config.dataset.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "tables").mkdir(exist_ok=True)
     (output_dir / "plots").mkdir(exist_ok=True)
 
     results = [
-        load_model_results(model, config.dataset, drop_invalid_nme=config.drop_invalid_nme)
+        load_model_results(model, config.dataset, metric_config, drop_invalid_nme=config.drop_invalid_nme)
         for model in config.models
     ]
     warnings = [warning for result in results for warning in result.warnings]
@@ -1671,6 +1814,7 @@ def run_benchmark_analysis(config: BenchmarkAnalysisConfig) -> dict[str, pd.Data
     )
     rankings = compute_model_ranking_summary(global_metrics, orientation_metrics, region_metrics)
     input_summary = compute_dataset_input_summary(results)
+    best_worst_cases = compute_best_worst_cases(results, config.dataset, metric_config)
 
     if not pairwise.empty:
         missing_common = pairwise[pairwise["n_common_images"].fillna(0) == 0]
@@ -1689,8 +1833,10 @@ def run_benchmark_analysis(config: BenchmarkAnalysisConfig) -> dict[str, pd.Data
         "model_ranking_summary": rankings,
         "dataset_input_summary": input_summary,
         "orientation_label_warnings": orientation_warning_table,
+        "best_worst_cases_per_model": best_worst_cases,
     }
     write_tables(output_dir, tables)
+    write_best_worst_case_tables(output_dir, best_worst_cases)
     plot_paths = generate_benchmark_plots(
         output_dir,
         results,
@@ -1701,7 +1847,7 @@ def run_benchmark_analysis(config: BenchmarkAnalysisConfig) -> dict[str, pd.Data
         primary_vs,
         config,
     )
-    write_markdown_report(output_dir, config, tables, plot_paths, warnings)
+    write_markdown_report(output_dir, config, tables, plot_paths, warnings, metric_config)
     print(f"Benchmark analysis completed: {output_dir}")
     print(f"Tables: {output_dir / 'tables'}")
     print(f"Plots: {output_dir / 'plots'}")

@@ -5,21 +5,11 @@ from pathlib import Path
 
 import numpy as np
 
+from .orientation import ORIENTATION_CLASS_TO_NAME, ORIENTATION_ORDER
 
-NATURAL_CLASS_ID_TO_ORIENTATION = {
-    0: "left",
-    1: "quarter_left",
-    2: "frontal",
-    3: "quarter_right",
-    4: "right",
-}
-NATURAL_ORIENTATION_NAMES = [
-    "left",
-    "quarter_left",
-    "frontal",
-    "quarter_right",
-    "right",
-]
+
+NATURAL_CLASS_ID_TO_ORIENTATION = ORIENTATION_CLASS_TO_NAME
+NATURAL_ORIENTATION_NAMES = ORIENTATION_ORDER
 UNKNOWN_ORIENTATION = "unknown"
 
 
