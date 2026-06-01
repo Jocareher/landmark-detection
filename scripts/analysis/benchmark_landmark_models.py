@@ -646,11 +646,6 @@ def compute_global_image_metrics(results: list[LoadedModelResults]) -> pd.DataFr
     return pd.DataFrame(rows).sort_values("mean_image_nme", na_position="last")
 
 
-def _safe_filename_token(value: str) -> str:
-    """Return a filesystem-friendly token."""
-    return re.sub(r"[^A-Za-z0-9_.-]+", "_", value).strip("_") or "model"
-
-
 def compute_best_worst_cases(
     results: list[LoadedModelResults],
     dataset_config: DatasetBenchmarkConfig,
@@ -691,18 +686,22 @@ def compute_best_worst_cases(
     return pd.DataFrame(rows)
 
 
-def write_best_worst_case_tables(output_dir: Path, best_worst_cases: pd.DataFrame) -> None:
-    """Write combined and per-model best/worst CSV tables."""
-    tables_dir = output_dir / "tables"
+def split_best_worst_case_tables(best_worst_cases: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    """Split per-model best/worst rows into two consolidated CSV-ready tables."""
     if best_worst_cases.empty:
-        return
-    best_worst_cases.to_csv(tables_dir / "best_worst_cases_per_model.csv", index=False)
-    for model_name, model_rows in best_worst_cases.groupby("model_name"):
-        safe_name = _safe_filename_token(str(model_name))
-        best = model_rows[model_rows["rank_type"] == "best"].sort_values("rank")
-        worst = model_rows[model_rows["rank_type"] == "worst"].sort_values("rank")
-        best.to_csv(tables_dir / f"best_cases_{safe_name}.csv", index=False)
-        worst.to_csv(tables_dir / f"worst_cases_{safe_name}.csv", index=False)
+        return {
+            "best_cases": pd.DataFrame(),
+            "worst_cases": pd.DataFrame(),
+        }
+    sort_columns = ["model_name", "rank"]
+    return {
+        "best_cases": best_worst_cases[
+            best_worst_cases["rank_type"] == "best"
+        ].sort_values(sort_columns),
+        "worst_cases": best_worst_cases[
+            best_worst_cases["rank_type"] == "worst"
+        ].sort_values(sort_columns),
+    }
 
 
 def compute_orientation_metrics(
@@ -1584,19 +1583,26 @@ def write_markdown_report(
         )
 
     lines.extend(["", "## Best and worst cases per model", ""])
-    best_worst_cases = tables.get("best_worst_cases_per_model", pd.DataFrame())
-    if best_worst_cases.empty:
+    best_cases = tables.get("best_cases", pd.DataFrame())
+    worst_cases = tables.get("worst_cases", pd.DataFrame())
+    if best_cases.empty and worst_cases.empty:
         lines.append("_Best/worst case extraction was unavailable._")
     else:
-        for model_name in best_worst_cases["model_name"].drop_duplicates():
-            model_rows = best_worst_cases[best_worst_cases["model_name"] == model_name]
+        model_names = pd.concat(
+            [
+                best_cases.get("model_name", pd.Series(dtype=object)),
+                worst_cases.get("model_name", pd.Series(dtype=object)),
+            ],
+            ignore_index=True,
+        ).drop_duplicates()
+        for model_name in model_names:
             lines.extend(["", f"### {model_name}", "", "10 best cases:"])
-            best = model_rows[model_rows["rank_type"] == "best"][
+            best = best_cases[best_cases["model_name"] == model_name][
                 ["rank", "image_id", "orientation", "image_level_nme", "prediction_overlay_path", "comparison_overlay_path"]
             ]
             lines.append(dataframe_to_markdown(best, max_rows=10))
             lines.extend(["", "10 worst cases:"])
-            worst = model_rows[model_rows["rank_type"] == "worst"][
+            worst = worst_cases[worst_cases["model_name"] == model_name][
                 ["rank", "image_id", "orientation", "image_level_nme", "prediction_overlay_path", "comparison_overlay_path"]
             ]
             lines.append(dataframe_to_markdown(worst, max_rows=10))
@@ -1815,6 +1821,7 @@ def run_benchmark_analysis_for_metric(
     rankings = compute_model_ranking_summary(global_metrics, orientation_metrics, region_metrics)
     input_summary = compute_dataset_input_summary(results)
     best_worst_cases = compute_best_worst_cases(results, config.dataset, metric_config)
+    best_worst_tables = split_best_worst_case_tables(best_worst_cases)
 
     if not pairwise.empty:
         missing_common = pairwise[pairwise["n_common_images"].fillna(0) == 0]
@@ -1833,10 +1840,10 @@ def run_benchmark_analysis_for_metric(
         "model_ranking_summary": rankings,
         "dataset_input_summary": input_summary,
         "orientation_label_warnings": orientation_warning_table,
-        "best_worst_cases_per_model": best_worst_cases,
+        "best_cases": best_worst_tables["best_cases"],
+        "worst_cases": best_worst_tables["worst_cases"],
     }
     write_tables(output_dir, tables)
-    write_best_worst_case_tables(output_dir, best_worst_cases)
     plot_paths = generate_benchmark_plots(
         output_dir,
         results,

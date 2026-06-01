@@ -9,6 +9,7 @@ from scripts.analysis.benchmark_landmark_models import (
     LoadedModelResults,
     ModelBenchmarkConfig,
     compute_best_worst_cases,
+    split_best_worst_case_tables,
 )
 from scripts.engine.evaluation_modes import compute_masked_natural_per_landmark_nme
 from scripts.utils.orientation import normalize_orientation_label
@@ -87,3 +88,21 @@ def test_best_worst_cases_limits_to_ten_per_side() -> None:
     )
     assert len(cases[cases["rank_type"] == "best"]) == 10
     assert len(cases[cases["rank_type"] == "worst"]) == 10
+
+
+def test_best_worst_cases_are_split_into_two_consolidated_tables() -> None:
+    """Best/worst CSV tables keep all models together instead of splitting by model."""
+    cases = pd.DataFrame(
+        {
+            "model_name": ["model_a", "model_b", "model_a", "model_b"],
+            "rank_type": ["best", "best", "worst", "worst"],
+            "rank": [1, 1, 1, 1],
+            "image_level_nme": [0.01, 0.02, 0.50, 0.60],
+        }
+    )
+
+    tables = split_best_worst_case_tables(cases)
+
+    assert set(tables) == {"best_cases", "worst_cases"}
+    assert list(tables["best_cases"]["model_name"]) == ["model_a", "model_b"]
+    assert list(tables["worst_cases"]["model_name"]) == ["model_a", "model_b"]
