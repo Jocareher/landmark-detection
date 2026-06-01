@@ -121,6 +121,12 @@ def evaluate_natural_checkpoint(
     orientation_to_box_nme_point_to_line_values: dict[str, list[float]] = {
         orientation: [] for orientation in orientation_names
     }
+    orientation_to_box_nme_gt_valid_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
+    orientation_to_box_nme_point_to_line_gt_valid_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
     orientation_sample_counts = {orientation: 0 for orientation in orientation_names}
 
     with torch.inference_mode():
@@ -268,6 +274,13 @@ def evaluate_natural_checkpoint(
                 if mean_box_nme_gt_valid is not None:
                     num_samples_with_gt_valid_metrics += 1
                     num_gt_valid_landmarks += len(gt_valid_errors)
+                    orientation_to_box_nme_gt_valid_values[orientation].append(
+                        mean_box_nme_gt_valid
+                    )
+                if mean_box_nme_point_to_line_gt_valid is not None:
+                    orientation_to_box_nme_point_to_line_gt_valid_values[
+                        orientation
+                    ].append(mean_box_nme_point_to_line_gt_valid)
 
                 if mean_box_nme is not None:
                     num_samples_with_geometric_metrics += 1
@@ -417,14 +430,66 @@ def evaluate_natural_checkpoint(
         )
         orientation_metrics = {
             orientation: {
-                "mean_nme_box": (float(np.mean(values)) if values else None),
-                "mean_nme_box_point_to_line": (
+                "mean_nme_box_visible_intersection": (
+                    float(np.mean(values)) if values else None
+                ),
+                "median_nme_box_visible_intersection": (
+                    float(np.median(values)) if values else None
+                ),
+                "mean_nme_box_point_to_line_visible_intersection": (
                     float(
                         np.mean(
                             orientation_to_box_nme_point_to_line_values[orientation]
                         )
                     )
                     if orientation_to_box_nme_point_to_line_values[orientation]
+                    else None
+                ),
+                "median_nme_box_point_to_line_visible_intersection": (
+                    float(
+                        np.median(
+                            orientation_to_box_nme_point_to_line_values[orientation]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_values[orientation]
+                    else None
+                ),
+                "mean_nme_box_gt_valid": (
+                    float(np.mean(orientation_to_box_nme_gt_valid_values[orientation]))
+                    if orientation_to_box_nme_gt_valid_values[orientation]
+                    else None
+                ),
+                "median_nme_box_gt_valid": (
+                    float(
+                        np.median(orientation_to_box_nme_gt_valid_values[orientation])
+                    )
+                    if orientation_to_box_nme_gt_valid_values[orientation]
+                    else None
+                ),
+                "mean_nme_box_point_to_line_gt_valid": (
+                    float(
+                        np.mean(
+                            orientation_to_box_nme_point_to_line_gt_valid_values[
+                                orientation
+                            ]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_gt_valid_values[
+                        orientation
+                    ]
+                    else None
+                ),
+                "median_nme_box_point_to_line_gt_valid": (
+                    float(
+                        np.median(
+                            orientation_to_box_nme_point_to_line_gt_valid_values[
+                                orientation
+                            ]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_gt_valid_values[
+                        orientation
+                    ]
                     else None
                 ),
                 "mean_nme_interocular": None,
@@ -452,8 +517,14 @@ def evaluate_natural_checkpoint(
     else:
         orientation_metrics = {
             orientation: {
-                "mean_nme_box": None,
-                "mean_nme_box_point_to_line": None,
+                "mean_nme_box_visible_intersection": None,
+                "median_nme_box_visible_intersection": None,
+                "mean_nme_box_point_to_line_visible_intersection": None,
+                "median_nme_box_point_to_line_visible_intersection": None,
+                "mean_nme_box_gt_valid": None,
+                "median_nme_box_gt_valid": None,
+                "mean_nme_box_point_to_line_gt_valid": None,
+                "median_nme_box_point_to_line_gt_valid": None,
                 "mean_nme_interocular": None,
             }
             for orientation in orientation_names
@@ -495,12 +566,28 @@ def evaluate_natural_checkpoint(
         "median_nme_box": (
             float(np.median(valid_image_nme_values)) if valid_image_nme_values else None
         ),
+        "mean_nme_box_visible_intersection": (
+            float(np.mean(valid_image_nme_values)) if valid_image_nme_values else None
+        ),
+        "median_nme_box_visible_intersection": (
+            float(np.median(valid_image_nme_values)) if valid_image_nme_values else None
+        ),
         "mean_nme_box_point_to_line": (
             float(np.mean(valid_image_point_to_line_values))
             if valid_image_point_to_line_values
             else None
         ),
         "median_nme_box_point_to_line": (
+            float(np.median(valid_image_point_to_line_values))
+            if valid_image_point_to_line_values
+            else None
+        ),
+        "mean_nme_box_point_to_line_visible_intersection": (
+            float(np.mean(valid_image_point_to_line_values))
+            if valid_image_point_to_line_values
+            else None
+        ),
+        "median_nme_box_point_to_line_visible_intersection": (
             float(np.median(valid_image_point_to_line_values))
             if valid_image_point_to_line_values
             else None

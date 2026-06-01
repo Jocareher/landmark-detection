@@ -321,28 +321,67 @@ def main() -> None:
         )
 
     print("[INFO] Evaluation finished.")
-    if summary["mean_nme_box"] is not None:
-        print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.4f}")
+    has_explicit_visible_intersection = (
+        "mean_nme_box_visible_intersection" in summary
+        or "mean_nme_box_point_to_line_visible_intersection" in summary
+    )
+    if has_explicit_visible_intersection:
+        for key, label in (
+            (
+                "mean_nme_box_visible_intersection",
+                "Mean NME box visible-intersection",
+            ),
+            (
+                "median_nme_box_visible_intersection",
+                "Median NME box visible-intersection",
+            ),
+            (
+                "mean_nme_box_point_to_line_visible_intersection",
+                "Mean NME box point-to-line visible-intersection",
+            ),
+            (
+                "median_nme_box_point_to_line_visible_intersection",
+                "Median NME box point-to-line visible-intersection",
+            ),
+            ("mean_nme_box_gt_valid", "Mean NME box GT-valid"),
+            ("median_nme_box_gt_valid", "Median NME box GT-valid"),
+            (
+                "mean_nme_box_point_to_line_gt_valid",
+                "Mean NME box point-to-line GT-valid",
+            ),
+            (
+                "median_nme_box_point_to_line_gt_valid",
+                "Median NME box point-to-line GT-valid",
+            ),
+        ):
+            metric_value = summary.get(key)
+            if metric_value is not None:
+                print(f"[INFO] {label}: {metric_value:.4f}")
+            else:
+                print(f"[INFO] {label}: n/a")
     else:
-        print("[INFO] Mean NME box: n/a")
-    if summary["median_nme_box"] is not None:
-        print(f"[INFO] Median NME box: {summary['median_nme_box']:.4f}")
-    else:
-        print("[INFO] Median NME box: n/a")
-    if summary.get("mean_nme_box_point_to_line") is not None:
-        print(
-            "[INFO] Mean NME box point-to-line: "
-            f"{summary['mean_nme_box_point_to_line']:.4f}"
-        )
-    else:
-        print("[INFO] Mean NME box point-to-line: n/a")
-    if summary.get("median_nme_box_point_to_line") is not None:
-        print(
-            "[INFO] Median NME box point-to-line: "
-            f"{summary['median_nme_box_point_to_line']:.4f}"
-        )
-    else:
-        print("[INFO] Median NME box point-to-line: n/a")
+        if summary["mean_nme_box"] is not None:
+            print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.4f}")
+        else:
+            print("[INFO] Mean NME box: n/a")
+        if summary["median_nme_box"] is not None:
+            print(f"[INFO] Median NME box: {summary['median_nme_box']:.4f}")
+        else:
+            print("[INFO] Median NME box: n/a")
+        if summary.get("mean_nme_box_point_to_line") is not None:
+            print(
+                "[INFO] Mean NME box point-to-line: "
+                f"{summary['mean_nme_box_point_to_line']:.4f}"
+            )
+        else:
+            print("[INFO] Mean NME box point-to-line: n/a")
+        if summary.get("median_nme_box_point_to_line") is not None:
+            print(
+                "[INFO] Median NME box point-to-line: "
+                f"{summary['median_nme_box_point_to_line']:.4f}"
+            )
+        else:
+            print("[INFO] Median NME box point-to-line: n/a")
     if summary["mean_nme_interocular"] is not None:
         print(f"[INFO] Mean NME interocular: {summary['mean_nme_interocular']:.4f}")
     print_visibility_metrics(summary)

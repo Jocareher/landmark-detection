@@ -79,13 +79,52 @@ def print_evaluation_summary(
             print(f"[INFO]   {label}: {summary[key]}")
     if "detection_rate" in summary and summary["detection_rate"] is not None:
         print(f"[INFO]   detection rate: {summary['detection_rate'] * 100.0:.2f}%")
-    for key, label in (
+    metric_labels = (
+        (
+            "mean_nme_box_visible_intersection",
+            "mean NME box visible-intersection",
+        ),
+        (
+            "median_nme_box_visible_intersection",
+            "median NME box visible-intersection",
+        ),
+        (
+            "mean_nme_box_point_to_line_visible_intersection",
+            "mean NME box point-to-line visible-intersection",
+        ),
+        (
+            "median_nme_box_point_to_line_visible_intersection",
+            "median NME box point-to-line visible-intersection",
+        ),
         ("mean_nme_box", "mean NME box"),
         ("median_nme_box", "median NME box"),
         ("mean_nme_box_point_to_line", "mean NME box point-to-line"),
         ("median_nme_box_point_to_line", "median NME box point-to-line"),
+        ("mean_nme_box_gt_valid", "mean NME box GT-valid"),
+        ("median_nme_box_gt_valid", "median NME box GT-valid"),
+        (
+            "mean_nme_box_point_to_line_gt_valid",
+            "mean NME box point-to-line GT-valid",
+        ),
+        (
+            "median_nme_box_point_to_line_gt_valid",
+            "median NME box point-to-line GT-valid",
+        ),
         ("mean_nme_interocular", "mean NME interocular"),
-    ):
+    )
+    has_explicit_visible_intersection = (
+        "mean_nme_box_visible_intersection" in summary
+        or "mean_nme_box_point_to_line_visible_intersection" in summary
+    )
+    legacy_visible_keys = {
+        "mean_nme_box",
+        "median_nme_box",
+        "mean_nme_box_point_to_line",
+        "median_nme_box_point_to_line",
+    }
+    for key, label in metric_labels:
+        if has_explicit_visible_intersection and key in legacy_visible_keys:
+            continue
         if key in summary:
             print(f"[INFO]   {label}: {_format_metric(summary[key])}")
     _print_visibility_summary(summary, dataset_name)

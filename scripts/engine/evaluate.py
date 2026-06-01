@@ -269,6 +269,11 @@ def save_metrics_summary_csv(
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    has_explicit_visible_intersection = (
+        "mean_nme_box_visible_intersection" in summary
+        or "mean_nme_box_point_to_line_visible_intersection" in summary
+    )
+
     rows: list[tuple[str, Any]] = [
         ("num_samples", summary.get("num_samples")),
         (
@@ -280,54 +285,99 @@ def save_metrics_summary_csv(
             summary.get("num_visible_visible_landmarks"),
         ),
         ("num_landmarks", summary.get("num_landmarks")),
-        ("mean_nme_box", summary.get("mean_nme_box")),
-        ("median_nme_box", summary.get("median_nme_box")),
-        ("mean_nme_box_point_to_line", summary.get("mean_nme_box_point_to_line")),
-        (
-            "median_nme_box_point_to_line",
-            summary.get("median_nme_box_point_to_line"),
-        ),
-        ("mean_nme_interocular", summary.get("mean_nme_interocular")),
-        ("landmark_loss", summary.get("landmark_loss")),
-        ("coordinate_decoder", summary.get("coordinate_decoder")),
-        (
-            "visibility_global_precision",
-            summary.get("visibility_metrics", {}).get("global", {}).get("precision"),
-        ),
-        (
-            "visibility_global_recall",
-            summary.get("visibility_metrics", {}).get("global", {}).get("recall"),
-        ),
-        (
-            "visibility_global_f1",
-            summary.get("visibility_metrics", {}).get("global", {}).get("f1"),
-        ),
-        (
-            "visibility_visible_precision",
-            summary.get("visibility_metrics", {}).get("visible", {}).get("precision"),
-        ),
-        (
-            "visibility_visible_recall",
-            summary.get("visibility_metrics", {}).get("visible", {}).get("recall"),
-        ),
-        (
-            "visibility_visible_f1",
-            summary.get("visibility_metrics", {}).get("visible", {}).get("f1"),
-        ),
-        (
-            "visibility_invisible_precision",
-            summary.get("visibility_metrics", {}).get("invisible", {}).get("precision"),
-        ),
-        (
-            "visibility_invisible_recall",
-            summary.get("visibility_metrics", {}).get("invisible", {}).get("recall"),
-        ),
-        (
-            "visibility_invisible_f1",
-            summary.get("visibility_metrics", {}).get("invisible", {}).get("f1"),
-        ),
-        ("visibility_threshold", summary.get("visibility_threshold")),
     ]
+    if has_explicit_visible_intersection:
+        rows.extend(
+            [
+                (
+                    "mean_nme_box_visible_intersection",
+                    summary.get("mean_nme_box_visible_intersection"),
+                ),
+                (
+                    "median_nme_box_visible_intersection",
+                    summary.get("median_nme_box_visible_intersection"),
+                ),
+                (
+                    "mean_nme_box_point_to_line_visible_intersection",
+                    summary.get("mean_nme_box_point_to_line_visible_intersection"),
+                ),
+                (
+                    "median_nme_box_point_to_line_visible_intersection",
+                    summary.get("median_nme_box_point_to_line_visible_intersection"),
+                ),
+            ]
+        )
+    else:
+        rows.extend(
+            [
+                ("mean_nme_box", summary.get("mean_nme_box")),
+                ("median_nme_box", summary.get("median_nme_box")),
+                (
+                    "mean_nme_box_point_to_line",
+                    summary.get("mean_nme_box_point_to_line"),
+                ),
+                (
+                    "median_nme_box_point_to_line",
+                    summary.get("median_nme_box_point_to_line"),
+                ),
+            ]
+        )
+    rows.extend(
+        [
+            ("mean_nme_box_gt_valid", summary.get("mean_nme_box_gt_valid")),
+            ("median_nme_box_gt_valid", summary.get("median_nme_box_gt_valid")),
+            (
+                "mean_nme_box_point_to_line_gt_valid",
+                summary.get("mean_nme_box_point_to_line_gt_valid"),
+            ),
+            (
+                "median_nme_box_point_to_line_gt_valid",
+                summary.get("median_nme_box_point_to_line_gt_valid"),
+            ),
+            ("mean_nme_interocular", summary.get("mean_nme_interocular")),
+            ("landmark_loss", summary.get("landmark_loss")),
+            ("coordinate_decoder", summary.get("coordinate_decoder")),
+            (
+                "visibility_global_precision",
+                summary.get("visibility_metrics", {}).get("global", {}).get("precision"),
+            ),
+            (
+                "visibility_global_recall",
+                summary.get("visibility_metrics", {}).get("global", {}).get("recall"),
+            ),
+            (
+                "visibility_global_f1",
+                summary.get("visibility_metrics", {}).get("global", {}).get("f1"),
+            ),
+            (
+                "visibility_visible_precision",
+                summary.get("visibility_metrics", {}).get("visible", {}).get("precision"),
+            ),
+            (
+                "visibility_visible_recall",
+                summary.get("visibility_metrics", {}).get("visible", {}).get("recall"),
+            ),
+            (
+                "visibility_visible_f1",
+                summary.get("visibility_metrics", {}).get("visible", {}).get("f1"),
+            ),
+            (
+                "visibility_invisible_precision",
+                summary.get("visibility_metrics", {})
+                .get("invisible", {})
+                .get("precision"),
+            ),
+            (
+                "visibility_invisible_recall",
+                summary.get("visibility_metrics", {}).get("invisible", {}).get("recall"),
+            ),
+            (
+                "visibility_invisible_f1",
+                summary.get("visibility_metrics", {}).get("invisible", {}).get("f1"),
+            ),
+            ("visibility_threshold", summary.get("visibility_threshold")),
+        ]
+    )
 
     confusion_matrix_raw = summary.get("confusion_matrix_raw")
     confusion_matrix_normalized = summary.get("confusion_matrix_normalized")
@@ -382,15 +432,60 @@ def save_metrics_summary_csv(
     orientation_metrics = summary.get("orientation_metrics")
     if orientation_metrics is not None:
         for orientation_name, metrics in orientation_metrics.items():
-            rows.append(
-                (f"mean_nme_box_{orientation_name}", metrics.get("mean_nme_box"))
-            )
-            rows.append(
-                (
-                    f"mean_nme_box_point_to_line_{orientation_name}",
-                    metrics.get("mean_nme_box_point_to_line"),
+            if (
+                "mean_nme_box_visible_intersection" in metrics
+                or "mean_nme_box_point_to_line_visible_intersection" in metrics
+            ):
+                rows.extend(
+                    [
+                        (
+                            f"mean_nme_box_visible_intersection_{orientation_name}",
+                            metrics.get("mean_nme_box_visible_intersection"),
+                        ),
+                        (
+                            f"median_nme_box_visible_intersection_{orientation_name}",
+                            metrics.get("median_nme_box_visible_intersection"),
+                        ),
+                        (
+                            f"mean_nme_box_point_to_line_visible_intersection_{orientation_name}",
+                            metrics.get(
+                                "mean_nme_box_point_to_line_visible_intersection"
+                            ),
+                        ),
+                        (
+                            f"median_nme_box_point_to_line_visible_intersection_{orientation_name}",
+                            metrics.get(
+                                "median_nme_box_point_to_line_visible_intersection"
+                            ),
+                        ),
+                        (
+                            f"mean_nme_box_gt_valid_{orientation_name}",
+                            metrics.get("mean_nme_box_gt_valid"),
+                        ),
+                        (
+                            f"median_nme_box_gt_valid_{orientation_name}",
+                            metrics.get("median_nme_box_gt_valid"),
+                        ),
+                        (
+                            f"mean_nme_box_point_to_line_gt_valid_{orientation_name}",
+                            metrics.get("mean_nme_box_point_to_line_gt_valid"),
+                        ),
+                        (
+                            f"median_nme_box_point_to_line_gt_valid_{orientation_name}",
+                            metrics.get("median_nme_box_point_to_line_gt_valid"),
+                        ),
+                    ]
                 )
-            )
+            else:
+                rows.append(
+                    (f"mean_nme_box_{orientation_name}", metrics.get("mean_nme_box"))
+                )
+                rows.append(
+                    (
+                        f"mean_nme_box_point_to_line_{orientation_name}",
+                        metrics.get("mean_nme_box_point_to_line"),
+                    )
+                )
             rows.append(
                 (
                     f"mean_nme_interocular_{orientation_name}",
