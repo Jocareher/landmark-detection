@@ -428,8 +428,6 @@ def save_benchmark_summary_csv(output_path: Path, summary: dict[str, Any]) -> No
             summary.get("unmatched_prediction_files_count"),
         ),
         ("detection_rate", summary.get("detection_rate")),
-        ("mean_nme_box", summary.get("mean_nme_box")),
-        ("median_nme_box", summary.get("median_nme_box")),
         (
             "mean_nme_box_visible_intersection",
             summary.get("mean_nme_box_visible_intersection"),
@@ -437,11 +435,6 @@ def save_benchmark_summary_csv(output_path: Path, summary: dict[str, Any]) -> No
         (
             "median_nme_box_visible_intersection",
             summary.get("median_nme_box_visible_intersection"),
-        ),
-        ("mean_nme_box_point_to_line", summary.get("mean_nme_box_point_to_line")),
-        (
-            "median_nme_box_point_to_line",
-            summary.get("median_nme_box_point_to_line"),
         ),
         (
             "mean_nme_box_point_to_line_visible_intersection",
@@ -488,28 +481,12 @@ def save_benchmark_summary_csv(output_path: Path, summary: dict[str, Any]) -> No
             rows.extend(
                 [
                     (
-                        f"mean_nme_box_{orientation_name}",
-                        metrics.get("mean_nme_box"),
-                    ),
-                    (
-                        f"median_nme_box_{orientation_name}",
-                        metrics.get("median_nme_box"),
-                    ),
-                    (
                         f"mean_nme_box_visible_intersection_{orientation_name}",
                         metrics.get("mean_nme_box_visible_intersection"),
                     ),
                     (
                         f"median_nme_box_visible_intersection_{orientation_name}",
                         metrics.get("median_nme_box_visible_intersection"),
-                    ),
-                    (
-                        f"mean_nme_box_point_to_line_{orientation_name}",
-                        metrics.get("mean_nme_box_point_to_line"),
-                    ),
-                    (
-                        f"median_nme_box_point_to_line_{orientation_name}",
-                        metrics.get("median_nme_box_point_to_line"),
                     ),
                     (
                         f"mean_nme_box_point_to_line_visible_intersection_{orientation_name}",
@@ -942,33 +919,11 @@ def benchmark_prediction_directory(
         )
         orientation_metrics = {
             orientation: {
-                "mean_nme_box": (float(np.mean(values)) if values else None),
-                "median_nme_box": (
-                    float(np.median(values)) if values else None
-                ),
                 "mean_nme_box_visible_intersection": (
                     float(np.mean(values)) if values else None
                 ),
                 "median_nme_box_visible_intersection": (
                     float(np.median(values)) if values else None
-                ),
-                "mean_nme_box_point_to_line": (
-                    float(
-                        np.mean(
-                            orientation_to_box_nme_point_to_line_values[orientation]
-                        )
-                    )
-                    if orientation_to_box_nme_point_to_line_values[orientation]
-                    else None
-                ),
-                "median_nme_box_point_to_line": (
-                    float(
-                        np.median(
-                            orientation_to_box_nme_point_to_line_values[orientation]
-                        )
-                    )
-                    if orientation_to_box_nme_point_to_line_values[orientation]
-                    else None
                 ),
                 "mean_nme_box_point_to_line_visible_intersection": (
                     float(
@@ -1082,12 +1037,8 @@ def benchmark_prediction_directory(
     else:
         orientation_metrics = {
             orientation: {
-                "mean_nme_box": None,
-                "median_nme_box": None,
                 "mean_nme_box_visible_intersection": None,
                 "median_nme_box_visible_intersection": None,
-                "mean_nme_box_point_to_line": None,
-                "median_nme_box_point_to_line": None,
                 "mean_nme_box_point_to_line_visible_intersection": None,
                 "median_nme_box_point_to_line_visible_intersection": None,
                 "mean_nme_box_gt_valid": None,
@@ -1111,22 +1062,6 @@ def benchmark_prediction_directory(
         "images_with_invalid_prediction": int(images_with_invalid_prediction),
         "unmatched_prediction_files_count": int(len(unmatched_prediction_files)),
         "detection_rate": float(images_with_prediction / max(len(samples), 1)),
-        "mean_nme_box": (
-            float(np.mean(valid_image_nme_values)) if valid_image_nme_values else None
-        ),
-        "median_nme_box": (
-            float(np.median(valid_image_nme_values)) if valid_image_nme_values else None
-        ),
-        "mean_nme_box_point_to_line": (
-            float(np.mean(valid_image_point_to_line_values))
-            if valid_image_point_to_line_values
-            else None
-        ),
-        "median_nme_box_point_to_line": (
-            float(np.median(valid_image_point_to_line_values))
-            if valid_image_point_to_line_values
-            else None
-        ),
         "mean_nme_box_visible_intersection": (
             float(np.mean(valid_image_nme_values)) if valid_image_nme_values else None
         ),

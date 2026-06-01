@@ -97,17 +97,30 @@ def main() -> None:
         f"{summary['images_with_prediction']}/{summary['total_images']} "
         f"({summary['detection_rate'] * 100.0:.2f}%)"
     )
-    if summary["mean_nme_box"] is not None:
-        print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.4f}")
-    else:
-        print("[INFO] Mean NME box: n/a")
-    if summary["mean_nme_box_point_to_line"] is not None:
+    if summary.get("mean_nme_box_visible_intersection") is not None:
         print(
-            "[INFO] Mean NME box point-to-line: "
-            f"{summary['mean_nme_box_point_to_line']:.4f}"
+            "[INFO] Mean NME box visible-intersection: "
+            f"{summary['mean_nme_box_visible_intersection']:.4f}"
         )
     else:
-        print("[INFO] Mean NME box point-to-line: n/a")
+        print("[INFO] Mean NME box visible-intersection: n/a")
+    if summary.get("median_nme_box_visible_intersection") is not None:
+        print(
+            "[INFO] Median NME box visible-intersection: "
+            f"{summary['median_nme_box_visible_intersection']:.4f}"
+        )
+    if summary.get("mean_nme_box_point_to_line_visible_intersection") is not None:
+        print(
+            "[INFO] Mean NME box point-to-line visible-intersection: "
+            f"{summary['mean_nme_box_point_to_line_visible_intersection']:.4f}"
+        )
+    else:
+        print("[INFO] Mean NME box point-to-line visible-intersection: n/a")
+    if summary.get("median_nme_box_point_to_line_visible_intersection") is not None:
+        print(
+            "[INFO] Median NME box point-to-line visible-intersection: "
+            f"{summary['median_nme_box_point_to_line_visible_intersection']:.4f}"
+        )
     if summary.get("mean_nme_box_gt_valid") is not None:
         print(
             "[INFO] Mean NME box GT-valid: "

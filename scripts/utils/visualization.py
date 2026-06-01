@@ -925,12 +925,20 @@ def plot_yaw_view_boxplots(
             f"{display_label.replace('_', ' ').title()}"
         )
         summary_parts = []
-        if current_metrics.get("mean_nme_box") is not None:
-            summary_parts.append(f"Mean NME box: {current_metrics['mean_nme_box']:.4f}")
-        if current_metrics.get("mean_nme_box_point_to_line") is not None:
+        mean_nme_box = current_metrics.get(
+            "mean_nme_box_visible_intersection",
+            current_metrics.get("mean_nme_box"),
+        )
+        mean_nme_point_to_line = current_metrics.get(
+            "mean_nme_box_point_to_line_visible_intersection",
+            current_metrics.get("mean_nme_box_point_to_line"),
+        )
+        if mean_nme_box is not None:
+            summary_parts.append(f"Mean NME box: {mean_nme_box:.4f}")
+        if mean_nme_point_to_line is not None:
             summary_parts.append(
                 "Mean NME point-to-line: "
-                f"{current_metrics['mean_nme_box_point_to_line']:.4f}"
+                f"{mean_nme_point_to_line:.4f}"
             )
         if current_metrics.get("mean_nme_interocular") is not None:
             summary_parts.append(
