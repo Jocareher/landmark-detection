@@ -492,8 +492,52 @@ def save_benchmark_summary_csv(output_path: Path, summary: dict[str, Any]) -> No
                         metrics.get("mean_nme_box"),
                     ),
                     (
+                        f"median_nme_box_{orientation_name}",
+                        metrics.get("median_nme_box"),
+                    ),
+                    (
+                        f"mean_nme_box_visible_intersection_{orientation_name}",
+                        metrics.get("mean_nme_box_visible_intersection"),
+                    ),
+                    (
+                        f"median_nme_box_visible_intersection_{orientation_name}",
+                        metrics.get("median_nme_box_visible_intersection"),
+                    ),
+                    (
                         f"mean_nme_box_point_to_line_{orientation_name}",
                         metrics.get("mean_nme_box_point_to_line"),
+                    ),
+                    (
+                        f"median_nme_box_point_to_line_{orientation_name}",
+                        metrics.get("median_nme_box_point_to_line"),
+                    ),
+                    (
+                        f"mean_nme_box_point_to_line_visible_intersection_{orientation_name}",
+                        metrics.get(
+                            "mean_nme_box_point_to_line_visible_intersection"
+                        ),
+                    ),
+                    (
+                        f"median_nme_box_point_to_line_visible_intersection_{orientation_name}",
+                        metrics.get(
+                            "median_nme_box_point_to_line_visible_intersection"
+                        ),
+                    ),
+                    (
+                        f"mean_nme_box_gt_valid_{orientation_name}",
+                        metrics.get("mean_nme_box_gt_valid"),
+                    ),
+                    (
+                        f"median_nme_box_gt_valid_{orientation_name}",
+                        metrics.get("median_nme_box_gt_valid"),
+                    ),
+                    (
+                        f"mean_nme_box_point_to_line_gt_valid_{orientation_name}",
+                        metrics.get("mean_nme_box_point_to_line_gt_valid"),
+                    ),
+                    (
+                        f"median_nme_box_point_to_line_gt_valid_{orientation_name}",
+                        metrics.get("median_nme_box_point_to_line_gt_valid"),
                     ),
                 ]
             )
@@ -565,6 +609,8 @@ def benchmark_prediction_directory(
     orientation_to_errors_72: dict[str, list[list[float]]] = {}
     orientation_to_box_nme_values: dict[str, list[float]] = {}
     orientation_to_box_nme_point_to_line_values: dict[str, list[float]] = {}
+    orientation_to_box_nme_gt_valid_values: dict[str, list[float]] = {}
+    orientation_to_box_nme_point_to_line_gt_valid_values: dict[str, list[float]] = {}
     orientation_sample_counts: dict[str, int] = {}
     orientation_display_labels: dict[str, str] = {}
     per_image_nme: list[dict[str, Any]] = []
@@ -603,6 +649,8 @@ def benchmark_prediction_directory(
             orientation_to_errors_72[gt_orientation] = [[] for _ in range(72)]
             orientation_to_box_nme_values[gt_orientation] = []
             orientation_to_box_nme_point_to_line_values[gt_orientation] = []
+            orientation_to_box_nme_gt_valid_values[gt_orientation] = []
+            orientation_to_box_nme_point_to_line_gt_valid_values[gt_orientation] = []
             orientation_sample_counts[gt_orientation] = 0
             if gt_orientation.startswith("yaw_"):
                 yaw_text = gt_orientation.removeprefix("yaw_").removesuffix("deg")
@@ -768,6 +816,14 @@ def benchmark_prediction_directory(
                 orientation_to_box_nme_point_to_line_values[gt_orientation].append(
                     mean_box_nme_point_to_line
                 )
+            if mean_box_nme_gt_valid is not None:
+                orientation_to_box_nme_gt_valid_values[gt_orientation].append(
+                    mean_box_nme_gt_valid
+                )
+            if mean_box_nme_point_to_line_gt_valid is not None:
+                orientation_to_box_nme_point_to_line_gt_valid_values[
+                    gt_orientation
+                ].append(mean_box_nme_point_to_line_gt_valid)
 
             per_image_nme.append(
                 {
@@ -887,6 +943,15 @@ def benchmark_prediction_directory(
         orientation_metrics = {
             orientation: {
                 "mean_nme_box": (float(np.mean(values)) if values else None),
+                "median_nme_box": (
+                    float(np.median(values)) if values else None
+                ),
+                "mean_nme_box_visible_intersection": (
+                    float(np.mean(values)) if values else None
+                ),
+                "median_nme_box_visible_intersection": (
+                    float(np.median(values)) if values else None
+                ),
                 "mean_nme_box_point_to_line": (
                     float(
                         np.mean(
@@ -894,6 +959,71 @@ def benchmark_prediction_directory(
                         )
                     )
                     if orientation_to_box_nme_point_to_line_values[orientation]
+                    else None
+                ),
+                "median_nme_box_point_to_line": (
+                    float(
+                        np.median(
+                            orientation_to_box_nme_point_to_line_values[orientation]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_values[orientation]
+                    else None
+                ),
+                "mean_nme_box_point_to_line_visible_intersection": (
+                    float(
+                        np.mean(
+                            orientation_to_box_nme_point_to_line_values[orientation]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_values[orientation]
+                    else None
+                ),
+                "median_nme_box_point_to_line_visible_intersection": (
+                    float(
+                        np.median(
+                            orientation_to_box_nme_point_to_line_values[orientation]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_values[orientation]
+                    else None
+                ),
+                "mean_nme_box_gt_valid": (
+                    float(np.mean(orientation_to_box_nme_gt_valid_values[orientation]))
+                    if orientation_to_box_nme_gt_valid_values[orientation]
+                    else None
+                ),
+                "median_nme_box_gt_valid": (
+                    float(
+                        np.median(orientation_to_box_nme_gt_valid_values[orientation])
+                    )
+                    if orientation_to_box_nme_gt_valid_values[orientation]
+                    else None
+                ),
+                "mean_nme_box_point_to_line_gt_valid": (
+                    float(
+                        np.mean(
+                            orientation_to_box_nme_point_to_line_gt_valid_values[
+                                orientation
+                            ]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_gt_valid_values[
+                        orientation
+                    ]
+                    else None
+                ),
+                "median_nme_box_point_to_line_gt_valid": (
+                    float(
+                        np.median(
+                            orientation_to_box_nme_point_to_line_gt_valid_values[
+                                orientation
+                            ]
+                        )
+                    )
+                    if orientation_to_box_nme_point_to_line_gt_valid_values[
+                        orientation
+                    ]
                     else None
                 ),
                 "mean_nme_interocular": None,
@@ -953,7 +1083,17 @@ def benchmark_prediction_directory(
         orientation_metrics = {
             orientation: {
                 "mean_nme_box": None,
+                "median_nme_box": None,
+                "mean_nme_box_visible_intersection": None,
+                "median_nme_box_visible_intersection": None,
                 "mean_nme_box_point_to_line": None,
+                "median_nme_box_point_to_line": None,
+                "mean_nme_box_point_to_line_visible_intersection": None,
+                "median_nme_box_point_to_line_visible_intersection": None,
+                "mean_nme_box_gt_valid": None,
+                "median_nme_box_gt_valid": None,
+                "mean_nme_box_point_to_line_gt_valid": None,
+                "median_nme_box_point_to_line_gt_valid": None,
                 "mean_nme_interocular": None,
             }
             for orientation in orientation_names
