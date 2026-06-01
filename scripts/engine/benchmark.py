@@ -350,6 +350,7 @@ def compute_masked_per_landmark_metrics(
     predicted_landmarks: np.ndarray,
     target_landmarks: np.ndarray,
     valid_mask: np.ndarray,
+    normalization_landmarks: np.ndarray | None = None,
     eps: float = 1e-6,
 ) -> tuple[dict[int, float], dict[int, float], float | None, float | None]:
     """Compute point-to-point and point-to-line NME for one masked subset."""
@@ -375,9 +376,25 @@ def compute_masked_per_landmark_metrics(
         posinf=0.0,
         neginf=0.0,
     )
+    if normalization_landmarks is None:
+        normalization_landmarks = target_landmarks[valid_mask]
+    finite_normalization_mask = np.isfinite(
+        normalization_landmarks[:, 0]
+    ) & np.isfinite(normalization_landmarks[:, 1])
+    safe_normalization_landmarks = np.nan_to_num(
+        normalization_landmarks[finite_normalization_mask].astype(
+            np.float32,
+            copy=True,
+        ),
+        nan=0.0,
+        posinf=0.0,
+        neginf=0.0,
+    )
+    if len(safe_normalization_landmarks) == 0:
+        return {}, {}, None, None
 
     normalization = compute_box_normalization_factor(
-        target_landmarks=safe_target_landmarks[valid_mask],
+        target_landmarks=safe_normalization_landmarks,
         eps=eps,
     )
     point_errors = np.linalg.norm(
@@ -1239,6 +1256,7 @@ def benchmark_infantface_prediction_directory(
                 predicted_landmarks=predicted_landmarks,
                 target_landmarks=gt_landmarks,
                 valid_mask=non_contour_mask,
+                normalization_landmarks=gt_landmarks,
             )
             valid_landmarks_used += len(current_errors)
             valid_non_contour_landmarks_used += len(non_contour_errors)
