@@ -1,0 +1,84 @@
+# Example multi-protocol benchmark configuration for InfAnFace.
+
+dataset:
+  name: "InfAnFace"
+  dataset_type: "infanface"
+  output_dir: "/Users/jocareher/Documents/infanface_benchmark_output"
+  primary_model: "BabyLand-72 Exp11"
+  reference_models: ["infanface", "vggheads", "dslpt", "mediapipe", "dlib"]
+  model_order: ["BabyLand-72 Exp11", "infanface", "vggheads", "dslpt", "mediapipe", "dlib"]
+  model_display_names:
+    "BabyLand-72 Exp11": "Exp11"
+    "infanface": "InfAnFace"
+    "vggheads": "VGGHeads"
+    "dslpt": "DSLPT"
+    "mediapipe": "MediaPipe"
+    "dlib": "Dlib"
+  orientation_order: ["left", "quarter_left", "frontal", "quarter_right", "right"]
+  include_unknown_orientations: false
+  landmark_count: 68
+  landmark_index_base: "auto"
+  image_id_strip_regexes: ["__det_\\d+$"]
+  orientation_mapping:
+    0: "left"
+    1: "quarter_left"
+    2: "frontal"
+    3: "quarter_right"
+    4: "right"
+
+evaluation_protocols:
+  - name: "all_landmarks"
+    display_name: "All landmarks"
+    description: "Uses all evaluated landmarks."
+  - name: "non_contour"
+    display_name: "Non-contour landmarks"
+    description: "Excludes face-contour landmarks from the averaged error."
+
+metrics:
+  - name: "point_to_point"
+    display_name: "Point-to-point"
+  - name: "point_to_line"
+    display_name: "Point-to-line"
+
+models:
+  - name: "dlib"
+    detection_rate: 0.4593
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/dlib/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/dlib/per_image_per_landmark_nme.csv"
+    landmark_format: "68"
+  - name: "infanface"
+    detection_rate: 1.0000
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/infanface/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/infanface/per_image_per_landmark_nme.csv"
+    landmark_format: "68"
+  - name: "mediapipe"
+    detection_rate: 0.9432
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/mediapipe/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/mediapipe/per_image_per_landmark_nme.csv"
+    landmark_format: "68"
+  - name: "vggheads"
+    detection_rate: 1.0000
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/vggheads/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/vggheads/per_image_per_landmark_nme.csv"
+    landmark_format: "68"
+  - name: "dslpt"
+    detection_rate: 1.0000
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/dslpt/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/dslpt/per_image_per_landmark_nme.csv"
+    landmark_format: "68"
+  - name: "BabyLand-72 Exp11"
+    detection_rate: 1.0000
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/exp11/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/exp11/per_image_per_landmark_nme.csv"
+    landmark_format: "68"
+
+plotting:
+  generate_log_scale_variants: true
+  log_scale_epsilon: 1.0e-8
+  ced_zoom_max_nme: 0.40
+  save_pdf: false
+  plot_dpi: 300
+
+drop_invalid_nme: false
+bootstrap_iterations: 2000
+random_seed: 12345

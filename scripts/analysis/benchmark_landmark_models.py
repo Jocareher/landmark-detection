@@ -106,6 +106,15 @@ class BenchmarkMetricConfig:
 
 
 @dataclass
+class EvaluationProtocolConfig:
+    """Configuration for one dataset-specific evaluation protocol."""
+
+    name: str
+    display_name: str
+    description: str = ""
+
+
+@dataclass
 class ModelBenchmarkConfig:
     """Configuration for one model in the landmark benchmark."""
 
@@ -124,6 +133,7 @@ class DatasetBenchmarkConfig:
 
     name: str
     output_dir: Path
+    dataset_type: str = ""
     primary_model: str | None = None
     reference_models: list[str] = field(default_factory=list)
     orientation_mapping: dict[str, str] = field(default_factory=dict)
@@ -143,6 +153,8 @@ class DatasetBenchmarkConfig:
     annotate_bars: bool = True
     annotate_boxplot_means: bool = True
     show_violin_plots: bool = False
+    evaluation_protocol: str = ""
+    evaluation_protocol_display_name: str = ""
 
 
 @dataclass
@@ -151,11 +163,13 @@ class BenchmarkAnalysisConfig:
 
     dataset: DatasetBenchmarkConfig
     models: list[ModelBenchmarkConfig]
+    evaluation_protocols: list[EvaluationProtocolConfig] = field(default_factory=list)
     drop_invalid_nme: bool = False
     bootstrap_iterations: int = 2000
     random_seed: int = 12345
     save_pdf: bool = False
     metrics: list[BenchmarkMetricConfig] = field(default_factory=list)
+    column_mappings: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -167,6 +181,7 @@ class LoadedModelResults:
     per_landmark: pd.DataFrame | None
     warnings: list[str] = field(default_factory=list)
     orientation_warnings: list[dict[str, Any]] = field(default_factory=list)
+    column_audit: list[dict[str, Any]] = field(default_factory=list)
 
 
 DEFAULT_BENCHMARK_METRICS = [
@@ -183,6 +198,156 @@ DEFAULT_BENCHMARK_METRICS = [
         per_landmark_column_candidates=POINT_TO_LINE_LANDMARK_NME_ALIASES,
     ),
 ]
+
+DEFAULT_PROTOCOLS_BY_DATASET_TYPE = {
+    "babyland72": [
+        EvaluationProtocolConfig(
+            name="visibility_intersection",
+            display_name="Visibility intersection",
+            description="Uses landmarks where GT visibility = 1 and predicted visibility = 1.",
+        ),
+        EvaluationProtocolConfig(
+            name="gt_valid",
+            display_name="GT-valid landmarks",
+            description="Uses all finite GT landmarks, regardless of predicted visibility.",
+        ),
+    ],
+    "infanface": [
+        EvaluationProtocolConfig(
+            name="all_landmarks",
+            display_name="All landmarks",
+            description="Uses all evaluated landmarks.",
+        ),
+        EvaluationProtocolConfig(
+            name="non_contour",
+            display_name="Non-contour landmarks",
+            description="Excludes face-contour landmarks from the averaged error.",
+        ),
+    ],
+}
+
+DEFAULT_COLUMN_MAPPINGS = {
+    "babyland72": {
+        "per_image": {
+            "visibility_intersection": {
+                "point_to_point": {
+                    "candidates": [
+                        "mean_nme_box_visibility_intersection",
+                        "mean_nme_box_visible_intersection",
+                        "mean_nme_visibility_intersection",
+                        "mean_nme_box",
+                        "image_nme",
+                        "nme",
+                    ]
+                },
+                "point_to_line": {
+                    "candidates": [
+                        "mean_nme_box_point_to_line_visibility_intersection",
+                        "mean_nme_box_point_to_line_visible_intersection",
+                        "point_to_line_nme_box_visibility_intersection",
+                        "mean_nme_box_point_to_line",
+                    ]
+                },
+            },
+            "gt_valid": {
+                "point_to_point": {
+                    "candidates": [
+                        "mean_nme_box_gt_valid",
+                        "point_to_point_nme_box_gt_valid",
+                        "mean_nme_gt_valid",
+                    ]
+                },
+                "point_to_line": {
+                    "candidates": [
+                        "mean_nme_box_point_to_line_gt_valid",
+                        "point_to_line_nme_box_gt_valid",
+                        "mean_nme_point_to_line_gt_valid",
+                    ]
+                },
+            },
+        },
+        "per_landmark": {
+            "visibility_intersection": {
+                "point_to_point": {
+                    "candidates": [
+                        "point_to_point_nme_box_visibility_intersection",
+                        "point_to_point_nme_visibility_intersection",
+                        "point_to_point_nme_box",
+                        "nme",
+                    ]
+                },
+                "point_to_line": {
+                    "candidates": [
+                        "point_to_line_nme_box_visibility_intersection",
+                        "point_to_line_nme_box",
+                    ]
+                },
+            },
+            "gt_valid": {
+                "point_to_point": {
+                    "candidates": [
+                        "point_to_point_nme_box_gt_valid",
+                        "point_to_point_nme_gt_valid",
+                        "point_to_point_nme_box",
+                    ]
+                },
+                "point_to_line": {
+                    "candidates": [
+                        "point_to_line_nme_box_gt_valid",
+                        "point_to_line_nme_gt_valid",
+                        "point_to_line_nme_box",
+                    ]
+                },
+            },
+        },
+    },
+    "infanface": {
+        "per_image": {
+            "all_landmarks": {
+                "point_to_point": {
+                    "candidates": [
+                        "mean_nme_box_all",
+                        "mean_nme_box_all_landmarks",
+                        "mean_nme_box",
+                        "image_nme",
+                        "nme",
+                    ]
+                },
+                "point_to_line": {
+                    "candidates": [
+                        "mean_nme_box_point_to_line_all",
+                        "mean_nme_box_point_to_line_all_landmarks",
+                        "mean_nme_box_point_to_line",
+                    ]
+                },
+            },
+            "non_contour": {
+                "point_to_point": {
+                    "candidates": [
+                        "mean_nme_box_non_contour",
+                        "point_to_point_nme_box_non_contour",
+                    ]
+                },
+                "point_to_line": {
+                    "candidates": [
+                        "mean_nme_box_point_to_line_non_contour",
+                        "point_to_line_nme_box_non_contour",
+                    ]
+                },
+            },
+        },
+        "per_landmark": {
+            "all_landmarks": {
+                "point_to_point": {"candidates": ["point_to_point_nme_box", "nme"]},
+                "point_to_line": {"candidates": ["point_to_line_nme_box"]},
+            },
+            "non_contour": {
+                "point_to_point": {"candidates": ["point_to_point_nme_box", "nme"]},
+                "point_to_line": {"candidates": ["point_to_line_nme_box"]},
+            },
+        },
+    },
+}
 
 
 def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -> BenchmarkAnalysisConfig:
@@ -202,6 +367,13 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
 
     dataset_raw = raw.get("dataset", {})
     dataset_name = str(dataset_raw.get("name", "benchmark"))
+    dataset_type = str(dataset_raw.get("dataset_type", "")).strip().lower()
+    if not dataset_type:
+        dataset_name_lower = dataset_name.lower()
+        if "infanface" in dataset_name_lower or "infantface" in dataset_name_lower:
+            dataset_type = "infanface"
+        elif "babyland" in dataset_name_lower:
+            dataset_type = "babyland72"
     regions = dataset_raw.get("anatomical_regions") or {}
     if not regions and "babyland" in dataset_name.lower():
         regions = DEFAULT_BABYLAND72_REGIONS
@@ -210,9 +382,11 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
     if not orientation_mapping and "babyland" in dataset_name.lower():
         orientation_mapping = DEFAULT_BABYLAND_ORIENTATION_MAPPING
 
+    plotting_raw = raw.get("plotting", {})
     dataset = DatasetBenchmarkConfig(
         name=dataset_name,
         output_dir=Path(dataset_raw["output_dir"]),
+        dataset_type=dataset_type,
         primary_model=dataset_raw.get("primary_model"),
         reference_models=list(dataset_raw.get("reference_models", [])),
         orientation_mapping={str(key): str(value) for key, value in orientation_mapping.items()},
@@ -234,8 +408,13 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
         include_unknown_orientations=bool(
             dataset_raw.get("include_unknown_orientations", raw.get("include_unknown_orientations", False))
         ),
-        ced_zoom_max_nme=float(dataset_raw.get("ced_zoom_max_nme", raw.get("ced_zoom_max_nme", 0.40))),
-        plot_dpi=int(dataset_raw.get("plot_dpi", raw.get("plot_dpi", 300))),
+        ced_zoom_max_nme=float(
+            dataset_raw.get(
+                "ced_zoom_max_nme",
+                plotting_raw.get("ced_zoom_max_nme", raw.get("ced_zoom_max_nme", 0.40)),
+            )
+        ),
+        plot_dpi=int(dataset_raw.get("plot_dpi", plotting_raw.get("plot_dpi", raw.get("plot_dpi", 300)))),
         use_percent_axis=bool(dataset_raw.get("use_percent_axis", raw.get("use_percent_axis", False))),
         annotate_bars=bool(dataset_raw.get("annotate_bars", raw.get("annotate_bars", True))),
         annotate_boxplot_means=bool(
@@ -263,6 +442,26 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
     if not models:
         raise ValueError("Config must contain at least one model.")
 
+    protocol_configs = []
+    for item in raw.get("evaluation_protocols", []):
+        protocol_configs.append(
+            EvaluationProtocolConfig(
+                name=str(item["name"]),
+                display_name=str(item.get("display_name", item["name"])),
+                description=str(item.get("description", "")),
+            )
+        )
+    if not protocol_configs:
+        protocol_configs = list(DEFAULT_PROTOCOLS_BY_DATASET_TYPE.get(dataset_type, []))
+    if not protocol_configs:
+        protocol_configs = [
+            EvaluationProtocolConfig(
+                name="default",
+                display_name="Default evaluation",
+                description="Default CSV metric columns.",
+            )
+        ]
+
     metric_configs = []
     for item in raw.get("metrics", []):
         metric_configs.append(
@@ -280,14 +479,19 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
     if not metric_configs:
         metric_configs = DEFAULT_BENCHMARK_METRICS
 
+    default_column_mappings = DEFAULT_COLUMN_MAPPINGS.get(dataset_type, {})
+    column_mappings = raw.get("column_mappings") or default_column_mappings
+
     return BenchmarkAnalysisConfig(
         dataset=dataset,
         models=models,
+        evaluation_protocols=protocol_configs,
         drop_invalid_nme=bool(raw.get("drop_invalid_nme", False) if drop_invalid_nme is None else drop_invalid_nme),
         bootstrap_iterations=int(raw.get("bootstrap_iterations", 2000)),
         random_seed=int(raw.get("random_seed", 12345)),
-        save_pdf=bool(raw.get("save_pdf", False)),
+        save_pdf=bool(plotting_raw.get("save_pdf", raw.get("save_pdf", False))),
         metrics=metric_configs,
+        column_mappings=column_mappings,
     )
 
 
@@ -385,6 +589,131 @@ def resolve_column(
     return None
 
 
+def get_protocol_metric_candidates(
+    config: BenchmarkAnalysisConfig,
+    csv_type: str,
+    protocol_config: EvaluationProtocolConfig,
+    metric_config: BenchmarkMetricConfig,
+) -> tuple[str, ...]:
+    """Return configured candidate columns for one CSV/protocol/metric combination."""
+    mapping = (
+        config.column_mappings.get(csv_type, {})
+        .get(protocol_config.name, {})
+        .get(metric_config.name, {})
+    )
+    candidates = mapping.get("candidates", []) if isinstance(mapping, dict) else []
+    if candidates:
+        return tuple(str(candidate) for candidate in candidates)
+    if csv_type == "per_image":
+        return metric_config.per_image_column_candidates
+    return metric_config.per_landmark_column_candidates
+
+
+def resolve_column_with_warning(
+    df: pd.DataFrame,
+    canonical_name: str,
+    aliases: tuple[str, ...],
+    explicit_mapping: dict[str, str] | None,
+    model_name: str,
+    csv_type: str,
+    warnings: list[str],
+    required: bool = True,
+) -> str | None:
+    """Resolve a column and append a non-fatal warning if it is unavailable."""
+    try:
+        return resolve_column(
+            df=df,
+            canonical_name=canonical_name,
+            aliases=aliases,
+            explicit_mapping=explicit_mapping,
+            required=required,
+        )
+    except ValueError as error:
+        warnings.append(f"{model_name} {csv_type}: {error}")
+        return None
+
+
+def build_column_audit_row(
+    model_config: ModelBenchmarkConfig,
+    csv_type: str,
+    csv_path: Path | None,
+    raw: pd.DataFrame | None,
+    dataset_config: DatasetBenchmarkConfig,
+    protocol_config: EvaluationProtocolConfig,
+    metric_config: BenchmarkMetricConfig,
+    selected_nme_column: str | None,
+    missing_required_columns: list[str],
+) -> dict[str, Any]:
+    """Build one CSV column-audit row for debugging benchmark inputs."""
+    if raw is None:
+        return {
+            "dataset_name": dataset_config.name,
+            "evaluation_protocol": protocol_config.name,
+            "metric_name": metric_config.name,
+            "model_name": model_config.name,
+            "csv_type": csv_type,
+            "csv_path": str(csv_path) if csv_path is not None else "",
+            "available_columns": "",
+            "selected_nme_column": selected_nme_column or "",
+            "missing_required_columns": "csv_file",
+            "number_of_rows": 0,
+            "number_of_unique_images": 0,
+            "number_of_unique_landmarks": 0,
+        }
+    image_column = next((column for column in IMAGE_ID_ALIASES if column in raw.columns), None)
+    landmark_column = next(
+        (column for column in LANDMARK_INDEX_ALIASES if column in raw.columns),
+        None,
+    )
+    return {
+        "dataset_name": dataset_config.name,
+        "evaluation_protocol": protocol_config.name,
+        "metric_name": metric_config.name,
+        "model_name": model_config.name,
+        "csv_type": csv_type,
+        "csv_path": str(csv_path) if csv_path is not None else "",
+        "available_columns": " | ".join(str(column) for column in raw.columns),
+        "selected_nme_column": selected_nme_column or "",
+        "missing_required_columns": " | ".join(missing_required_columns),
+        "number_of_rows": int(len(raw)),
+        "number_of_unique_images": int(raw[image_column].nunique()) if image_column else 0,
+        "number_of_unique_landmarks": int(raw[landmark_column].nunique())
+        if landmark_column
+        else 0,
+    }
+
+
+def filter_per_landmark_by_protocol(
+    raw: pd.DataFrame,
+    dataset_config: DatasetBenchmarkConfig,
+    protocol_config: EvaluationProtocolConfig,
+    landmark_index: pd.Series,
+) -> pd.Series:
+    """Return the per-landmark row mask for one dataset-specific protocol."""
+    mask = pd.Series(True, index=raw.index)
+    protocol_name = protocol_config.name
+    if dataset_config.dataset_type == "babyland72":
+        inclusion_col = next(
+            (
+                column
+                for column in ("evaluation_landmark_inclusion", "landmark_inclusion")
+                if column in raw.columns
+            ),
+            None,
+        )
+        if inclusion_col is None:
+            return mask
+        expected = (
+            "visible_intersection"
+            if protocol_name in {"visibility_intersection", "visible_intersection"}
+            else protocol_name
+        )
+        return raw[inclusion_col].astype(str).str.lower().eq(expected.lower())
+    if dataset_config.dataset_type == "infanface" and protocol_name == "non_contour":
+        return landmark_index >= 17
+    return mask
+
+
 def normalize_orientation_value(value: Any, mapping: dict[str, str]) -> str:
     """Normalize orientation labels, treating yaw_plus_*deg values as class labels."""
     if pd.isna(value):
@@ -436,62 +765,184 @@ def _read_csv(path: Path) -> pd.DataFrame:
 
 def load_model_results(
     model_config: ModelBenchmarkConfig,
-    dataset_config: DatasetBenchmarkConfig,
+    config: BenchmarkAnalysisConfig,
+    protocol_config: EvaluationProtocolConfig,
     metric_config: BenchmarkMetricConfig,
     drop_invalid_nme: bool = False,
 ) -> LoadedModelResults:
     """Load, normalize, and validate result CSVs for one model."""
+    dataset_config = config.dataset
     warnings: list[str] = []
     orientation_warnings: list[dict[str, Any]] = []
+    column_audit: list[dict[str, Any]] = []
     per_image = None
     per_landmark = None
 
     if model_config.per_image_csv is not None:
         raw = _read_csv(model_config.per_image_csv)
         mapping = model_config.columns.get("per_image", {})
-        image_col = resolve_column(raw, "image_id", IMAGE_ID_ALIASES, mapping)
-        nme_col = resolve_column(raw, "nme", metric_config.per_image_column_candidates, mapping)
-        orientation_col = resolve_column(raw, "orientation", ORIENTATION_ALIASES, mapping, required=False)
-        detected_col = resolve_column(raw, "detected", DETECTED_ALIASES, mapping, required=False)
-
-        per_image = pd.DataFrame(
-            {
-                "model": model_config.name,
-                "image_id": raw[image_col].astype(str),
-                "image_key": raw[image_col].map(
-                    lambda value: normalize_image_id(value, dataset_config.image_id_strip_regexes)
-                ),
-                "nme": pd.to_numeric(raw[nme_col], errors="coerce"),
-            }
+        per_image_candidates = get_protocol_metric_candidates(
+            config,
+            "per_image",
+            protocol_config,
+            metric_config,
         )
-        if orientation_col is not None:
-            per_image["orientation"] = map_orientation_labels(
-                raw[orientation_col], dataset_config.orientation_mapping
+        image_col = resolve_column_with_warning(
+            raw, "image_id", IMAGE_ID_ALIASES, mapping, model_config.name, "per-image", warnings
+        )
+        nme_col = resolve_column_with_warning(
+            raw, "nme", per_image_candidates, mapping, model_config.name, "per-image", warnings
+        )
+        orientation_col = resolve_column_with_warning(
+            raw,
+            "orientation",
+            ORIENTATION_ALIASES,
+            mapping,
+            model_config.name,
+            "per-image",
+            warnings,
+            required=False,
+        )
+        detected_col = resolve_column_with_warning(
+            raw,
+            "detected",
+            DETECTED_ALIASES,
+            mapping,
+            model_config.name,
+            "per-image",
+            warnings,
+            required=False,
+        )
+        missing = []
+        if image_col is None:
+            missing.append("image_id")
+        if nme_col is None:
+            missing.append("nme")
+        column_audit.append(
+            build_column_audit_row(
+                model_config,
+                "per_image",
+                model_config.per_image_csv,
+                raw,
+                dataset_config,
+                protocol_config,
+                metric_config,
+                nme_col,
+                missing,
             )
-            orientation_warnings.extend(
-                collect_orientation_warnings(raw, orientation_col, per_image["orientation"], model_config.name)
+        )
+        if image_col is not None and nme_col is not None:
+            per_image = pd.DataFrame(
+                {
+                    "model": model_config.name,
+                    "image_id": raw[image_col].astype(str),
+                    "image_key": raw[image_col].map(
+                        lambda value: normalize_image_id(value, dataset_config.image_id_strip_regexes)
+                    ),
+                    "nme": pd.to_numeric(raw[nme_col], errors="coerce"),
+                    "source_csv_path": str(model_config.per_image_csv),
+                }
             )
-        else:
-            per_image["orientation"] = ""
-        if detected_col is not None:
-            per_image["detected"] = raw[detected_col].astype(str).str.lower().isin(
-                {"1", "true", "yes", "y", "detected", "success"}
-            )
-        else:
-            per_image["detected"] = per_image["nme"].notna()
+            if orientation_col is not None:
+                per_image["orientation"] = map_orientation_labels(
+                    raw[orientation_col], dataset_config.orientation_mapping
+                )
+                orientation_warnings.extend(
+                    collect_orientation_warnings(raw, orientation_col, per_image["orientation"], model_config.name)
+                )
+            else:
+                per_image["orientation"] = ""
+            if detected_col is not None:
+                per_image["detected"] = raw[detected_col].astype(str).str.lower().isin(
+                    {"1", "true", "yes", "y", "detected", "success"}
+                )
+            else:
+                per_image["detected"] = per_image["nme"].notna()
+            per_image["evaluation_protocol"] = protocol_config.name
+            per_image["metric_name"] = metric_config.name
 
-        warnings.extend(validate_nme_table(per_image, model_config.name, "per-image", dataset_config))
-        if drop_invalid_nme:
-            per_image = per_image[np.isfinite(per_image["nme"])].copy()
+            warnings.extend(validate_nme_table(per_image, model_config.name, "per-image", dataset_config))
+            if per_image["nme"].notna().sum() == 0:
+                warnings.append(
+                    f"{model_config.name} per-image: selected column {nme_col!r} has no usable values "
+                    f"for {protocol_config.name}/{metric_config.name}."
+                )
+            if drop_invalid_nme:
+                per_image = per_image[np.isfinite(per_image["nme"])].copy()
 
     if model_config.per_landmark_csv is not None:
         raw = _read_csv(model_config.per_landmark_csv)
         mapping = model_config.columns.get("per_landmark", {})
-        image_col = resolve_column(raw, "image_id", IMAGE_ID_ALIASES, mapping)
-        nme_col = resolve_column(raw, "nme", metric_config.per_landmark_column_candidates, mapping)
-        landmark_col = resolve_column(raw, "landmark_index", LANDMARK_INDEX_ALIASES, mapping)
-        orientation_col = resolve_column(raw, "orientation", ORIENTATION_ALIASES, mapping, required=False)
-        valid_col = resolve_column(raw, "valid", ("valid", "is_valid"), mapping, required=False)
+        per_landmark_candidates = get_protocol_metric_candidates(
+            config,
+            "per_landmark",
+            protocol_config,
+            metric_config,
+        )
+        image_col = resolve_column_with_warning(
+            raw, "image_id", IMAGE_ID_ALIASES, mapping, model_config.name, "per-landmark", warnings
+        )
+        nme_col = resolve_column_with_warning(
+            raw, "nme", per_landmark_candidates, mapping, model_config.name, "per-landmark", warnings
+        )
+        landmark_col = resolve_column_with_warning(
+            raw,
+            "landmark_index",
+            LANDMARK_INDEX_ALIASES,
+            mapping,
+            model_config.name,
+            "per-landmark",
+            warnings,
+        )
+        orientation_col = resolve_column_with_warning(
+            raw,
+            "orientation",
+            ORIENTATION_ALIASES,
+            mapping,
+            model_config.name,
+            "per-landmark",
+            warnings,
+            required=False,
+        )
+        valid_col = resolve_column_with_warning(
+            raw,
+            "valid",
+            ("valid", "is_valid"),
+            mapping,
+            model_config.name,
+            "per-landmark",
+            warnings,
+            required=False,
+        )
+        missing = []
+        if image_col is None:
+            missing.append("image_id")
+        if nme_col is None:
+            missing.append("nme")
+        if landmark_col is None:
+            missing.append("landmark_index")
+        column_audit.append(
+            build_column_audit_row(
+                model_config,
+                "per_landmark",
+                model_config.per_landmark_csv,
+                raw,
+                dataset_config,
+                protocol_config,
+                metric_config,
+                nme_col,
+                missing,
+            )
+        )
+        if image_col is None or nme_col is None or landmark_col is None:
+            return LoadedModelResults(
+                model_config,
+                per_image,
+                per_landmark,
+                warnings,
+                orientation_warnings,
+                column_audit,
+            )
 
         landmark_index = pd.to_numeric(raw[landmark_col], errors="coerce")
         landmark_index = normalize_landmark_index(
@@ -499,6 +950,14 @@ def load_model_results(
             dataset_config.landmark_index_base,
             dataset_config.landmark_count,
         )
+        protocol_mask = filter_per_landmark_by_protocol(
+            raw,
+            dataset_config,
+            protocol_config,
+            landmark_index,
+        )
+        raw = raw[protocol_mask].copy()
+        landmark_index = landmark_index[protocol_mask]
         per_landmark = pd.DataFrame(
             {
                 "model": model_config.name,
@@ -508,6 +967,7 @@ def load_model_results(
                 ),
                 "landmark_index": landmark_index,
                 "nme": pd.to_numeric(raw[nme_col], errors="coerce"),
+                "source_csv_path": str(model_config.per_landmark_csv),
             }
         )
         if orientation_col is not None:
@@ -525,14 +985,28 @@ def load_model_results(
             )
         else:
             per_landmark["valid"] = per_landmark["nme"].notna()
+        per_landmark["evaluation_protocol"] = protocol_config.name
+        per_landmark["metric_name"] = metric_config.name
 
         warnings.extend(validate_nme_table(per_landmark, model_config.name, "per-landmark", dataset_config))
+        if per_landmark["nme"].notna().sum() == 0:
+            warnings.append(
+                f"{model_config.name} per-landmark: selected column {nme_col!r} has no usable values "
+                f"for {protocol_config.name}/{metric_config.name}."
+            )
         if drop_invalid_nme:
             per_landmark = per_landmark[
                 np.isfinite(per_landmark["nme"]) & per_landmark["landmark_index"].notna()
             ].copy()
 
-    return LoadedModelResults(model_config, per_image, per_landmark, warnings, orientation_warnings)
+    return LoadedModelResults(
+        model_config,
+        per_image,
+        per_landmark,
+        warnings,
+        orientation_warnings,
+        column_audit,
+    )
 
 
 def normalize_landmark_index(
@@ -674,9 +1148,11 @@ def compute_best_worst_cases(
                         "stem": row.get("image_key"),
                         "orientation": row.get("orientation", ""),
                         "image_level_nme": row.get("nme"),
+                        "selected_image_nme": row.get("nme"),
                         "rank_type": rank_type,
                         "rank": rank,
                         "detection_status": row.get("detected", True),
+                        "source_csv_path": row.get("source_csv_path", ""),
                         "original_image_path": row.get("original_image_path", ""),
                         "prediction_overlay_path": row.get("prediction_overlay_path", ""),
                         "gt_overlay_path": row.get("gt_overlay_path", ""),
@@ -702,6 +1178,21 @@ def split_best_worst_case_tables(best_worst_cases: pd.DataFrame) -> dict[str, pd
             best_worst_cases["rank_type"] == "worst"
         ].sort_values(sort_columns),
     }
+
+
+def write_best_worst_case_tables(output_dir: Path, best_worst_cases: pd.DataFrame) -> None:
+    """Write combined and per-model best/worst CSV tables for one protocol/metric."""
+    tables_dir = output_dir / "tables"
+    tables_dir.mkdir(parents=True, exist_ok=True)
+    if best_worst_cases.empty:
+        return
+    best_worst_cases.to_csv(tables_dir / "best_worst_cases_per_model.csv", index=False)
+    for model_name, model_rows in best_worst_cases.groupby("model_name"):
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(model_name)).strip("_") or "model"
+        best = model_rows[model_rows["rank_type"] == "best"].sort_values("rank")
+        worst = model_rows[model_rows["rank_type"] == "worst"].sort_values("rank")
+        best.to_csv(tables_dir / f"best_cases_{safe_name}.csv", index=False)
+        worst.to_csv(tables_dir / f"worst_cases_{safe_name}.csv", index=False)
 
 
 def compute_orientation_metrics(
@@ -1030,9 +1521,28 @@ def compute_dataset_input_summary(results: list[LoadedModelResults]) -> pd.DataF
     """Summarize input files and available rows per model."""
     rows = []
     for result in results:
+        if result.column_audit:
+            for row in result.column_audit:
+                row = dict(row)
+                row["detection_rate_config"] = result.config.detection_rate
+                row["landmark_format"] = result.config.landmark_format
+                row["normalized_rows_used"] = (
+                    0
+                    if row["csv_type"] == "per_image" and result.per_image is None
+                    else (
+                        int(len(result.per_image))
+                        if row["csv_type"] == "per_image"
+                        else 0
+                        if result.per_landmark is None
+                        else int(len(result.per_landmark))
+                    )
+                )
+                row["warnings"] = " | ".join(result.warnings)
+                rows.append(row)
+            continue
         rows.append(
             {
-                "model": result.config.name,
+                "model_name": result.config.name,
                 "detection_rate_config": result.config.detection_rate,
                 "landmark_format": result.config.landmark_format,
                 "per_image_csv": str(result.config.per_image_csv) if result.config.per_image_csv else "",
@@ -1053,6 +1563,31 @@ def write_tables(output_dir: Path, tables: dict[str, pd.DataFrame]) -> None:
         if table is None:
             continue
         table.to_csv(table_dir / f"{name}.csv", index=False)
+
+
+def add_analysis_context_to_tables(
+    tables: dict[str, pd.DataFrame],
+    dataset_config: DatasetBenchmarkConfig,
+    protocol_config: EvaluationProtocolConfig,
+    metric_config: BenchmarkMetricConfig,
+) -> dict[str, pd.DataFrame]:
+    """Add dataset/protocol/metric context columns to all output tables."""
+    updated: dict[str, pd.DataFrame] = {}
+    for name, table in tables.items():
+        if table is None or table.empty:
+            updated[name] = table
+            continue
+        table = table.copy()
+        if "dataset_name" not in table.columns:
+            table.insert(0, "dataset_name", dataset_config.name)
+        if "evaluation_protocol" not in table.columns:
+            table.insert(1, "evaluation_protocol", protocol_config.name)
+        if "metric_name" not in table.columns:
+            table.insert(2, "metric_name", metric_config.name)
+        if "model" in table.columns and "model_name" not in table.columns:
+            table.insert(3, "model_name", table["model"])
+        updated[name] = table
+    return updated
 
 
 def import_matplotlib_pyplot() -> Any:
@@ -1184,6 +1719,15 @@ def generate_benchmark_plots(
     colors = [color_map[model] for model in model_order]
     x = np.arange(len(model_order))
     use_percent = config.dataset.use_percent_axis
+    protocol_label = config.dataset.evaluation_protocol_display_name or config.dataset.evaluation_protocol
+    metric_label = config.metrics[0].display_name if len(config.metrics) == 1 else "NME"
+    title_prefix = " | ".join(
+        part for part in [config.dataset.name, protocol_label, metric_label] if part
+    )
+
+    def contextual_title(title: str) -> str:
+        """Return a plot title prefixed with dataset/protocol/metric context."""
+        return f"{title_prefix}\n{title}" if title_prefix else title
 
     fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 4.5))
     values = global_metrics["detection_rate"].to_numpy() * 100.0
@@ -1191,7 +1735,7 @@ def generate_benchmark_plots(
     ax.set_xticks(x, labels, rotation=30, ha="right")
     ax.set_ylabel("Detection rate (%)")
     ax.set_ylim(0, min(105, max(100, np.nanmax(values) * 1.1)))
-    ax.set_title("Detection rate by model")
+    ax.set_title(contextual_title("Detection rate by model"))
     apply_axis_style(ax)
     if config.dataset.annotate_bars:
         annotate_bars(ax, bars, [f"{value:.1f}%" for value in values])
@@ -1204,7 +1748,7 @@ def generate_benchmark_plots(
     bars = ax.bar(x, values, color=colors)
     ax.set_xticks(x, labels, rotation=30, ha="right")
     ax.set_ylabel("Mean image-level NME (%)" if use_percent else "Mean image-level NME")
-    ax.set_title("Mean image-level NME by model")
+    ax.set_title(contextual_title("Mean image-level NME by model"))
     apply_axis_style(ax)
     if config.dataset.annotate_bars:
         ann = [format_metric_label(value, use_percent) for value in global_metrics["mean_image_nme"]]
@@ -1222,7 +1766,7 @@ def generate_benchmark_plots(
         ax.annotate(labels[idx], (row["detection_rate"] * 100.0, y_values[idx]), xytext=(5, 5), textcoords="offset points")
     ax.set_xlabel("Detection rate (%)")
     ax.set_ylabel("Mean image-level NME (%)" if use_percent else "Mean image-level NME")
-    ax.set_title("Mean NME vs detection rate")
+    ax.set_title(contextual_title("Mean NME vs detection rate"))
     apply_axis_style(ax)
     path = plot_dir / "mean_nme_vs_detection_rate.png"
     save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
@@ -1249,7 +1793,7 @@ def generate_benchmark_plots(
             patch.set_alpha(0.55)
         ax.set_xticklabels(labels, rotation=30, ha="right")
         ax.set_ylabel("Image-level NME (%)" if use_percent else "Image-level NME")
-        ax.set_title("Image-level NME distribution by model")
+        ax.set_title(contextual_title("Image-level NME distribution by model"))
         ax.plot([], [], color="black", linewidth=1.8, label="Median")
         ax.plot([], [], marker="D", markerfacecolor="white", markeredgecolor="black", linestyle="None", label="Mean")
         ax.legend(loc="upper right")
@@ -1273,7 +1817,7 @@ def generate_benchmark_plots(
             ax.set_yscale("log")
             ax.set_xticklabels(labels, rotation=30, ha="right")
             ax.set_ylabel("Image-level NME (%)" if use_percent else "Image-level NME")
-            ax.set_title("Image-level NME distribution by model (log scale)")
+            ax.set_title(contextual_title("Image-level NME distribution by model (log scale)"))
             apply_axis_style(ax)
             path = plot_dir / "image_nme_boxplot_by_model_log.png"
             save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
@@ -1296,7 +1840,7 @@ def generate_benchmark_plots(
                 ax.scatter(idx, mean, marker="D", facecolor="white", edgecolor="black", s=36, zorder=3, label="Mean" if idx == 1 else None)
             ax.set_xticks(np.arange(1, len(model_order) + 1), labels, rotation=30, ha="right")
             ax.set_ylabel("Image-level NME (%)" if use_percent else "Image-level NME")
-            ax.set_title("Image-level NME distribution by model")
+            ax.set_title(contextual_title("Image-level NME distribution by model"))
             ax.legend(loc="upper right")
             apply_axis_style(ax)
             path = plot_dir / "image_nme_violin_by_model.png"
@@ -1317,7 +1861,7 @@ def generate_benchmark_plots(
             ax.set_ylim(0, 1.01)
             ax.set_xlabel("Image-level NME threshold")
             ax.set_ylabel("Fraction of images with NME <= threshold")
-            ax.set_title("Cumulative Error Distribution (Image-level NME)")
+            ax.set_title(contextual_title("Cumulative Error Distribution (Image-level NME)"))
             ax.legend(fontsize=9)
             apply_axis_style(ax)
             save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
@@ -1340,7 +1884,7 @@ def generate_benchmark_plots(
             image = ax.imshow(values, aspect="auto", cmap="viridis")
             ax.set_xticks(np.arange(pivot.shape[1]), pivot.columns, rotation=30, ha="right")
             ax.set_yticks(np.arange(pivot.shape[0]), [label_for_model(model, display_names) for model in pivot.index])
-            ax.set_title("Orientation-wise mean image NME")
+            ax.set_title(contextual_title("Orientation-wise mean image NME"))
             fig.colorbar(image, ax=ax, label="Mean image NME (%)" if use_percent else "Mean image NME")
             path = plot_dir / "orientation_mean_nme_heatmap.png"
             save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
@@ -1354,7 +1898,7 @@ def generate_benchmark_plots(
                 ax.bar(orientation_x + offset, pivot.loc[model].to_numpy() * (100.0 if use_percent else 1.0), width, label=label_for_model(model, display_names), color=color_map[model])
             ax.set_xticks(orientation_x, pivot.columns, rotation=30, ha="right")
             ax.set_ylabel("Mean image NME (%)" if use_percent else "Mean image NME")
-            ax.set_title("Orientation-wise mean image NME")
+            ax.set_title(contextual_title("Orientation-wise mean image NME"))
             ax.legend(title="Model", fontsize=8)
             apply_axis_style(ax)
             path = plot_dir / "orientation_mean_nme_grouped_bar.png"
@@ -1371,7 +1915,7 @@ def generate_benchmark_plots(
             ax.boxplot(data, labels=[str(int(idx)) for idx in landmark_indices], showfliers=False)
             ax.set_xlabel("Landmark index (0-based)")
             ax.set_ylabel("Per-landmark NME")
-            ax.set_title(f"Per-landmark NME for {label_for_model(primary, display_names)}")
+            ax.set_title(contextual_title(f"Per-landmark NME for {label_for_model(primary, display_names)}"))
             apply_axis_style(ax)
             path = plot_dir / "primary_per_landmark_nme_boxplot.png"
             save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
@@ -1388,7 +1932,7 @@ def generate_benchmark_plots(
                 ax.plot(model_rows["landmark_index"], model_rows["mean_landmark_nme"], label=label_for_model(model, display_names), color=color, linewidth=1.8)
         ax.set_xlabel("Landmark index (0-based)")
         ax.set_ylabel("Mean landmark NME")
-        ax.set_title("Per-landmark mean NME across models")
+        ax.set_title(contextual_title("Per-landmark mean NME across models"))
         ax.legend(fontsize=8)
         apply_axis_style(ax)
         path = plot_dir / "per_landmark_mean_nme_lines_common_landmarks.png"
@@ -1403,7 +1947,7 @@ def generate_benchmark_plots(
             fig, ax = plt.subplots(figsize=(max(11, len(pivot) * 0.75), 5.5))
             pivot.rename(columns=display_names).plot(kind="bar", ax=ax, color=[color_map[m] for m in pivot.columns])
             ax.set_ylabel("Mean NME")
-            ax.set_title("Anatomical-region mean NME")
+            ax.set_title(contextual_title("Anatomical-region mean NME"))
             ax.legend(title="Model", fontsize=8)
             ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
             apply_axis_style(ax)
@@ -1417,7 +1961,7 @@ def generate_benchmark_plots(
                 fig, ax = plt.subplots(figsize=(max(10, len(pivot68) * 0.85), 5.2))
                 pivot68.rename(columns=display_names).plot(kind="bar", ax=ax, color=[color_map[m] for m in pivot68.columns])
                 ax.set_ylabel("Mean NME")
-                ax.set_title("Anatomical-region mean NME (common 68 landmarks)")
+                ax.set_title(contextual_title("Anatomical-region mean NME (common 68 landmarks)"))
                 ax.legend(title="Model", fontsize=8)
                 ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
                 apply_axis_style(ax)
@@ -1436,7 +1980,7 @@ def generate_benchmark_plots(
         ax.set_ylim(0, 100)
         ax.set_xticks(x_win, [label_for_model(model, display_names) for model in baselines], rotation=30, ha="right")
         ax.set_ylabel("Images where primary model has lower NME (%)")
-        ax.set_title(f"{label_for_model(primary, display_names)} pairwise win rate on common images")
+        ax.set_title(contextual_title(f"{label_for_model(primary, display_names)} pairwise win rate on common images"))
         if config.dataset.annotate_bars:
             ann = [f"{rate:.1f}%\n(n={int(n)})" for rate, n in zip(values, primary_vs_baselines["n_common_images"])]
             annotate_bars(ax, bars, ann)
@@ -1454,7 +1998,7 @@ def generate_benchmark_plots(
     bars20 = ax.bar(x + width / 2, fri20, width, label="NME > 20%", color="#D65F5F")
     ax.set_xticks(x, labels, rotation=30, ha="right")
     ax.set_ylabel("Image failure rate (%)")
-    ax.set_title("Image-level failure rates")
+    ax.set_title(contextual_title("Image-level failure rates"))
     if config.dataset.annotate_bars:
         annotate_bars(ax, bars10, [f"{value:.1f}%" for value in fri10])
         annotate_bars(ax, bars20, [f"{value:.1f}%" for value in fri20])
@@ -1500,6 +2044,7 @@ def write_markdown_report(
     plot_paths: list[str],
     warnings: list[str],
     metric_config: BenchmarkMetricConfig | None = None,
+    protocol_config: EvaluationProtocolConfig | None = None,
 ) -> None:
     """Write the benchmark Markdown report."""
     dataset = config.dataset
@@ -1514,6 +2059,7 @@ def write_markdown_report(
         "",
         "## Inputs",
         f"- Dataset name: `{dataset.name}`",
+        f"- Evaluation protocol: `{protocol_config.display_name if protocol_config else dataset.evaluation_protocol}`",
         f"- Geometric metric: `{metric_config.display_name if metric_config else 'NME'}`",
         f"- Generated: `{datetime.now().isoformat(timespec='seconds')}`",
         f"- Output directory: `{output_dir}`",
@@ -1748,30 +2294,128 @@ def generate_recommended_claims(
     return claims[:5]
 
 
+def write_top_level_benchmark_summary(
+    output_dir: Path,
+    config: BenchmarkAnalysisConfig,
+    summary: pd.DataFrame,
+) -> None:
+    """Write a top-level summary across all protocol/metric benchmark runs."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    lines = [
+        f"# Benchmark Summary: {config.dataset.name}",
+        "",
+        f"- Dataset type: `{config.dataset.dataset_type or 'unspecified'}`",
+        f"- Generated: `{datetime.now().isoformat(timespec='seconds')}`",
+        f"- Output directory: `{output_dir}`",
+        "",
+        "## Protocols",
+        "",
+    ]
+    for protocol in config.evaluation_protocols:
+        description = f": {protocol.description}" if protocol.description else ""
+        lines.append(f"- `{protocol.name}` ({protocol.display_name}){description}")
+    lines.extend(["", "## Metrics", ""])
+    for metric in config.metrics:
+        lines.append(f"- `{metric.name}` ({metric.display_name})")
+    lines.extend(["", "## Main Results", ""])
+    if summary.empty:
+        lines.append("_No protocol/metric combination produced image-level results._")
+    else:
+        lines.append(dataframe_to_markdown(summary, max_rows=100))
+        summary.to_csv(output_dir / "benchmark_summary.csv", index=False)
+    lines.extend(
+        [
+            "",
+            "## Column Audit",
+            "",
+            "See `dataset_input_summary.csv` for the selected CSV columns, available columns, "
+            "missing mappings, and row counts for each model/protocol/metric combination.",
+            "",
+        ]
+    )
+    (output_dir / "benchmark_summary.md").write_text("\n".join(lines), encoding="utf-8")
+
+
 def run_benchmark_analysis(config: BenchmarkAnalysisConfig) -> dict[str, pd.DataFrame]:
     """Run the complete benchmark analysis pipeline."""
     all_tables: dict[str, pd.DataFrame] = {}
-    for metric_config in config.metrics:
-        metric_output_dir = config.dataset.output_dir / metric_config.name
-        metric_config_dataset = dataclasses_replace_dataset_output(config, metric_output_dir)
-        tables = run_benchmark_analysis_for_metric(metric_config_dataset, metric_config)
-        all_tables.update({f"{metric_config.name}/{key}": value for key, value in tables.items()})
+    input_summary_parts = []
+    benchmark_rows = []
+    for protocol_config in config.evaluation_protocols:
+        for metric_config in config.metrics:
+            metric_output_dir = config.dataset.output_dir / protocol_config.name / metric_config.name
+            metric_config_dataset = dataclasses_replace_dataset_output(
+                config,
+                metric_output_dir,
+                protocol_config,
+                metric_config,
+            )
+            tables = run_benchmark_analysis_for_metric(
+                metric_config_dataset,
+                protocol_config,
+                metric_config,
+            )
+            all_tables.update(
+                {
+                    f"{protocol_config.name}/{metric_config.name}/{key}": value
+                    for key, value in tables.items()
+                }
+            )
+            dataset_input = tables.get("dataset_input_summary")
+            if dataset_input is not None and not dataset_input.empty:
+                input_summary_parts.append(dataset_input)
+            global_metrics = tables.get("global_image_metrics", pd.DataFrame())
+            if not global_metrics.empty and "mean_image_nme" in global_metrics:
+                ranked = global_metrics.sort_values("mean_image_nme").reset_index(drop=True)
+                best = ranked.iloc[0]
+                primary_rank = ""
+                if config.dataset.primary_model:
+                    matches = ranked.index[ranked["model"].eq(config.dataset.primary_model)]
+                    primary_rank = int(matches[0] + 1) if len(matches) else ""
+                benchmark_rows.append(
+                    {
+                        "evaluation_protocol": protocol_config.name,
+                        "metric_name": metric_config.name,
+                        "best_model_by_mean_image_nme": best.get("model", ""),
+                        "best_mean_image_nme": best.get("mean_image_nme", np.nan),
+                        "primary_model_rank": primary_rank,
+                        "output_dir": str(metric_output_dir),
+                    }
+                )
+    config.dataset.output_dir.mkdir(parents=True, exist_ok=True)
+    if input_summary_parts:
+        pd.concat(input_summary_parts, ignore_index=True).to_csv(
+            config.dataset.output_dir / "dataset_input_summary.csv",
+            index=False,
+        )
+    write_top_level_benchmark_summary(config.dataset.output_dir, config, pd.DataFrame(benchmark_rows))
     return all_tables
 
 
 def dataclasses_replace_dataset_output(
     config: BenchmarkAnalysisConfig,
     output_dir: Path,
+    protocol_config: EvaluationProtocolConfig | None = None,
+    metric_config: BenchmarkMetricConfig | None = None,
 ) -> BenchmarkAnalysisConfig:
     """Return a shallow config copy with a metric-specific output directory."""
     import dataclasses
 
-    dataset = dataclasses.replace(config.dataset, output_dir=output_dir)
-    return dataclasses.replace(config, dataset=dataset)
+    dataset = dataclasses.replace(
+        config.dataset,
+        output_dir=output_dir,
+        evaluation_protocol="" if protocol_config is None else protocol_config.name,
+        evaluation_protocol_display_name=""
+        if protocol_config is None
+        else protocol_config.display_name,
+    )
+    metrics = config.metrics if metric_config is None else [metric_config]
+    return dataclasses.replace(config, dataset=dataset, metrics=metrics)
 
 
 def run_benchmark_analysis_for_metric(
     config: BenchmarkAnalysisConfig,
+    protocol_config: EvaluationProtocolConfig,
     metric_config: BenchmarkMetricConfig,
 ) -> dict[str, pd.DataFrame]:
     """Run the complete benchmark analysis pipeline for one geometric metric."""
@@ -1781,7 +2425,13 @@ def run_benchmark_analysis_for_metric(
     (output_dir / "plots").mkdir(exist_ok=True)
 
     results = [
-        load_model_results(model, config.dataset, metric_config, drop_invalid_nme=config.drop_invalid_nme)
+        load_model_results(
+            model,
+            config,
+            protocol_config,
+            metric_config,
+            drop_invalid_nme=config.drop_invalid_nme,
+        )
         for model in config.models
     ]
     warnings = [warning for result in results for warning in result.warnings]
@@ -1840,10 +2490,13 @@ def run_benchmark_analysis_for_metric(
         "model_ranking_summary": rankings,
         "dataset_input_summary": input_summary,
         "orientation_label_warnings": orientation_warning_table,
+        "best_worst_cases_per_model": best_worst_cases,
         "best_cases": best_worst_tables["best_cases"],
         "worst_cases": best_worst_tables["worst_cases"],
     }
+    tables = add_analysis_context_to_tables(tables, config.dataset, protocol_config, metric_config)
     write_tables(output_dir, tables)
+    write_best_worst_case_tables(output_dir, best_worst_cases)
     plot_paths = generate_benchmark_plots(
         output_dir,
         results,
@@ -1854,7 +2507,15 @@ def run_benchmark_analysis_for_metric(
         primary_vs,
         config,
     )
-    write_markdown_report(output_dir, config, tables, plot_paths, warnings, metric_config)
+    write_markdown_report(
+        output_dir,
+        config,
+        tables,
+        plot_paths,
+        warnings,
+        metric_config,
+        protocol_config,
+    )
     print(f"Benchmark analysis completed: {output_dir}")
     print(f"Tables: {output_dir / 'tables'}")
     print(f"Plots: {output_dir / 'plots'}")
