@@ -27,46 +27,52 @@ dataset:
     4: "right"
 
 evaluation_protocols:
-  - name: "visibility_intersection"
-    display_name: "Visibility intersection"
-    description: "Uses landmarks where GT visibility = 1 and predicted visibility = 1."
-  - name: "gt_valid"
-    display_name: "GT-valid landmarks"
-    description: "Uses all finite GT landmarks, regardless of predicted visibility."
+  - name: "main_comparison"
+    display_name: "Main SOTA comparison"
+    description: "Uses GT-valid metrics for visibility-aware models and standard valid-landmark metrics for models without predicted visibility."
+  - name: "visibility_protocol_analysis"
+    display_name: "Visibility protocol analysis"
+    description: "Compares visibility_intersection and gt_valid for models that explicitly predict visibility."
 
 metrics:
   - name: "point_to_point"
-    display_name: "Point-to-point"
+    display_name: "point-to-point"
   - name: "point_to_line"
-    display_name: "Point-to-line"
+    display_name: "point-to-line"
 
 models:
   - name: "dlib"
-    detection_rate: 0.4593
+    predicts_visibility: false
+    detection_rate: 0.0916
     per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dlib/per_image_nme.csv"
     per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dlib/per_image_per_landmark_nme.csv"
     landmark_format: "68"
   - name: "infanface"
+    predicts_visibility: false
     detection_rate: 1.0000
     per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/infanface/per_image_nme.csv"
     per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/infanface/per_image_per_landmark_nme.csv"
     landmark_format: "68"
   - name: "mediapipe"
-    detection_rate: 0.9432
+    predicts_visibility: false
+    detection_rate: 0.6640
     per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/mediapipe/per_image_nme.csv"
     per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/mediapipe/per_image_per_landmark_nme.csv"
     landmark_format: "68"
   - name: "vggheads"
+    predicts_visibility: false
     detection_rate: 1.0000
     per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/vggheads/per_image_nme.csv"
     per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/vggheads/per_image_per_landmark_nme.csv"
     landmark_format: "68"
   - name: "dslpt"
+    predicts_visibility: false
     detection_rate: 1.0000
     per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dslpt/per_image_nme.csv"
     per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dslpt/per_image_per_landmark_nme.csv"
     landmark_format: "68"
   - name: "BabyLand-72 Exp11"
+    predicts_visibility: true
     detection_rate: 1.0000
     per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/exp11/per_image_nme.csv"
     per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/exp11/per_image_per_landmark_nme.csv"

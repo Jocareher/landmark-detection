@@ -124,6 +124,7 @@ class ModelBenchmarkConfig:
     detection_rate: float | None = None
     landmark_format: str | None = None
     display_name: str | None = None
+    predicts_visibility: bool = False
     columns: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
@@ -152,7 +153,9 @@ class DatasetBenchmarkConfig:
     use_percent_axis: bool = False
     annotate_bars: bool = True
     annotate_boxplot_means: bool = True
-    show_violin_plots: bool = False
+    show_violin_plots: bool = True
+    generate_log_scale_variants: bool = True
+    log_scale_epsilon: float = 1.0e-8
     evaluation_protocol: str = ""
     evaluation_protocol_display_name: str = ""
 
@@ -202,14 +205,20 @@ DEFAULT_BENCHMARK_METRICS = [
 DEFAULT_PROTOCOLS_BY_DATASET_TYPE = {
     "babyland72": [
         EvaluationProtocolConfig(
-            name="visibility_intersection",
-            display_name="Visibility intersection",
-            description="Uses landmarks where GT visibility = 1 and predicted visibility = 1.",
+            name="main_comparison",
+            display_name="Main SOTA comparison",
+            description=(
+                "Uses GT-valid metrics for visibility-aware models and standard "
+                "valid-landmark metrics for models without predicted visibility."
+            ),
         ),
         EvaluationProtocolConfig(
-            name="gt_valid",
-            display_name="GT-valid landmarks",
-            description="Uses all finite GT landmarks, regardless of predicted visibility.",
+            name="visibility_protocol_analysis",
+            display_name="Visibility protocol analysis",
+            description=(
+                "Compares visibility_intersection and gt_valid for models that "
+                "explicitly predict visibility."
+            ),
         ),
     ],
     "infanface": [
@@ -229,6 +238,24 @@ DEFAULT_PROTOCOLS_BY_DATASET_TYPE = {
 DEFAULT_COLUMN_MAPPINGS = {
     "babyland72": {
         "per_image": {
+            "standard": {
+                "point_to_point": {
+                    "candidates": [
+                        "mean_nme_box",
+                        "image_nme",
+                        "point_to_point_nme_box",
+                        "point_to_point_nme",
+                        "nme",
+                    ]
+                },
+                "point_to_line": {
+                    "candidates": [
+                        "mean_nme_box_point_to_line",
+                        "point_to_line_nme_box",
+                        "point_to_line_nme",
+                    ]
+                },
+            },
             "visibility_intersection": {
                 "point_to_point": {
                     "candidates": [
@@ -267,6 +294,14 @@ DEFAULT_COLUMN_MAPPINGS = {
             },
         },
         "per_landmark": {
+            "standard": {
+                "point_to_point": {
+                    "candidates": ["point_to_point_nme_box", "point_to_point_nme", "nme"]
+                },
+                "point_to_line": {
+                    "candidates": ["point_to_line_nme_box", "point_to_line_nme"]
+                },
+            },
             "visibility_intersection": {
                 "point_to_point": {
                     "candidates": [
@@ -420,7 +455,19 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
         annotate_boxplot_means=bool(
             dataset_raw.get("annotate_boxplot_means", raw.get("annotate_boxplot_means", True))
         ),
-        show_violin_plots=bool(dataset_raw.get("show_violin_plots", raw.get("show_violin_plots", False))),
+        show_violin_plots=bool(dataset_raw.get("show_violin_plots", raw.get("show_violin_plots", True))),
+        generate_log_scale_variants=bool(
+            dataset_raw.get(
+                "generate_log_scale_variants",
+                plotting_raw.get("generate_log_scale_variants", raw.get("generate_log_scale_variants", True)),
+            )
+        ),
+        log_scale_epsilon=float(
+            dataset_raw.get(
+                "log_scale_epsilon",
+                plotting_raw.get("log_scale_epsilon", raw.get("log_scale_epsilon", 1.0e-8)),
+            )
+        ),
     )
 
     models = []
@@ -435,6 +482,7 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
                 per_landmark_csv=Path(item["per_landmark_csv"]) if item.get("per_landmark_csv") else None,
                 landmark_format=None if item.get("landmark_format") is None else str(item["landmark_format"]),
                 display_name=item.get("display_name"),
+                predicts_visibility=bool(item.get("predicts_visibility", False)),
                 columns=dict(item.get("columns", {})),
             )
         )
@@ -643,14 +691,19 @@ def build_column_audit_row(
     metric_config: BenchmarkMetricConfig,
     selected_nme_column: str | None,
     missing_required_columns: list[str],
+    analysis_name: str | None = None,
+    selected_metric_source: str | None = None,
 ) -> dict[str, Any]:
     """Build one CSV column-audit row for debugging benchmark inputs."""
     if raw is None:
         return {
             "dataset_name": dataset_config.name,
+            "analysis_name": analysis_name or protocol_config.name,
             "evaluation_protocol": protocol_config.name,
             "metric_name": metric_config.name,
             "model_name": model_config.name,
+            "predicts_visibility": bool(model_config.predicts_visibility),
+            "selected_metric_source": selected_metric_source or protocol_config.name,
             "csv_type": csv_type,
             "csv_path": str(csv_path) if csv_path is not None else "",
             "available_columns": "",
@@ -667,9 +720,12 @@ def build_column_audit_row(
     )
     return {
         "dataset_name": dataset_config.name,
+        "analysis_name": analysis_name or protocol_config.name,
         "evaluation_protocol": protocol_config.name,
         "metric_name": metric_config.name,
         "model_name": model_config.name,
+        "predicts_visibility": bool(model_config.predicts_visibility),
+        "selected_metric_source": selected_metric_source or protocol_config.name,
         "csv_type": csv_type,
         "csv_path": str(csv_path) if csv_path is not None else "",
         "available_columns": " | ".join(str(column) for column in raw.columns),
@@ -712,6 +768,73 @@ def filter_per_landmark_by_protocol(
     if dataset_config.dataset_type == "infanface" and protocol_name == "non_contour":
         return landmark_index >= 17
     return mask
+
+
+def make_source_protocol(name: str) -> EvaluationProtocolConfig:
+    """Create an internal source-protocol config used for column resolution."""
+    display_names = {
+        "standard": "Standard valid-landmark metrics",
+        "visibility_intersection": "Visibility intersection",
+        "gt_valid": "GT-valid landmarks",
+    }
+    return EvaluationProtocolConfig(
+        name=name,
+        display_name=display_names.get(name, name.replace("_", " ").title()),
+    )
+
+
+def resolve_babyland_metric_source(
+    analysis_protocol: EvaluationProtocolConfig,
+    model_config: ModelBenchmarkConfig,
+) -> str | None:
+    """Resolve the BabyLand metric source for one model under one analysis."""
+    if analysis_protocol.name == "main_comparison":
+        return "gt_valid" if model_config.predicts_visibility else "standard"
+    if analysis_protocol.name == "visibility_protocol_analysis":
+        return None
+    return analysis_protocol.name
+
+
+def expand_models_for_analysis(
+    config: BenchmarkAnalysisConfig,
+    analysis_protocol: EvaluationProtocolConfig,
+) -> tuple[list[tuple[ModelBenchmarkConfig, EvaluationProtocolConfig, str]], list[str]]:
+    """Return model/source-protocol jobs for one analysis protocol."""
+    import dataclasses
+
+    jobs: list[tuple[ModelBenchmarkConfig, EvaluationProtocolConfig, str]] = []
+    warnings: list[str] = []
+    if config.dataset.dataset_type != "babyland72":
+        return [
+            (model_config, analysis_protocol, analysis_protocol.name)
+            for model_config in config.models
+        ], warnings
+
+    if analysis_protocol.name == "visibility_protocol_analysis":
+        for model_config in config.models:
+            if not model_config.predicts_visibility:
+                warnings.append(
+                    f"{model_config.name} excluded from visibility_protocol_analysis "
+                    "because predicts_visibility is false."
+                )
+                continue
+            for source_name in ("visibility_intersection", "gt_valid"):
+                source_protocol = make_source_protocol(source_name)
+                variant_display = f"{model_config.display_name or model_config.name} ({source_protocol.display_name})"
+                variant = dataclasses.replace(
+                    model_config,
+                    name=f"{model_config.name} [{source_name}]",
+                    display_name=variant_display,
+                )
+                jobs.append((variant, source_protocol, source_name))
+        return jobs, warnings
+
+    for model_config in config.models:
+        source_name = resolve_babyland_metric_source(analysis_protocol, model_config)
+        if source_name is None:
+            continue
+        jobs.append((model_config, make_source_protocol(source_name), source_name))
+    return jobs, warnings
 
 
 def normalize_orientation_value(value: Any, mapping: dict[str, str]) -> str:
@@ -769,9 +892,13 @@ def load_model_results(
     protocol_config: EvaluationProtocolConfig,
     metric_config: BenchmarkMetricConfig,
     drop_invalid_nme: bool = False,
+    analysis_name: str | None = None,
+    selected_metric_source: str | None = None,
 ) -> LoadedModelResults:
     """Load, normalize, and validate result CSVs for one model."""
     dataset_config = config.dataset
+    analysis_name = analysis_name or protocol_config.name
+    selected_metric_source = selected_metric_source or protocol_config.name
     warnings: list[str] = []
     orientation_warnings: list[dict[str, Any]] = []
     column_audit: list[dict[str, Any]] = []
@@ -829,6 +956,8 @@ def load_model_results(
                 metric_config,
                 nme_col,
                 missing,
+                analysis_name,
+                selected_metric_source,
             )
         )
         if image_col is not None and nme_col is not None:
@@ -858,8 +987,12 @@ def load_model_results(
                 )
             else:
                 per_image["detected"] = per_image["nme"].notna()
+            per_image["analysis_name"] = analysis_name
             per_image["evaluation_protocol"] = protocol_config.name
+            per_image["selected_metric_source"] = selected_metric_source
             per_image["metric_name"] = metric_config.name
+            per_image["predicts_visibility"] = bool(model_config.predicts_visibility)
+            per_image["selected_metric_column"] = nme_col
 
             warnings.extend(validate_nme_table(per_image, model_config.name, "per-image", dataset_config))
             if per_image["nme"].notna().sum() == 0:
@@ -932,6 +1065,8 @@ def load_model_results(
                 metric_config,
                 nme_col,
                 missing,
+                analysis_name,
+                selected_metric_source,
             )
         )
         if image_col is None or nme_col is None or landmark_col is None:
@@ -985,8 +1120,12 @@ def load_model_results(
             )
         else:
             per_landmark["valid"] = per_landmark["nme"].notna()
+        per_landmark["analysis_name"] = analysis_name
         per_landmark["evaluation_protocol"] = protocol_config.name
+        per_landmark["selected_metric_source"] = selected_metric_source
         per_landmark["metric_name"] = metric_config.name
+        per_landmark["predicts_visibility"] = bool(model_config.predicts_visibility)
+        per_landmark["selected_metric_column"] = nme_col
 
         warnings.extend(validate_nme_table(per_landmark, model_config.name, "per-landmark", dataset_config))
         if per_landmark["nme"].notna().sum() == 0:
@@ -1109,6 +1248,25 @@ def compute_global_image_metrics(results: list[LoadedModelResults]) -> pd.DataFr
             continue
         data = finite_nme(result.per_image)
         row = {"model": result.config.name}
+        if not result.per_image.empty:
+            first = result.per_image.iloc[0]
+            row.update(
+                {
+                    "analysis_name": first.get("analysis_name", ""),
+                    "selected_metric_source": first.get("selected_metric_source", ""),
+                    "selected_metric_column": first.get("selected_metric_column", ""),
+                    "predicts_visibility": bool(first.get("predicts_visibility", result.config.predicts_visibility)),
+                }
+            )
+        else:
+            row.update(
+                {
+                    "analysis_name": "",
+                    "selected_metric_source": "",
+                    "selected_metric_column": "",
+                    "predicts_visibility": bool(result.config.predicts_visibility),
+                }
+            )
         row["detection_rate"] = (
             result.config.detection_rate
             if result.config.detection_rate is not None
@@ -1117,7 +1275,10 @@ def compute_global_image_metrics(results: list[LoadedModelResults]) -> pd.DataFr
         row["n_detected"] = int(data.shape[0])
         row.update({key: value for key, value in summarize_nme(data["nme"], "image").items() if key != "n_image"})
         rows.append(row)
-    return pd.DataFrame(rows).sort_values("mean_image_nme", na_position="last")
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    return out.sort_values("mean_image_nme", na_position="last")
 
 
 def compute_best_worst_cases(
@@ -1141,6 +1302,11 @@ def compute_best_worst_cases(
                     {
                         "model_name": result.config.name,
                         "dataset_name": dataset_config.name,
+                        "analysis_name": row.get("analysis_name", ""),
+                        "evaluation_protocol": row.get("evaluation_protocol", ""),
+                        "selected_metric_source": row.get("selected_metric_source", ""),
+                        "selected_metric_column": row.get("selected_metric_column", ""),
+                        "predicts_visibility": row.get("predicts_visibility", ""),
                         "metric_name": metric_config.name,
                         "metric_display_name": metric_config.display_name,
                         "image_id": row.get("image_id"),
@@ -1181,18 +1347,12 @@ def split_best_worst_case_tables(best_worst_cases: pd.DataFrame) -> dict[str, pd
 
 
 def write_best_worst_case_tables(output_dir: Path, best_worst_cases: pd.DataFrame) -> None:
-    """Write combined and per-model best/worst CSV tables for one protocol/metric."""
+    """Write combined best/worst CSV tables for one protocol/metric."""
     tables_dir = output_dir / "tables"
     tables_dir.mkdir(parents=True, exist_ok=True)
     if best_worst_cases.empty:
         return
     best_worst_cases.to_csv(tables_dir / "best_worst_cases_per_model.csv", index=False)
-    for model_name, model_rows in best_worst_cases.groupby("model_name"):
-        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(model_name)).strip("_") or "model"
-        best = model_rows[model_rows["rank_type"] == "best"].sort_values("rank")
-        worst = model_rows[model_rows["rank_type"] == "worst"].sort_values("rank")
-        best.to_csv(tables_dir / f"best_cases_{safe_name}.csv", index=False)
-        worst.to_csv(tables_dir / f"worst_cases_{safe_name}.csv", index=False)
 
 
 def compute_orientation_metrics(
@@ -1209,7 +1369,15 @@ def compute_orientation_metrics(
         if not dataset_config.include_unknown_orientations:
             data = data[data["orientation"].isin(dataset_config.orientation_order)]
         for orientation, group in data.groupby("orientation", dropna=True):
-            row = {"model": result.config.name, "orientation": orientation}
+            first = group.iloc[0]
+            row = {
+                "model": result.config.name,
+                "orientation": orientation,
+                "analysis_name": first.get("analysis_name", ""),
+                "selected_metric_source": first.get("selected_metric_source", ""),
+                "selected_metric_column": first.get("selected_metric_column", ""),
+                "predicts_visibility": bool(first.get("predicts_visibility", result.config.predicts_visibility)),
+            }
             row.update(summarize_nme(group["nme"], "image"))
             rows.append(row)
     out = pd.DataFrame(rows)
@@ -1231,6 +1399,16 @@ def compute_landmark_pooled_metrics(results: list[LoadedModelResults]) -> pd.Dat
             continue
         data = finite_nme(result.per_landmark)
         row = {"model": result.config.name}
+        if not data.empty:
+            first = data.iloc[0]
+            row.update(
+                {
+                    "analysis_name": first.get("analysis_name", ""),
+                    "selected_metric_source": first.get("selected_metric_source", ""),
+                    "selected_metric_column": first.get("selected_metric_column", ""),
+                    "predicts_visibility": bool(first.get("predicts_visibility", result.config.predicts_visibility)),
+                }
+            )
         row.update(summarize_nme(data["nme"], "landmark"))
         rows.append(row)
     return pd.DataFrame(rows)
@@ -1246,7 +1424,15 @@ def compute_per_landmark_metrics(results: list[LoadedModelResults]) -> pd.DataFr
         for landmark_index, group in data.groupby("landmark_index"):
             if pd.isna(landmark_index):
                 continue
-            row = {"model": result.config.name, "landmark_index": int(landmark_index)}
+            first = group.iloc[0]
+            row = {
+                "model": result.config.name,
+                "landmark_index": int(landmark_index),
+                "analysis_name": first.get("analysis_name", ""),
+                "selected_metric_source": first.get("selected_metric_source", ""),
+                "selected_metric_column": first.get("selected_metric_column", ""),
+                "predicts_visibility": bool(first.get("predicts_visibility", result.config.predicts_visibility)),
+            }
             row.update(summarize_nme(group["nme"], "landmark"))
             rows.append(row)
     return pd.DataFrame(rows)
@@ -1270,11 +1456,16 @@ def compute_anatomical_region_metrics(
         data["region"] = data["landmark_index"].map(index_to_region)
         data = data[data["region"].notna()]
         for region, group in data.groupby("region"):
+            first = group.iloc[0]
             summary = summarize_nme(group["nme"], "landmark")
             rows.append(
                 {
                     "model": result.config.name,
                     "region": region,
+                    "analysis_name": first.get("analysis_name", ""),
+                    "selected_metric_source": first.get("selected_metric_source", ""),
+                    "selected_metric_column": first.get("selected_metric_column", ""),
+                    "predicts_visibility": bool(first.get("predicts_visibility", result.config.predicts_visibility)),
                     "n_observations": summary["n_landmark"],
                     "mean_nme": summary["mean_landmark_nme"],
                     "median_nme": summary["median_landmark_nme"],
@@ -1543,6 +1734,16 @@ def compute_dataset_input_summary(results: list[LoadedModelResults]) -> pd.DataF
         rows.append(
             {
                 "model_name": result.config.name,
+                "predicts_visibility": bool(result.config.predicts_visibility),
+                "analysis_name": (
+                    "" if result.per_image is None or result.per_image.empty else result.per_image.iloc[0].get("analysis_name", "")
+                ),
+                "selected_metric_source": (
+                    "" if result.per_image is None or result.per_image.empty else result.per_image.iloc[0].get("selected_metric_source", "")
+                ),
+                "selected_metric_column": (
+                    "" if result.per_image is None or result.per_image.empty else result.per_image.iloc[0].get("selected_metric_column", "")
+                ),
                 "detection_rate_config": result.config.detection_rate,
                 "landmark_format": result.config.landmark_format,
                 "per_image_csv": str(result.config.per_image_csv) if result.config.per_image_csv else "",
@@ -1808,7 +2009,11 @@ def generate_benchmark_plots(
         save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
         plot_paths.append(str(path.relative_to(output_dir)))
 
-        if any(np.nanmax(values) / max(np.nanmedian(values), 1e-8) > 4 for values in ordered_data if len(values)):
+        if config.dataset.generate_log_scale_variants and any(
+            np.nanmax(values) / max(np.nanmedian(values), config.dataset.log_scale_epsilon) > 4
+            for values in ordered_data
+            if len(values)
+        ):
             fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 5.0))
             box = ax.boxplot(plot_data, labels=labels, showfliers=False, showmeans=True, patch_artist=True)
             for patch, color in zip(box["boxes"], colors):
@@ -1846,6 +2051,40 @@ def generate_benchmark_plots(
             path = plot_dir / "image_nme_violin_by_model.png"
             save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
             plot_paths.append(str(path.relative_to(output_dir)))
+
+            if config.dataset.generate_log_scale_variants and any(
+                np.nanmax(values) / max(np.nanmedian(values), config.dataset.log_scale_epsilon) > 4
+                for values in ordered_data
+                if len(values)
+            ):
+                epsilon = config.dataset.log_scale_epsilon * (100.0 if use_percent else 1.0)
+                log_plot_data = [
+                    np.maximum(values, epsilon)
+                    for values in plot_data
+                ]
+                fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 5.0))
+                violin = ax.violinplot(log_plot_data, showmeans=False, showmedians=False, showextrema=False)
+                for body, color in zip(violin["bodies"], colors):
+                    body.set_facecolor(color)
+                    body.set_edgecolor("black")
+                    body.set_alpha(0.45)
+                for idx, values in enumerate(log_plot_data, start=1):
+                    if len(values) == 0:
+                        continue
+                    q1, median, q3 = np.percentile(values, [25, 50, 75])
+                    mean = np.mean(values)
+                    ax.vlines(idx, q1, q3, color="black", linewidth=3)
+                    ax.scatter(idx, median, marker="_", color="black", s=120, zorder=3, label="Median" if idx == 1 else None)
+                    ax.scatter(idx, mean, marker="D", facecolor="white", edgecolor="black", s=36, zorder=3, label="Mean" if idx == 1 else None)
+                ax.set_yscale("log")
+                ax.set_xticks(np.arange(1, len(model_order) + 1), labels, rotation=30, ha="right")
+                ax.set_ylabel("Image-level NME (%)" if use_percent else "Image-level NME")
+                ax.set_title(contextual_title("Image-level NME distribution by model (log scale)"))
+                ax.legend(loc="upper right")
+                apply_axis_style(ax)
+                path = plot_dir / "image_nme_violin_by_model_log.png"
+                save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
+                plot_paths.append(str(path.relative_to(output_dir)))
 
         def plot_ced(path: Path, zoom: bool = False) -> None:
             fig, ax = plt.subplots(figsize=(7.2, 5.0))
@@ -2037,6 +2276,33 @@ def dataframe_to_markdown(df: pd.DataFrame, max_rows: int = 20) -> str:
     return "\n".join(lines)
 
 
+def get_babyland_visibility_report_note(
+    dataset: DatasetBenchmarkConfig,
+    protocol_config: EvaluationProtocolConfig | None,
+) -> list[str]:
+    """Return BabyLand-72 visibility-protocol interpretation notes."""
+    if dataset.dataset_type != "babyland72" or protocol_config is None:
+        return []
+    if protocol_config.name == "main_comparison":
+        return [
+            "**BabyLand-72 visibility note:** Only visibility-aware models produce predicted "
+            "visibility flags. Therefore, the main SOTA comparison uses GT-valid metrics for "
+            "visibility-aware models and standard valid-landmark metrics for models without "
+            "predicted visibility. The visibility-intersection protocol is reported separately "
+            "for visibility-aware models only.",
+            "",
+        ]
+    if protocol_config.name == "visibility_protocol_analysis":
+        return [
+            "**BabyLand-72 visibility note:** This analysis includes only models with "
+            "`predicts_visibility: true`. External SOTA models without predicted visibility "
+            "cannot be evaluated under `gt_visibility == 1 AND pred_visibility == 1`, so they "
+            "are excluded from this protocol comparison.",
+            "",
+        ]
+    return []
+
+
 def write_markdown_report(
     output_dir: Path,
     config: BenchmarkAnalysisConfig,
@@ -2074,6 +2340,7 @@ def write_markdown_report(
         "This is preferred for visibility-aware datasets because landmark-pooled metrics "
         "can overweight images with more visible landmarks.",
         "",
+        *get_babyland_visibility_report_note(dataset, protocol_config),
         dataframe_to_markdown(global_metrics, max_rows=50),
         "",
         "- `mean_image_nme`: average image-level normalized mean error.",
@@ -2314,6 +2581,19 @@ def write_top_level_benchmark_summary(
     for protocol in config.evaluation_protocols:
         description = f": {protocol.description}" if protocol.description else ""
         lines.append(f"- `{protocol.name}` ({protocol.display_name}){description}")
+    if config.dataset.dataset_type == "babyland72":
+        lines.extend(
+            [
+                "",
+                "For BabyLand-72, `main_comparison` includes all models with compatible metrics. "
+                "Visibility-aware models use GT-valid columns, while non-visibility SOTA models "
+                "use their standard valid-landmark columns.",
+                "",
+                "`visibility_protocol_analysis` includes only models configured with "
+                "`predicts_visibility: true` and compares their `visibility_intersection` and "
+                "`gt_valid` metric sources.",
+            ]
+        )
     lines.extend(["", "## Metrics", ""])
     for metric in config.metrics:
         lines.append(f"- `{metric.name}` ({metric.display_name})")
@@ -2424,17 +2704,23 @@ def run_benchmark_analysis_for_metric(
     (output_dir / "tables").mkdir(exist_ok=True)
     (output_dir / "plots").mkdir(exist_ok=True)
 
+    model_jobs, analysis_warnings = expand_models_for_analysis(config, protocol_config)
     results = [
         load_model_results(
             model,
             config,
-            protocol_config,
+            source_protocol,
             metric_config,
             drop_invalid_nme=config.drop_invalid_nme,
+            analysis_name=protocol_config.name,
+            selected_metric_source=selected_source_name,
         )
-        for model in config.models
+        for model, source_protocol, selected_source_name in model_jobs
     ]
-    warnings = [warning for result in results for warning in result.warnings]
+    warnings = list(analysis_warnings)
+    if not results:
+        warnings.append(f"No models were available for analysis `{protocol_config.name}`.")
+    warnings.extend([warning for result in results for warning in result.warnings])
     _, _, style_warnings = build_model_style_maps(
         [result.config.name for result in results],
         config.dataset,

@@ -4,11 +4,14 @@ import numpy as np
 import pandas as pd
 
 from scripts.analysis.benchmark_landmark_models import (
+    BenchmarkAnalysisConfig,
     BenchmarkMetricConfig,
     DatasetBenchmarkConfig,
+    EvaluationProtocolConfig,
     LoadedModelResults,
     ModelBenchmarkConfig,
     compute_best_worst_cases,
+    expand_models_for_analysis,
     split_best_worst_case_tables,
 )
 from scripts.engine.evaluation_modes import compute_masked_natural_per_landmark_nme
@@ -106,3 +109,42 @@ def test_best_worst_cases_are_split_into_two_consolidated_tables() -> None:
     assert set(tables) == {"best_cases", "worst_cases"}
     assert list(tables["best_cases"]["model_name"]) == ["model_a", "model_b"]
     assert list(tables["worst_cases"]["model_name"]) == ["model_a", "model_b"]
+
+
+def test_babyland_analysis_uses_visibility_flag_capability() -> None:
+    """BabyLand main comparison falls back to standard SOTA metrics without visibility."""
+    config = BenchmarkAnalysisConfig(
+        dataset=DatasetBenchmarkConfig(
+            name="BabyLand-72",
+            output_dir="unused",
+            dataset_type="babyland72",
+        ),
+        models=[
+            ModelBenchmarkConfig(name="visibility_model", predicts_visibility=True),
+            ModelBenchmarkConfig(name="sota_model", predicts_visibility=False),
+        ],
+    )
+
+    main_jobs, main_warnings = expand_models_for_analysis(
+        config,
+        EvaluationProtocolConfig(name="main_comparison", display_name="Main comparison"),
+    )
+    assert main_warnings == []
+    assert [(model.name, source.name, source_name) for model, source, source_name in main_jobs] == [
+        ("visibility_model", "gt_valid", "gt_valid"),
+        ("sota_model", "standard", "standard"),
+    ]
+
+    visibility_jobs, visibility_warnings = expand_models_for_analysis(
+        config,
+        EvaluationProtocolConfig(
+            name="visibility_protocol_analysis",
+            display_name="Visibility protocol analysis",
+        ),
+    )
+    assert len(visibility_jobs) == 2
+    assert [source_name for _, _, source_name in visibility_jobs] == [
+        "visibility_intersection",
+        "gt_valid",
+    ]
+    assert any("sota_model excluded" in warning for warning in visibility_warnings)
