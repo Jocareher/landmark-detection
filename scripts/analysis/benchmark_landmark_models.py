@@ -94,6 +94,12 @@ DEFAULT_BABYLAND72_REGIONS = {
     "right_chin": [71],
 }
 
+DEFAULT_MULTIPIE68_REGIONS = {
+    region: indices
+    for region, indices in DEFAULT_BABYLAND72_REGIONS.items()
+    if max(indices) < 68
+}
+
 
 @dataclass
 class BenchmarkMetricConfig:
@@ -410,11 +416,13 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
         elif "babyland" in dataset_name_lower:
             dataset_type = "babyland72"
     regions = dataset_raw.get("anatomical_regions") or {}
-    if not regions and "babyland" in dataset_name.lower():
+    if not regions and dataset_type == "babyland72":
         regions = DEFAULT_BABYLAND72_REGIONS
+    elif not regions and dataset_type == "infanface":
+        regions = DEFAULT_MULTIPIE68_REGIONS
 
     orientation_mapping = dataset_raw.get("orientation_mapping") or {}
-    if not orientation_mapping and "babyland" in dataset_name.lower():
+    if not orientation_mapping and dataset_type in {"babyland72", "infanface"}:
         orientation_mapping = DEFAULT_BABYLAND_ORIENTATION_MAPPING
 
     plotting_raw = raw.get("plotting", {})
@@ -749,6 +757,8 @@ def filter_per_landmark_by_protocol(
     mask = pd.Series(True, index=raw.index)
     protocol_name = protocol_config.name
     if dataset_config.dataset_type == "babyland72":
+        if protocol_name == "standard":
+            return mask
         inclusion_col = next(
             (
                 column
@@ -1982,7 +1992,7 @@ def generate_benchmark_plots(
         fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 5.0))
         box = ax.boxplot(
             plot_data,
-            labels=labels,
+            tick_labels=labels,
             showfliers=False,
             showmeans=True,
             meanprops={"marker": "D", "markerfacecolor": "white", "markeredgecolor": "black", "markersize": 6},
@@ -2015,7 +2025,7 @@ def generate_benchmark_plots(
             if len(values)
         ):
             fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 5.0))
-            box = ax.boxplot(plot_data, labels=labels, showfliers=False, showmeans=True, patch_artist=True)
+            box = ax.boxplot(plot_data, tick_labels=labels, showfliers=False, showmeans=True, patch_artist=True)
             for patch, color in zip(box["boxes"], colors):
                 patch.set_facecolor(color)
                 patch.set_alpha(0.55)
@@ -2151,7 +2161,7 @@ def generate_benchmark_plots(
             landmark_indices = sorted(primary_raw["landmark_index"].dropna().unique())
             data = [primary_raw.loc[primary_raw["landmark_index"] == idx, "nme"].to_numpy() for idx in landmark_indices]
             fig, ax = plt.subplots(figsize=(max(10, len(landmark_indices) * 0.22), 4.8))
-            ax.boxplot(data, labels=[str(int(idx)) for idx in landmark_indices], showfliers=False)
+            ax.boxplot(data, tick_labels=[str(int(idx)) for idx in landmark_indices], showfliers=False)
             ax.set_xlabel("Landmark index (0-based)")
             ax.set_ylabel("Per-landmark NME")
             ax.set_title(contextual_title(f"Per-landmark NME for {label_for_model(primary, display_names)}"))

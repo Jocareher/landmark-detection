@@ -12,6 +12,7 @@ from scripts.analysis.benchmark_landmark_models import (
     ModelBenchmarkConfig,
     compute_best_worst_cases,
     expand_models_for_analysis,
+    filter_per_landmark_by_protocol,
     split_best_worst_case_tables,
 )
 from scripts.engine.evaluation_modes import compute_masked_natural_per_landmark_nme
@@ -148,3 +149,25 @@ def test_babyland_analysis_uses_visibility_flag_capability() -> None:
         "gt_valid",
     ]
     assert any("sota_model excluded" in warning for warning in visibility_warnings)
+
+
+def test_babyland_standard_keeps_sota_rows_with_empty_inclusion_column() -> None:
+    """Standard SOTA metrics should not require visibility-inclusion labels."""
+    raw = pd.DataFrame(
+        {
+            "landmark_idx": [0, 1, 2],
+            "evaluation_landmark_inclusion": [np.nan, np.nan, np.nan],
+        }
+    )
+    mask = filter_per_landmark_by_protocol(
+        raw,
+        DatasetBenchmarkConfig(
+            name="BabyLand-72",
+            output_dir="unused",
+            dataset_type="babyland72",
+        ),
+        EvaluationProtocolConfig(name="standard", display_name="Standard"),
+        raw["landmark_idx"],
+    )
+
+    assert mask.tolist() == [True, True, True]
