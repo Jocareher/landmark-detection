@@ -1,0 +1,24 @@
+# Example config for preparing CIFD and TIF 68-landmark `.pts` datasets.
+
+datasets:
+  - name: "CIFD"
+    source_root: "/path/to/cifd"
+    newborn_predictions_dir: "/path/to/newborn_predictions_cifd"
+  - name: "TIF"
+    source_root: "/path/to/tif"
+    newborn_predictions_dir: "/path/to/newborn_predictions_tif"
+
+output_root: "/path/to/prepared_68_landmark_datasets"
+
+options:
+  overwrite_existing: false
+  preserve_image_extension: true
+  coordinate_format: "pixel"
+  allow_missing_class_idx: false
+  missing_class_idx_placeholder:
+  generate_plots: true
+  jpeg_quality: 95
+  show_indices: false
+  point_radius: 5
+  line_width: 2
+  line_color: "#00C853"
