@@ -2,13 +2,13 @@
 
 datasets:
   - name: "CIFD"
-    source_root: "/path/to/cifd"
-    newborn_predictions_dir: "/path/to/newborn_predictions_cifd"
+    source_root: "/Users/jocareher/Downloads/CIFD"
+    newborn_predictions_dir: "/Users/jocareher/Downloads/CIFD/obbs"
   - name: "TIF"
-    source_root: "/path/to/tif"
-    newborn_predictions_dir: "/path/to/newborn_predictions_tif"
+    source_root: "/Users/jocareher/Downloads/TIF"
+    newborn_predictions_dir: "/Users/jocareher/Downloads/TIF/obbs"
 
-output_root: "/path/to/prepared_68_landmark_datasets"
+output_root: "/Users/jocareher/Downloads/prepared_68_landmark_datasets"
 
 options:
   overwrite_existing: false

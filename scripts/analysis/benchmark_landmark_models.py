@@ -46,6 +46,17 @@ POINT_TO_LINE_IMAGE_NME_ALIASES = (
     "point_to_line_nme",
 )
 POINT_TO_LINE_LANDMARK_NME_ALIASES = ("point_to_line_nme_box", "point_to_line_nme")
+HAUSDORFF_IMAGE_NME_ALIASES = (
+    "hausdorff_box",
+    "mean_hausdorff_box",
+    "image_hausdorff_box",
+    "hausdorff_nme_box",
+    "hausdorff_box_all_landmarks",
+    "hausdorff_box_non_contour",
+    "hausdorff_box_visibility_intersection",
+    "hausdorff_box_visible_intersection",
+    "hausdorff_box_gt_valid",
+)
 LANDMARK_INDEX_ALIASES = ("landmark_index", "landmark_idx", "landmark_id", "landmark", "point_index")
 ORIENTATION_ALIASES = ("orientation", "yaw_group", "yaw_angle", "class_idx", "pose")
 DETECTED_ALIASES = ("detected", "is_detected", "success", "valid_detection")
@@ -128,6 +139,7 @@ class ModelBenchmarkConfig:
     per_image_csv: Path | None = None
     per_landmark_csv: Path | None = None
     detection_rate: float | None = None
+    detection_rate_fallback: float | None = None
     landmark_format: str | None = None
     display_name: str | None = None
     predicts_visibility: bool = False
@@ -145,6 +157,7 @@ class DatasetBenchmarkConfig:
     reference_models: list[str] = field(default_factory=list)
     orientation_mapping: dict[str, str] = field(default_factory=dict)
     anatomical_regions: dict[str, list[int]] = field(default_factory=dict)
+    total_images: int | None = None
     landmark_count: int | None = None
     landmark_index_base: str = "auto"
     image_id_strip_regexes: list[str] = field(default_factory=lambda: [r"__det_\\d+$"])
@@ -182,12 +195,25 @@ class BenchmarkAnalysisConfig:
 
 
 @dataclass
+class DetectionRateInfo:
+    """Resolved detection-rate metadata for one model/result table."""
+
+    detection_rate: float | None = None
+    detection_rate_source: str = "unavailable"
+    n_detected: int | None = None
+    n_total: int | None = None
+    detected_column_name: str = ""
+    warning_message: str = ""
+
+
+@dataclass
 class LoadedModelResults:
     """Loaded and normalized result tables for one model."""
 
     config: ModelBenchmarkConfig
     per_image: pd.DataFrame | None
     per_landmark: pd.DataFrame | None
+    detection_rate_info: DetectionRateInfo = field(default_factory=DetectionRateInfo)
     warnings: list[str] = field(default_factory=list)
     orientation_warnings: list[dict[str, Any]] = field(default_factory=list)
     column_audit: list[dict[str, Any]] = field(default_factory=list)
@@ -205,6 +231,12 @@ DEFAULT_BENCHMARK_METRICS = [
         display_name="Point-to-line",
         per_image_column_candidates=POINT_TO_LINE_IMAGE_NME_ALIASES,
         per_landmark_column_candidates=POINT_TO_LINE_LANDMARK_NME_ALIASES,
+    ),
+    BenchmarkMetricConfig(
+        name="hausdorff",
+        display_name="Hausdorff",
+        per_image_column_candidates=HAUSDORFF_IMAGE_NME_ALIASES,
+        per_landmark_column_candidates=(),
     ),
 ]
 
@@ -261,6 +293,14 @@ DEFAULT_COLUMN_MAPPINGS = {
                         "point_to_line_nme",
                     ]
                 },
+                "hausdorff": {
+                    "candidates": [
+                        "hausdorff_box",
+                        "mean_hausdorff_box",
+                        "image_hausdorff_box",
+                        "hausdorff_nme_box",
+                    ]
+                },
             },
             "visibility_intersection": {
                 "point_to_point": {
@@ -281,6 +321,14 @@ DEFAULT_COLUMN_MAPPINGS = {
                         "mean_nme_box_point_to_line",
                     ]
                 },
+                "hausdorff": {
+                    "candidates": [
+                        "hausdorff_box_visibility_intersection",
+                        "hausdorff_box_visible_intersection",
+                        "mean_hausdorff_box_visibility_intersection",
+                        "mean_hausdorff_box_visible_intersection",
+                    ]
+                },
             },
             "gt_valid": {
                 "point_to_point": {
@@ -297,6 +345,12 @@ DEFAULT_COLUMN_MAPPINGS = {
                         "mean_nme_point_to_line_gt_valid",
                     ]
                 },
+                "hausdorff": {
+                    "candidates": [
+                        "hausdorff_box_gt_valid",
+                        "mean_hausdorff_box_gt_valid",
+                    ]
+                },
             },
         },
         "per_landmark": {
@@ -307,6 +361,7 @@ DEFAULT_COLUMN_MAPPINGS = {
                 "point_to_line": {
                     "candidates": ["point_to_line_nme_box", "point_to_line_nme"]
                 },
+                "hausdorff": {"candidates": []},
             },
             "visibility_intersection": {
                 "point_to_point": {
@@ -323,6 +378,7 @@ DEFAULT_COLUMN_MAPPINGS = {
                         "point_to_line_nme_box",
                     ]
                 },
+                "hausdorff": {"candidates": []},
             },
             "gt_valid": {
                 "point_to_point": {
@@ -339,6 +395,7 @@ DEFAULT_COLUMN_MAPPINGS = {
                         "point_to_line_nme_box",
                     ]
                 },
+                "hausdorff": {"candidates": []},
             },
         },
     },
@@ -361,6 +418,14 @@ DEFAULT_COLUMN_MAPPINGS = {
                         "mean_nme_box_point_to_line",
                     ]
                 },
+                "hausdorff": {
+                    "candidates": [
+                        "hausdorff_box_all_landmarks",
+                        "hausdorff_box_all",
+                        "hausdorff_box",
+                        "mean_hausdorff_box",
+                    ]
+                },
             },
             "non_contour": {
                 "point_to_point": {
@@ -375,16 +440,24 @@ DEFAULT_COLUMN_MAPPINGS = {
                         "point_to_line_nme_box_non_contour",
                     ]
                 },
+                "hausdorff": {
+                    "candidates": [
+                        "hausdorff_box_non_contour",
+                        "mean_hausdorff_box_non_contour",
+                    ]
+                },
             },
         },
         "per_landmark": {
             "all_landmarks": {
                 "point_to_point": {"candidates": ["point_to_point_nme_box", "nme"]},
                 "point_to_line": {"candidates": ["point_to_line_nme_box"]},
+                "hausdorff": {"candidates": []},
             },
             "non_contour": {
                 "point_to_point": {"candidates": ["point_to_point_nme_box", "nme"]},
                 "point_to_line": {"candidates": ["point_to_line_nme_box"]},
+                "hausdorff": {"candidates": []},
             },
         },
     },
@@ -434,6 +507,11 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
         reference_models=list(dataset_raw.get("reference_models", [])),
         orientation_mapping={str(key): str(value) for key, value in orientation_mapping.items()},
         anatomical_regions={str(key): list(value) for key, value in regions.items()},
+        total_images=(
+            None
+            if dataset_raw.get("total_images") is None
+            else int(dataset_raw["total_images"])
+        ),
         landmark_count=dataset_raw.get("landmark_count"),
         landmark_index_base=str(dataset_raw.get("landmark_index_base", "auto")),
         image_id_strip_regexes=list(dataset_raw.get("image_id_strip_regexes", [r"__det_\\d+$"])),
@@ -485,6 +563,11 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
                 name=str(item["name"]),
                 detection_rate=(
                     None if item.get("detection_rate") is None else float(item["detection_rate"])
+                ),
+                detection_rate_fallback=(
+                    None
+                    if item.get("detection_rate_fallback") is None
+                    else float(item["detection_rate_fallback"])
                 ),
                 per_image_csv=Path(item["per_image_csv"]) if item.get("per_image_csv") else None,
                 per_landmark_csv=Path(item["per_landmark_csv"]) if item.get("per_landmark_csv") else None,
@@ -896,6 +979,124 @@ def _read_csv(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
+def _truthy_detection_series(series: pd.Series) -> pd.Series:
+    """Parse common truthy detection values from a CSV column."""
+    return series.astype(str).str.lower().isin(
+        {"1", "true", "yes", "y", "detected", "success", "valid"}
+    )
+
+
+def read_detection_rate_from_summary(summary_path: Path) -> DetectionRateInfo | None:
+    """Read detection-rate metadata from a sibling metrics summary CSV if present."""
+    if not summary_path.exists():
+        return None
+    try:
+        summary = pd.read_csv(summary_path)
+    except Exception:
+        return None
+    if not {"metric", "value"}.issubset(summary.columns):
+        return None
+    values = {
+        str(row["metric"]): row["value"]
+        for _, row in summary.iterrows()
+        if str(row.get("metric", "")).strip()
+    }
+    rate = pd.to_numeric(pd.Series([values.get("detection_rate")]), errors="coerce").iloc[0]
+    if not np.isfinite(rate):
+        return None
+    n_detected = pd.to_numeric(
+        pd.Series([values.get("images_with_prediction")]),
+        errors="coerce",
+    ).iloc[0]
+    n_total = pd.to_numeric(
+        pd.Series([values.get("total_images") or values.get("num_samples")]),
+        errors="coerce",
+    ).iloc[0]
+    return DetectionRateInfo(
+        detection_rate=float(rate),
+        detection_rate_source="summary_csv",
+        n_detected=None if not np.isfinite(n_detected) else int(n_detected),
+        n_total=None if not np.isfinite(n_total) else int(n_total),
+    )
+
+
+def infer_detection_rate_info(
+    raw: pd.DataFrame | None,
+    image_col: str | None,
+    nme_col: str | None,
+    detected_col: str | None,
+    model_config: ModelBenchmarkConfig,
+    dataset_config: DatasetBenchmarkConfig,
+) -> DetectionRateInfo:
+    """Infer detection rate from CSV columns, dataset totals, summaries, or fallback."""
+    fallback = (
+        model_config.detection_rate_fallback
+        if model_config.detection_rate_fallback is not None
+        else model_config.detection_rate
+    )
+    if raw is not None and detected_col is not None:
+        detected = _truthy_detection_series(raw[detected_col])
+        return DetectionRateInfo(
+            detection_rate=float(detected.mean()) if len(detected) else None,
+            detection_rate_source="detected_column",
+            n_detected=int(detected.sum()),
+            n_total=int(len(detected)),
+            detected_column_name=detected_col,
+        )
+
+    if (
+        raw is not None
+        and image_col is not None
+        and dataset_config.total_images is not None
+        and dataset_config.total_images > 0
+    ):
+        if nme_col is not None:
+            valid_rows = raw[pd.to_numeric(raw[nme_col], errors="coerce").notna()]
+        else:
+            valid_rows = raw
+        n_detected = int(
+            valid_rows[image_col]
+            .map(lambda value: normalize_image_id(value, dataset_config.image_id_strip_regexes))
+            .nunique()
+        )
+        return DetectionRateInfo(
+            detection_rate=float(n_detected / dataset_config.total_images),
+            detection_rate_source="n_detected_over_dataset_total",
+            n_detected=n_detected,
+            n_total=int(dataset_config.total_images),
+            warning_message=(
+                "Inferred from unique evaluated image IDs divided by dataset.total_images."
+            ),
+        )
+
+    if model_config.per_image_csv is not None:
+        summary_info = read_detection_rate_from_summary(
+            model_config.per_image_csv.parent / "metrics_summary.csv"
+        )
+        if summary_info is not None:
+            return summary_info
+
+    if fallback is not None:
+        return DetectionRateInfo(
+            detection_rate=float(fallback),
+            detection_rate_source="fallback_config",
+            warning_message=(
+                "Used manual detection_rate_fallback."
+                if model_config.detection_rate_fallback is not None
+                else "Used legacy detection_rate as fallback; prefer detection_rate_fallback."
+            ),
+        )
+
+    return DetectionRateInfo(
+        detection_rate=None,
+        detection_rate_source="unavailable",
+        warning_message=(
+            "Could not infer detection rate. Provide dataset.total_images, a detected "
+            "column, metrics_summary.csv, or detection_rate_fallback."
+        ),
+    )
+
+
 def load_model_results(
     model_config: ModelBenchmarkConfig,
     config: BenchmarkAnalysisConfig,
@@ -914,6 +1115,7 @@ def load_model_results(
     column_audit: list[dict[str, Any]] = []
     per_image = None
     per_landmark = None
+    detection_rate_info = DetectionRateInfo()
 
     if model_config.per_image_csv is not None:
         raw = _read_csv(model_config.per_image_csv)
@@ -955,6 +1157,16 @@ def load_model_results(
             missing.append("image_id")
         if nme_col is None:
             missing.append("nme")
+        detection_rate_info = infer_detection_rate_info(
+            raw=raw,
+            image_col=image_col,
+            nme_col=nme_col,
+            detected_col=detected_col,
+            model_config=model_config,
+            dataset_config=dataset_config,
+        )
+        if detection_rate_info.warning_message:
+            warnings.append(f"{model_config.name} detection rate: {detection_rate_info.warning_message}")
         column_audit.append(
             build_column_audit_row(
                 model_config,
@@ -992,9 +1204,7 @@ def load_model_results(
             else:
                 per_image["orientation"] = ""
             if detected_col is not None:
-                per_image["detected"] = raw[detected_col].astype(str).str.lower().isin(
-                    {"1", "true", "yes", "y", "detected", "success"}
-                )
+                per_image["detected"] = _truthy_detection_series(raw[detected_col])
             else:
                 per_image["detected"] = per_image["nme"].notna()
             per_image["analysis_name"] = analysis_name
@@ -1012,8 +1222,24 @@ def load_model_results(
                 )
             if drop_invalid_nme:
                 per_image = per_image[np.isfinite(per_image["nme"])].copy()
+    else:
+        detection_rate_info = infer_detection_rate_info(
+            raw=None,
+            image_col=None,
+            nme_col=None,
+            detected_col=None,
+            model_config=model_config,
+            dataset_config=dataset_config,
+        )
+        if detection_rate_info.warning_message:
+            warnings.append(f"{model_config.name} detection rate: {detection_rate_info.warning_message}")
 
-    if model_config.per_landmark_csv is not None:
+    if metric_config.name == "hausdorff":
+        warnings.append(
+            f"{model_config.name}: Hausdorff is an image-level set distance; "
+            "per-landmark analysis is skipped."
+        )
+    elif model_config.per_landmark_csv is not None:
         raw = _read_csv(model_config.per_landmark_csv)
         mapping = model_config.columns.get("per_landmark", {})
         per_landmark_candidates = get_protocol_metric_candidates(
@@ -1084,6 +1310,7 @@ def load_model_results(
                 model_config,
                 per_image,
                 per_landmark,
+                detection_rate_info,
                 warnings,
                 orientation_warnings,
                 column_audit,
@@ -1152,6 +1379,7 @@ def load_model_results(
         model_config,
         per_image,
         per_landmark,
+        detection_rate_info,
         warnings,
         orientation_warnings,
         column_audit,
@@ -1277,12 +1505,16 @@ def compute_global_image_metrics(results: list[LoadedModelResults]) -> pd.DataFr
                     "predicts_visibility": bool(result.config.predicts_visibility),
                 }
             )
-        row["detection_rate"] = (
-            result.config.detection_rate
-            if result.config.detection_rate is not None
-            else float(result.per_image["detected"].mean())
+        row["detection_rate"] = result.detection_rate_info.detection_rate
+        row["detection_rate_source"] = result.detection_rate_info.detection_rate_source
+        row["n_detected"] = (
+            result.detection_rate_info.n_detected
+            if result.detection_rate_info.n_detected is not None
+            else int(data.shape[0])
         )
-        row["n_detected"] = int(data.shape[0])
+        row["n_total"] = result.detection_rate_info.n_total
+        row["detected_column_name"] = result.detection_rate_info.detected_column_name
+        row["detection_rate_warning"] = result.detection_rate_info.warning_message
         row.update({key: value for key, value in summarize_nme(data["nme"], "image").items() if key != "n_image"})
         rows.append(row)
     out = pd.DataFrame(rows)
@@ -1725,7 +1957,16 @@ def compute_dataset_input_summary(results: list[LoadedModelResults]) -> pd.DataF
         if result.column_audit:
             for row in result.column_audit:
                 row = dict(row)
-                row["detection_rate_config"] = result.config.detection_rate
+                row["detection_rate"] = result.detection_rate_info.detection_rate
+                row["detection_rate_source"] = result.detection_rate_info.detection_rate_source
+                row["n_detected"] = result.detection_rate_info.n_detected
+                row["n_total"] = result.detection_rate_info.n_total
+                row["detected_column_name"] = result.detection_rate_info.detected_column_name
+                row["warning_message"] = result.detection_rate_info.warning_message
+                row["detection_rate_fallback_config"] = (
+                    result.config.detection_rate_fallback
+                )
+                row["legacy_detection_rate_config"] = result.config.detection_rate
                 row["landmark_format"] = result.config.landmark_format
                 row["normalized_rows_used"] = (
                     0
@@ -1754,7 +1995,14 @@ def compute_dataset_input_summary(results: list[LoadedModelResults]) -> pd.DataF
                 "selected_metric_column": (
                     "" if result.per_image is None or result.per_image.empty else result.per_image.iloc[0].get("selected_metric_column", "")
                 ),
-                "detection_rate_config": result.config.detection_rate,
+                "detection_rate": result.detection_rate_info.detection_rate,
+                "detection_rate_source": result.detection_rate_info.detection_rate_source,
+                "n_detected": result.detection_rate_info.n_detected,
+                "n_total": result.detection_rate_info.n_total,
+                "detected_column_name": result.detection_rate_info.detected_column_name,
+                "warning_message": result.detection_rate_info.warning_message,
+                "detection_rate_fallback_config": result.config.detection_rate_fallback,
+                "legacy_detection_rate_config": result.config.detection_rate,
                 "landmark_format": result.config.landmark_format,
                 "per_image_csv": str(result.config.per_image_csv) if result.config.per_image_csv else "",
                 "per_image_rows": 0 if result.per_image is None else int(len(result.per_image)),
@@ -1941,15 +2189,21 @@ def generate_benchmark_plots(
         return f"{title_prefix}\n{title}" if title_prefix else title
 
     fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 4.5))
-    values = global_metrics["detection_rate"].to_numpy() * 100.0
+    detection_rates = pd.to_numeric(global_metrics["detection_rate"], errors="coerce")
+    values = detection_rates.to_numpy() * 100.0
     bars = ax.bar(x, values, color=colors)
     ax.set_xticks(x, labels, rotation=30, ha="right")
     ax.set_ylabel("Detection rate (%)")
-    ax.set_ylim(0, min(105, max(100, np.nanmax(values) * 1.1)))
+    max_detection = np.nanmax(values) if np.isfinite(values).any() else 100.0
+    ax.set_ylim(0, min(105, max(100, max_detection * 1.1)))
     ax.set_title(contextual_title("Detection rate by model"))
     apply_axis_style(ax)
     if config.dataset.annotate_bars:
-        annotate_bars(ax, bars, [f"{value:.1f}%" for value in values])
+        annotate_bars(
+            ax,
+            bars,
+            [f"{value:.1f}%" if np.isfinite(value) else "n/a" for value in values],
+        )
     path = plot_dir / "detection_rate_bar.png"
     save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
     plot_paths.append(str(path.relative_to(output_dir)))
@@ -1964,17 +2218,21 @@ def generate_benchmark_plots(
     if config.dataset.annotate_bars:
         ann = [format_metric_label(value, use_percent) for value in global_metrics["mean_image_nme"]]
         annotate_bars(ax, bars, ann)
-        for idx, det in enumerate(global_metrics["detection_rate"]):
-            ax.text(idx, 0, f"det {det * 100:.1f}%", rotation=90, ha="center", va="bottom", fontsize=8, color="0.35")
+        for idx, det in enumerate(detection_rates):
+            det_label = f"det {det * 100:.1f}%" if np.isfinite(det) else "det n/a"
+            ax.text(idx, 0, det_label, rotation=90, ha="center", va="bottom", fontsize=8, color="0.35")
     path = plot_dir / "mean_image_nme_bar.png"
     save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
     plot_paths.append(str(path.relative_to(output_dir)))
 
     fig, ax = plt.subplots(figsize=(6.5, 5.2))
     y_values = maybe_percent(global_metrics["mean_image_nme"].to_numpy(), use_percent)
-    ax.scatter(global_metrics["detection_rate"] * 100.0, y_values, color=colors, s=70)
+    ax.scatter(detection_rates * 100.0, y_values, color=colors, s=70)
     for idx, row in global_metrics.iterrows():
-        ax.annotate(labels[idx], (row["detection_rate"] * 100.0, y_values[idx]), xytext=(5, 5), textcoords="offset points")
+        det = detection_rates.iloc[idx]
+        if not np.isfinite(det):
+            continue
+        ax.annotate(labels[idx], (det * 100.0, y_values[idx]), xytext=(5, 5), textcoords="offset points")
     ax.set_xlabel("Detection rate (%)")
     ax.set_ylabel("Mean image-level NME (%)" if use_percent else "Mean image-level NME")
     ax.set_title(contextual_title("Mean NME vs detection rate"))
@@ -2350,7 +2608,19 @@ def write_markdown_report(
         "This is preferred for visibility-aware datasets because landmark-pooled metrics "
         "can overweight images with more visible landmarks.",
         "",
-        *get_babyland_visibility_report_note(dataset, protocol_config),
+    *get_babyland_visibility_report_note(dataset, protocol_config),
+        *(
+            [
+                "Hausdorff distance measures the worst-case mismatch between the "
+                "predicted and ground-truth landmark point sets. Lower Hausdorff is "
+                "better. It is sensitive to outlier landmarks, so it complements "
+                "mean and median NME and should be interpreted together with "
+                "failure rates and CED curves.",
+                "",
+            ]
+            if metric_config is not None and metric_config.name == "hausdorff"
+            else []
+        ),
         dataframe_to_markdown(global_metrics, max_rows=50),
         "",
         "- `mean_image_nme`: average image-level normalized mean error.",
@@ -2431,7 +2701,12 @@ def write_markdown_report(
             lines.append(dataframe_to_markdown(worst, max_rows=10))
 
     lines.extend(["", "## Per-landmark analysis", ""])
-    if tables["per_landmark_metrics"].empty:
+    if metric_config is not None and metric_config.name == "hausdorff":
+        lines.append(
+            "_Skipped: Hausdorff is an image-level set distance and does not have "
+            "meaningful per-landmark values._"
+        )
+    elif tables["per_landmark_metrics"].empty:
         lines.append("_Per-landmark CSVs were unavailable._")
     else:
         lines.append("Landmark-pooled metrics are secondary and should not replace the image-level ranking.")
@@ -2496,7 +2771,8 @@ def generate_primary_strengths(
     if row.empty:
         return [f"- `{primary_model}` was not found in global metrics."]
     row = row.iloc[0]
-    if row.get("detection_rate", np.nan) >= 0.999:
+    detection_rate = pd.to_numeric(pd.Series([row.get("detection_rate")]), errors="coerce").iloc[0]
+    if np.isfinite(detection_rate) and detection_rate >= 0.999:
         lines.append(f"- `{primary_model}` achieves full or near-full detection coverage.")
     if not primary_vs.empty:
         wins = primary_vs[primary_vs["primary_win_rate"] > 0.5]
@@ -2563,10 +2839,16 @@ def generate_recommended_claims(
                 claims.append(
                     f"- `{primary_model}` is better than `{row['baseline_model']}` on most common images "
                     f"({format_float(row['primary_win_rate'] * 100, 1)}% win rate)."
-                )
+    )
     if not global_metrics.empty:
         primary_row = global_metrics[global_metrics["model"] == primary_model]
-        if not primary_row.empty and primary_row.iloc[0].get("detection_rate", np.nan) >= 0.999:
+        if primary_row.empty:
+            return claims[:5]
+        detection_rate = pd.to_numeric(
+            pd.Series([primary_row.iloc[0].get("detection_rate")]),
+            errors="coerce",
+        ).iloc[0]
+        if np.isfinite(detection_rate) and detection_rate >= 0.999:
             claims.append(f"- `{primary_model}` provides full detection coverage on this benchmark configuration.")
     return claims[:5]
 

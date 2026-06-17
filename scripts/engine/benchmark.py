@@ -13,6 +13,7 @@ from PIL import Image
 from .evaluate import (
     _build_boxplot_title,
     compute_box_normalization_factor,
+    compute_normalized_hausdorff_distance,
     format_metric_value,
     round_metric_value,
     save_per_image_nme_csv,
@@ -424,6 +425,39 @@ def compute_masked_per_landmark_metrics(
     )
 
 
+def summarize_finite_values(values: list[float]) -> dict[str, float | None]:
+    """Return mean, median, and tail percentiles for finite image-level values."""
+    array = np.asarray(values, dtype=np.float64)
+    array = array[np.isfinite(array)]
+    if array.size == 0:
+        return {
+            "mean": None,
+            "median": None,
+            "p90": None,
+            "p95": None,
+            "p99": None,
+        }
+    return {
+        "mean": float(np.mean(array)),
+        "median": float(np.median(array)),
+        "p90": float(np.quantile(array, 0.90)),
+        "p95": float(np.quantile(array, 0.95)),
+        "p99": float(np.quantile(array, 0.99)),
+    }
+
+
+def prefixed_summary(prefix: str, values: list[float]) -> dict[str, float | None]:
+    """Return summary values using a metric-name prefix."""
+    summary = summarize_finite_values(values)
+    return {
+        f"mean_{prefix}": summary["mean"],
+        f"median_{prefix}": summary["median"],
+        f"p90_{prefix}": summary["p90"],
+        f"p95_{prefix}": summary["p95"],
+        f"p99_{prefix}": summary["p99"],
+    }
+
+
 def save_benchmark_summary_csv(output_path: Path, summary: dict[str, Any]) -> None:
     """Save the benchmark summary as a simple key-value CSV."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -456,18 +490,38 @@ def save_benchmark_summary_csv(output_path: Path, summary: dict[str, Any]) -> No
         "median_nme_box",
         "mean_nme_box_point_to_line",
         "median_nme_box_point_to_line",
+        "mean_hausdorff_box",
+        "median_hausdorff_box",
+        "p90_hausdorff_box",
+        "p95_hausdorff_box",
+        "p99_hausdorff_box",
         "mean_nme_box_visible_intersection",
         "median_nme_box_visible_intersection",
         "mean_nme_box_point_to_line_visible_intersection",
         "median_nme_box_point_to_line_visible_intersection",
+        "mean_hausdorff_box_visible_intersection",
+        "median_hausdorff_box_visible_intersection",
+        "p90_hausdorff_box_visible_intersection",
+        "p95_hausdorff_box_visible_intersection",
+        "p99_hausdorff_box_visible_intersection",
         "mean_nme_box_gt_valid",
         "median_nme_box_gt_valid",
         "mean_nme_box_point_to_line_gt_valid",
         "median_nme_box_point_to_line_gt_valid",
+        "mean_hausdorff_box_gt_valid",
+        "median_hausdorff_box_gt_valid",
+        "p90_hausdorff_box_gt_valid",
+        "p95_hausdorff_box_gt_valid",
+        "p99_hausdorff_box_gt_valid",
         "mean_nme_box_non_contour",
         "median_nme_box_non_contour",
         "mean_nme_box_point_to_line_non_contour",
         "median_nme_box_point_to_line_non_contour",
+        "mean_hausdorff_box_non_contour",
+        "median_hausdorff_box_non_contour",
+        "p90_hausdorff_box_non_contour",
+        "p95_hausdorff_box_non_contour",
+        "p99_hausdorff_box_non_contour",
     ]
     rows.extend((key, summary.get(key)) for key in metric_keys if key in summary)
     orientation_sample_counts = summary.get("orientation_sample_counts")
@@ -551,8 +605,10 @@ def benchmark_prediction_directory(
     orientation_to_errors_72: dict[str, list[list[float]]] = {}
     orientation_to_box_nme_values: dict[str, list[float]] = {}
     orientation_to_box_nme_point_to_line_values: dict[str, list[float]] = {}
+    orientation_to_hausdorff_box_values: dict[str, list[float]] = {}
     orientation_to_box_nme_gt_valid_values: dict[str, list[float]] = {}
     orientation_to_box_nme_point_to_line_gt_valid_values: dict[str, list[float]] = {}
+    orientation_to_hausdorff_box_gt_valid_values: dict[str, list[float]] = {}
     orientation_sample_counts: dict[str, int] = {}
     orientation_display_labels: dict[str, str] = {}
     per_image_nme: list[dict[str, Any]] = []
@@ -569,6 +625,8 @@ def benchmark_prediction_directory(
     gt_valid_landmarks_used = 0
     gt_valid_image_nme_values: list[float] = []
     gt_valid_image_point_to_line_values: list[float] = []
+    visible_image_hausdorff_values: list[float] = []
+    gt_valid_image_hausdorff_values: list[float] = []
 
     for sample in samples:
         sample_id = sample["sample_id"]
@@ -591,8 +649,10 @@ def benchmark_prediction_directory(
             orientation_to_errors_72[gt_orientation] = [[] for _ in range(72)]
             orientation_to_box_nme_values[gt_orientation] = []
             orientation_to_box_nme_point_to_line_values[gt_orientation] = []
+            orientation_to_hausdorff_box_values[gt_orientation] = []
             orientation_to_box_nme_gt_valid_values[gt_orientation] = []
             orientation_to_box_nme_point_to_line_gt_valid_values[gt_orientation] = []
+            orientation_to_hausdorff_box_gt_valid_values[gt_orientation] = []
             orientation_sample_counts[gt_orientation] = 0
             if gt_orientation.startswith("yaw_"):
                 yaw_text = gt_orientation.removeprefix("yaw_").removesuffix("deg")
@@ -611,8 +671,12 @@ def benchmark_prediction_directory(
                     "orientation": gt_orientation,
                     "mean_nme_box": None,
                     "mean_nme_box_point_to_line": None,
+                    "hausdorff_pixel_visible_intersection": None,
+                    "hausdorff_box_visible_intersection": None,
                     "mean_nme_box_gt_valid": None,
                     "mean_nme_box_point_to_line_gt_valid": None,
+                    "hausdorff_pixel_gt_valid": None,
+                    "hausdorff_box_gt_valid": None,
                     "mean_nme_interocular": None,
                 }
             )
@@ -677,11 +741,27 @@ def benchmark_prediction_directory(
                 valid_mask=valid_mask,
             )
             (
+                hausdorff_pixel_visible,
+                hausdorff_box_visible,
+            ) = compute_normalized_hausdorff_distance(
+                predicted_landmarks=parsed_prediction.landmarks,
+                target_landmarks=gt_landmarks_visible_mode,
+                valid_mask=valid_mask,
+            )
+            (
                 gt_valid_errors,
                 gt_valid_point_to_line_errors,
                 mean_box_nme_gt_valid,
                 mean_box_nme_point_to_line_gt_valid,
             ) = compute_masked_per_landmark_metrics(
+                predicted_landmarks=parsed_prediction.landmarks,
+                target_landmarks=gt_landmarks,
+                valid_mask=gt_valid_mask,
+            )
+            (
+                hausdorff_pixel_gt_valid,
+                hausdorff_box_gt_valid,
+            ) = compute_normalized_hausdorff_distance(
                 predicted_landmarks=parsed_prediction.landmarks,
                 target_landmarks=gt_landmarks,
                 valid_mask=gt_valid_mask,
@@ -693,7 +773,17 @@ def benchmark_prediction_directory(
                 gt_valid_image_point_to_line_values.append(
                     mean_box_nme_point_to_line_gt_valid
                 )
+            if np.isfinite(hausdorff_box_gt_valid):
+                gt_valid_image_hausdorff_values.append(hausdorff_box_gt_valid)
+                orientation_to_hausdorff_box_gt_valid_values[gt_orientation].append(
+                    hausdorff_box_gt_valid
+                )
             valid_landmarks_used += len(visible_errors)
+            if np.isfinite(hausdorff_box_visible):
+                visible_image_hausdorff_values.append(hausdorff_box_visible)
+                orientation_to_hausdorff_box_values[gt_orientation].append(
+                    hausdorff_box_visible
+                )
             for landmark_index, error_value in visible_errors.items():
                 per_landmark_errors[landmark_index].append(error_value)
             for landmark_index, error_value in visible_point_to_line_errors.items():
@@ -773,8 +863,12 @@ def benchmark_prediction_directory(
                     "orientation": gt_orientation,
                     "mean_nme_box": mean_box_nme,
                     "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
+                    "hausdorff_pixel_visible_intersection": hausdorff_pixel_visible,
+                    "hausdorff_box_visible_intersection": hausdorff_box_visible,
                     "mean_nme_box_gt_valid": mean_box_nme_gt_valid,
                     "mean_nme_box_point_to_line_gt_valid": mean_box_nme_point_to_line_gt_valid,
+                    "hausdorff_pixel_gt_valid": hausdorff_pixel_gt_valid,
+                    "hausdorff_box_gt_valid": hausdorff_box_gt_valid,
                     "mean_nme_interocular": None,
                 }
             )
@@ -789,8 +883,12 @@ def benchmark_prediction_directory(
                     "orientation": gt_orientation,
                     "mean_nme_box": None,
                     "mean_nme_box_point_to_line": None,
+                    "hausdorff_pixel_visible_intersection": None,
+                    "hausdorff_box_visible_intersection": None,
                     "mean_nme_box_gt_valid": None,
                     "mean_nme_box_point_to_line_gt_valid": None,
+                    "hausdorff_pixel_gt_valid": None,
+                    "hausdorff_box_gt_valid": None,
                     "mean_nme_interocular": None,
                 }
             )
@@ -908,6 +1006,16 @@ def benchmark_prediction_directory(
                     if orientation_to_box_nme_point_to_line_values[orientation]
                     else None
                 ),
+                "mean_hausdorff_box_visible_intersection": (
+                    float(np.mean(orientation_to_hausdorff_box_values[orientation]))
+                    if orientation_to_hausdorff_box_values[orientation]
+                    else None
+                ),
+                "median_hausdorff_box_visible_intersection": (
+                    float(np.median(orientation_to_hausdorff_box_values[orientation]))
+                    if orientation_to_hausdorff_box_values[orientation]
+                    else None
+                ),
                 "mean_nme_box_gt_valid": (
                     float(np.mean(orientation_to_box_nme_gt_valid_values[orientation]))
                     if orientation_to_box_nme_gt_valid_values[orientation]
@@ -944,6 +1052,24 @@ def benchmark_prediction_directory(
                     if orientation_to_box_nme_point_to_line_gt_valid_values[
                         orientation
                     ]
+                    else None
+                ),
+                "mean_hausdorff_box_gt_valid": (
+                    float(
+                        np.mean(
+                            orientation_to_hausdorff_box_gt_valid_values[orientation]
+                        )
+                    )
+                    if orientation_to_hausdorff_box_gt_valid_values[orientation]
+                    else None
+                ),
+                "median_hausdorff_box_gt_valid": (
+                    float(
+                        np.median(
+                            orientation_to_hausdorff_box_gt_valid_values[orientation]
+                        )
+                    )
+                    if orientation_to_hausdorff_box_gt_valid_values[orientation]
                     else None
                 ),
                 "mean_nme_interocular": None,
@@ -1006,10 +1132,14 @@ def benchmark_prediction_directory(
                 "median_nme_box_visible_intersection": None,
                 "mean_nme_box_point_to_line_visible_intersection": None,
                 "median_nme_box_point_to_line_visible_intersection": None,
+                "mean_hausdorff_box_visible_intersection": None,
+                "median_hausdorff_box_visible_intersection": None,
                 "mean_nme_box_gt_valid": None,
                 "median_nme_box_gt_valid": None,
                 "mean_nme_box_point_to_line_gt_valid": None,
                 "median_nme_box_point_to_line_gt_valid": None,
+                "mean_hausdorff_box_gt_valid": None,
+                "median_hausdorff_box_gt_valid": None,
                 "mean_nme_interocular": None,
             }
             for orientation in orientation_names
@@ -1043,6 +1173,10 @@ def benchmark_prediction_directory(
             if valid_image_point_to_line_values
             else None
         ),
+        **prefixed_summary(
+            "hausdorff_box_visible_intersection",
+            visible_image_hausdorff_values,
+        ),
         "mean_nme_box_gt_valid": (
             float(np.mean(gt_valid_image_nme_values))
             if gt_valid_image_nme_values
@@ -1063,6 +1197,7 @@ def benchmark_prediction_directory(
             if gt_valid_image_point_to_line_values
             else None
         ),
+        **prefixed_summary("hausdorff_box_gt_valid", gt_valid_image_hausdorff_values),
         "valid_landmarks_used": int(valid_landmarks_used),
         "gt_valid_landmarks_used": int(gt_valid_landmarks_used),
         "evaluation_modes": {
@@ -1169,10 +1304,16 @@ def benchmark_infantface_prediction_directory(
     orientation_to_box_nme_point_to_line_values: dict[str, list[float]] = {
         orientation: [] for orientation in orientation_names
     }
+    orientation_to_hausdorff_box_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
     orientation_to_box_nme_non_contour_values: dict[str, list[float]] = {
         orientation: [] for orientation in orientation_names
     }
     orientation_to_box_nme_point_to_line_non_contour_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
+    orientation_to_hausdorff_box_non_contour_values: dict[str, list[float]] = {
         orientation: [] for orientation in orientation_names
     }
     orientation_sample_counts = {orientation: 0 for orientation in orientation_names}
@@ -1187,6 +1328,8 @@ def benchmark_infantface_prediction_directory(
     valid_non_contour_landmarks_used = 0
     non_contour_image_nme_values: list[float] = []
     non_contour_image_point_to_line_values: list[float] = []
+    image_hausdorff_values: list[float] = []
+    non_contour_image_hausdorff_values: list[float] = []
 
     for gt_path in gt_paths:
         sample_id = gt_path.stem
@@ -1210,6 +1353,10 @@ def benchmark_infantface_prediction_directory(
                     "orientation": gt_orientation,
                     "mean_nme_box": None,
                     "mean_nme_box_point_to_line": None,
+                    "hausdorff_pixel": None,
+                    "hausdorff_box": None,
+                    "hausdorff_pixel_non_contour": None,
+                    "hausdorff_box_non_contour": None,
                     "mean_nme_interocular": None,
                 }
             )
@@ -1245,6 +1392,11 @@ def benchmark_infantface_prediction_directory(
                 target_landmarks=gt_landmarks,
                 valid_mask=valid_mask,
             )
+            hausdorff_pixel, hausdorff_box = compute_normalized_hausdorff_distance(
+                predicted_landmarks=predicted_landmarks,
+                target_landmarks=gt_landmarks,
+                valid_mask=valid_mask,
+            )
             non_contour_mask = np.zeros(68, dtype=bool)
             non_contour_mask[17:68] = True
             (
@@ -1258,14 +1410,33 @@ def benchmark_infantface_prediction_directory(
                 valid_mask=non_contour_mask,
                 normalization_landmarks=gt_landmarks,
             )
+            (
+                hausdorff_pixel_non_contour,
+                hausdorff_box_non_contour,
+            ) = compute_normalized_hausdorff_distance(
+                predicted_landmarks=predicted_landmarks,
+                target_landmarks=gt_landmarks,
+                valid_mask=non_contour_mask,
+                normalization_landmarks=gt_landmarks,
+            )
             valid_landmarks_used += len(current_errors)
             valid_non_contour_landmarks_used += len(non_contour_errors)
+            if np.isfinite(hausdorff_box):
+                image_hausdorff_values.append(hausdorff_box)
+                orientation_to_hausdorff_box_values[gt_orientation].append(
+                    hausdorff_box
+                )
             if mean_box_nme_non_contour is not None:
                 non_contour_image_nme_values.append(mean_box_nme_non_contour)
             if mean_box_nme_point_to_line_non_contour is not None:
                 non_contour_image_point_to_line_values.append(
                     mean_box_nme_point_to_line_non_contour
                 )
+            if np.isfinite(hausdorff_box_non_contour):
+                non_contour_image_hausdorff_values.append(hausdorff_box_non_contour)
+                orientation_to_hausdorff_box_non_contour_values[
+                    gt_orientation
+                ].append(hausdorff_box_non_contour)
             if mean_box_nme_non_contour is not None:
                 orientation_to_box_nme_non_contour_values[gt_orientation].append(
                     mean_box_nme_non_contour
@@ -1316,11 +1487,15 @@ def benchmark_infantface_prediction_directory(
             per_image_nme.append(
                 {
                     "sample_id": prediction_path.stem,
-                    "orientation": gt_orientation,
+                        "orientation": gt_orientation,
                         "mean_nme_box": mean_box_nme,
                         "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
+                        "hausdorff_pixel": hausdorff_pixel,
+                        "hausdorff_box": hausdorff_box,
                         "mean_nme_box_non_contour": mean_box_nme_non_contour,
                         "mean_nme_box_point_to_line_non_contour": mean_box_nme_point_to_line_non_contour,
+                        "hausdorff_pixel_non_contour": hausdorff_pixel_non_contour,
+                        "hausdorff_box_non_contour": hausdorff_box_non_contour,
                         "mean_nme_interocular": None,
                     }
                 )
@@ -1335,6 +1510,10 @@ def benchmark_infantface_prediction_directory(
                     "orientation": gt_orientation,
                     "mean_nme_box": None,
                     "mean_nme_box_point_to_line": None,
+                    "hausdorff_pixel": None,
+                    "hausdorff_box": None,
+                    "hausdorff_pixel_non_contour": None,
+                    "hausdorff_box_non_contour": None,
                     "mean_nme_interocular": None,
                 }
             )
@@ -1415,6 +1594,16 @@ def benchmark_infantface_prediction_directory(
                     if orientation_to_box_nme_point_to_line_values[orientation]
                     else None
                 ),
+                "mean_hausdorff_box": (
+                    float(np.mean(orientation_to_hausdorff_box_values[orientation]))
+                    if orientation_to_hausdorff_box_values[orientation]
+                    else None
+                ),
+                "median_hausdorff_box": (
+                    float(np.median(orientation_to_hausdorff_box_values[orientation]))
+                    if orientation_to_hausdorff_box_values[orientation]
+                    else None
+                ),
                 "mean_nme_box_non_contour": (
                     float(np.mean(orientation_to_box_nme_non_contour_values[orientation]))
                     if orientation_to_box_nme_non_contour_values[orientation]
@@ -1453,6 +1642,28 @@ def benchmark_infantface_prediction_directory(
                     if orientation_to_box_nme_point_to_line_non_contour_values[
                         orientation
                     ]
+                    else None
+                ),
+                "mean_hausdorff_box_non_contour": (
+                    float(
+                        np.mean(
+                            orientation_to_hausdorff_box_non_contour_values[
+                                orientation
+                            ]
+                        )
+                    )
+                    if orientation_to_hausdorff_box_non_contour_values[orientation]
+                    else None
+                ),
+                "median_hausdorff_box_non_contour": (
+                    float(
+                        np.median(
+                            orientation_to_hausdorff_box_non_contour_values[
+                                orientation
+                            ]
+                        )
+                    )
+                    if orientation_to_hausdorff_box_non_contour_values[orientation]
                     else None
                 ),
                 "mean_nme_interocular": None,
@@ -1505,10 +1716,14 @@ def benchmark_infantface_prediction_directory(
                 "median_nme_box": None,
                 "mean_nme_box_point_to_line": None,
                 "median_nme_box_point_to_line": None,
+                "mean_hausdorff_box": None,
+                "median_hausdorff_box": None,
                 "mean_nme_box_non_contour": None,
                 "median_nme_box_non_contour": None,
                 "mean_nme_box_point_to_line_non_contour": None,
                 "median_nme_box_point_to_line_non_contour": None,
+                "mean_hausdorff_box_non_contour": None,
+                "median_hausdorff_box_non_contour": None,
                 "mean_nme_interocular": None,
             }
             for orientation in orientation_names
@@ -1543,6 +1758,7 @@ def benchmark_infantface_prediction_directory(
             if valid_image_point_to_line_values
             else None
         ),
+        **prefixed_summary("hausdorff_box", image_hausdorff_values),
         "valid_landmarks_used": int(valid_landmarks_used),
         "valid_non_contour_landmarks_used": int(valid_non_contour_landmarks_used),
         "excluded_non_contour_landmarks": "0-16 excluded; 17-67 evaluated",
@@ -1565,6 +1781,10 @@ def benchmark_infantface_prediction_directory(
             float(np.median(non_contour_image_point_to_line_values))
             if non_contour_image_point_to_line_values
             else None
+        ),
+        **prefixed_summary(
+            "hausdorff_box_non_contour",
+            non_contour_image_hausdorff_values,
         ),
         "invalid_prediction_files": invalid_prediction_files,
         "unmatched_prediction_files": unmatched_prediction_files,

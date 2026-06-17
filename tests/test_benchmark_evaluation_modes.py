@@ -2,20 +2,28 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+from PIL import Image
 
 from scripts.analysis.benchmark_landmark_models import (
     BenchmarkAnalysisConfig,
     BenchmarkMetricConfig,
     DatasetBenchmarkConfig,
+    DetectionRateInfo,
     EvaluationProtocolConfig,
     LoadedModelResults,
     ModelBenchmarkConfig,
     compute_best_worst_cases,
     expand_models_for_analysis,
     filter_per_landmark_by_protocol,
+    infer_detection_rate_info,
     split_best_worst_case_tables,
 )
+from scripts.engine.evaluate import (
+    compute_normalized_hausdorff_distance,
+    compute_symmetric_hausdorff_distance,
+)
 from scripts.engine.evaluation_modes import compute_masked_natural_per_landmark_nme
+from scripts.utils.visualization import save_landmark_overlay_image
 from scripts.utils.orientation import normalize_orientation_label
 
 
@@ -61,6 +69,147 @@ def test_gt_valid_includes_predicted_invisible_and_excludes_nan_gt() -> None:
 
     assert set(visible_errors) == {0}
     assert set(gt_valid_errors) == {0, 1}
+
+
+def test_symmetric_hausdorff_distance_handles_basic_cases() -> None:
+    """Hausdorff is zero for identical sets, shifted for translated sets, and nan for empty sets."""
+    points = np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    shifted = points + np.asarray([2.0, 0.0], dtype=np.float32)
+
+    assert compute_symmetric_hausdorff_distance(points, points) == 0.0
+    assert compute_symmetric_hausdorff_distance(shifted, points) == 2.0
+    assert np.isnan(compute_symmetric_hausdorff_distance(points[:0], points))
+
+
+def test_normalized_hausdorff_uses_box_denominator() -> None:
+    """Normalized Hausdorff uses the same box denominator as NME."""
+    target = np.asarray([[0.0, 0.0], [2.0, 0.0], [0.0, 8.0]], dtype=np.float32)
+    predicted = target + np.asarray([2.0, 0.0], dtype=np.float32)
+    valid_mask = np.ones(3, dtype=bool)
+
+    pixel, normalized = compute_normalized_hausdorff_distance(
+        predicted,
+        target,
+        valid_mask,
+    )
+
+    assert pixel == 2.0
+    assert np.isclose(normalized, 0.5)
+
+
+def test_infanface_non_contour_hausdorff_excludes_contour_and_uses_full_denominator() -> None:
+    """Non-contour Hausdorff excludes contour points but keeps the full-face denominator."""
+    target = np.zeros((68, 2), dtype=np.float32)
+    target[0] = [0.0, 0.0]
+    target[16] = [10.0, 10.0]
+    target[17:] = np.stack(
+        [
+            np.linspace(2.0, 8.0, 51),
+            np.linspace(2.0, 8.0, 51),
+        ],
+        axis=1,
+    )
+    predicted = target.copy()
+    predicted[:17] += 100.0
+    predicted[17:] += np.asarray([2.0, 0.0], dtype=np.float32)
+    non_contour_mask = np.zeros(68, dtype=bool)
+    non_contour_mask[17:] = True
+
+    pixel, normalized = compute_normalized_hausdorff_distance(
+        predicted,
+        target,
+        non_contour_mask,
+        normalization_landmarks=target,
+    )
+
+    assert np.isclose(pixel, 2.0)
+    assert np.isclose(normalized, 0.2)
+
+
+def test_overlay_connections_ignore_visibility_for_finite_landmarks(tmp_path) -> None:
+    """Invisible finite landmarks are blue points, but connections still pass through them."""
+    image_path = tmp_path / "source.png"
+    output_path = tmp_path / "overlay.png"
+    Image.new("RGB", (80, 80), color="white").save(image_path)
+    landmarks = np.zeros((68, 2), dtype=np.float32)
+    landmarks[:17] = np.asarray([[10.0 + index * 3.0, 20.0] for index in range(17)])
+    landmarks[17:] = [10.0, 50.0]
+    visibility = np.ones(68, dtype=np.int64)
+    visibility[1] = 0
+
+    save_landmark_overlay_image(
+        image_path=image_path,
+        output_path=output_path,
+        predicted_landmarks=landmarks,
+        predicted_visibility=visibility,
+        point_radius=2,
+        line_width=2,
+        line_color="#00C853",
+    )
+
+    rendered = Image.open(output_path).convert("RGB")
+    line_pixel = rendered.getpixel((12, 20))
+    visible_pixel = rendered.getpixel((10, 20))
+    invisible_pixel = rendered.getpixel((13, 20))
+    assert line_pixel != (255, 255, 255)
+    assert visible_pixel[0] > visible_pixel[2]
+    assert invisible_pixel[2] > invisible_pixel[0]
+
+
+def test_detection_rate_uses_detected_column() -> None:
+    """Detected columns are the preferred detection-rate source."""
+    raw = pd.DataFrame({"image_id": ["a", "b", "c"], "nme": [0.1, np.nan, 0.2], "detected": [1, 0, 1]})
+
+    info = infer_detection_rate_info(
+        raw=raw,
+        image_col="image_id",
+        nme_col="nme",
+        detected_col="detected",
+        model_config=ModelBenchmarkConfig(name="model"),
+        dataset_config=DatasetBenchmarkConfig(name="dataset", output_dir="unused", total_images=10),
+    )
+
+    assert info.detection_rate == 2 / 3
+    assert info.detection_rate_source == "detected_column"
+    assert info.n_detected == 2
+    assert info.n_total == 3
+
+
+def test_detection_rate_uses_dataset_total_without_defaulting_to_full_coverage() -> None:
+    """Evaluated-only CSVs use n_detected / dataset.total_images instead of assuming 100%."""
+    raw = pd.DataFrame({"image_id": ["a", "b"], "nme": [0.1, 0.2]})
+
+    info = infer_detection_rate_info(
+        raw=raw,
+        image_col="image_id",
+        nme_col="nme",
+        detected_col=None,
+        model_config=ModelBenchmarkConfig(name="model"),
+        dataset_config=DatasetBenchmarkConfig(name="dataset", output_dir="unused", total_images=5),
+    )
+
+    assert info.detection_rate == 0.4
+    assert info.detection_rate_source == "n_detected_over_dataset_total"
+    assert info.n_detected == 2
+    assert info.n_total == 5
+
+
+def test_detection_rate_unavailable_without_source() -> None:
+    """Detection rate is marked unavailable when no source can infer it."""
+    raw = pd.DataFrame({"image_id": ["a", "b"], "nme": [0.1, 0.2]})
+
+    info = infer_detection_rate_info(
+        raw=raw,
+        image_col="image_id",
+        nme_col="nme",
+        detected_col=None,
+        model_config=ModelBenchmarkConfig(name="model"),
+        dataset_config=DatasetBenchmarkConfig(name="dataset", output_dir="unused"),
+    )
+
+    assert isinstance(info, DetectionRateInfo)
+    assert info.detection_rate is None
+    assert info.detection_rate_source == "unavailable"
 
 
 def test_best_worst_cases_limits_to_ten_per_side() -> None:

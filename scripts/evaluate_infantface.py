@@ -111,6 +111,9 @@ def main() -> None:
             "median_nme_box_point_to_line",
             "Median NME box point-to-line with contour",
         ),
+        ("mean_hausdorff_box", "Mean Hausdorff box with contour"),
+        ("median_hausdorff_box", "Median Hausdorff box with contour"),
+        ("p95_hausdorff_box", "P95 Hausdorff box with contour"),
         ("mean_nme_box_non_contour", "Mean NME box without contour"),
         ("median_nme_box_non_contour", "Median NME box without contour"),
         (
@@ -120,6 +123,18 @@ def main() -> None:
         (
             "median_nme_box_point_to_line_non_contour",
             "Median NME box point-to-line without contour",
+        ),
+        (
+            "mean_hausdorff_box_non_contour",
+            "Mean Hausdorff box without contour",
+        ),
+        (
+            "median_hausdorff_box_non_contour",
+            "Median Hausdorff box without contour",
+        ),
+        (
+            "p95_hausdorff_box_non_contour",
+            "P95 Hausdorff box without contour",
         ),
     ):
         metric_value = summary.get(key)

@@ -13,14 +13,24 @@ os.environ.setdefault(
     str(Path(tempfile.gettempdir()) / "landmarks_detection_matplotlib"),
 )
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
-import torch
-import torch.nn.functional as F
 from PIL import Image, ImageDraw
+
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+except Exception:  # pragma: no cover - depends on local binary deps.
+    matplotlib = None
+    plt = None
+
+try:
+    import torch
+    import torch.nn.functional as F
+except Exception:  # pragma: no cover - depends on local binary deps.
+    torch = None
+    F = None
 
 
 def denormalize_image_tensor(
@@ -321,7 +331,12 @@ def _draw_landmark_connections(
     line_width: int,
     draw_all_connections: bool,
 ) -> None:
-    """Draw landmark topology while breaking lines at invisible or non-finite points."""
+    """Draw landmark topology, optionally breaking only at invisible landmarks.
+
+    When ``draw_all_connections`` is true, visibility controls point color only.
+    It does not control landmark connectivity. Connections are drawn for all
+    finite landmarks following the anatomical landmark order.
+    """
     for landmark_range, close_loop in get_landmark_connection_definitions():
         segment: list[tuple[float, float]] = []
         first_point: tuple[float, float] | None = None
@@ -378,7 +393,12 @@ def save_landmark_overlay_image(
     line_width: int = 4,
     line_color: str = "#FFD400",
 ) -> None:
-    """Render predicted landmarks on top of the original image and save it."""
+    """Render predicted landmarks on top of the original image and save it.
+
+    Visibility controls point color only. It does not control landmark
+    connectivity. Connections are drawn for all finite landmarks following the
+    anatomical landmark order.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     image = Image.open(image_path).convert("RGB")
@@ -390,7 +410,7 @@ def save_landmark_overlay_image(
         visibility=predicted_visibility,
         color=line_color,
         line_width=line_width,
-        draw_all_connections=False,
+        draw_all_connections=True,
     )
 
     for landmark_index, (x_coord, y_coord) in enumerate(predicted_landmarks):
@@ -452,7 +472,7 @@ def render_landmark_preview_image(
     std: Sequence[float] = (0.229, 0.224, 0.225),
 ) -> Image.Image:
     """Render one landmark preview image using the repository visibility colors."""
-    if isinstance(image, torch.Tensor):
+    if torch is not None and isinstance(image, torch.Tensor):
         if image.ndim != 3:
             raise ValueError(f"Expected CHW image tensor, got {tuple(image.shape)}.")
         image_tensor = denormalize_image_tensor(

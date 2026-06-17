@@ -121,6 +121,18 @@ def main() -> None:
             "[INFO] Median NME box point-to-line visible-intersection: "
             f"{summary['median_nme_box_point_to_line_visible_intersection']:.4f}"
         )
+    if summary.get("mean_hausdorff_box_visible_intersection") is not None:
+        print(
+            "[INFO] Mean Hausdorff box visible-intersection: "
+            f"{summary['mean_hausdorff_box_visible_intersection']:.4f}"
+        )
+    else:
+        print("[INFO] Mean Hausdorff box visible-intersection: n/a")
+    if summary.get("median_hausdorff_box_visible_intersection") is not None:
+        print(
+            "[INFO] Median Hausdorff box visible-intersection: "
+            f"{summary['median_hausdorff_box_visible_intersection']:.4f}"
+        )
     if summary.get("mean_nme_box_gt_valid") is not None:
         print(
             "[INFO] Mean NME box GT-valid: "
@@ -144,6 +156,18 @@ def main() -> None:
         print(
             "[INFO] Median NME box point-to-line GT-valid: "
             f"{summary['median_nme_box_point_to_line_gt_valid']:.4f}"
+        )
+    if summary.get("mean_hausdorff_box_gt_valid") is not None:
+        print(
+            "[INFO] Mean Hausdorff box GT-valid: "
+            f"{summary['mean_hausdorff_box_gt_valid']:.4f}"
+        )
+    else:
+        print("[INFO] Mean Hausdorff box GT-valid: n/a")
+    if summary.get("median_hausdorff_box_gt_valid") is not None:
+        print(
+            "[INFO] Median Hausdorff box GT-valid: "
+            f"{summary['median_hausdorff_box_gt_valid']:.4f}"
         )
     print(f"[INFO] Valid landmarks used: {summary['valid_landmarks_used']}")
     if summary.get("gt_valid_landmarks_used") is not None:

@@ -97,6 +97,90 @@ def compute_per_landmark_point_to_line_nme(
     return point_to_line_errors / normalization
 
 
+def compute_symmetric_hausdorff_distance(
+    predicted_points: np.ndarray,
+    target_points: np.ndarray,
+) -> float:
+    """Compute the symmetric Hausdorff distance between two finite point sets.
+
+    Empty point sets return ``nan`` because Hausdorff distance is undefined when
+    either side has no valid point.
+    """
+    predicted_points = np.asarray(predicted_points, dtype=np.float32)
+    target_points = np.asarray(target_points, dtype=np.float32)
+    if predicted_points.size == 0 or target_points.size == 0:
+        return float("nan")
+    if predicted_points.ndim != 2 or target_points.ndim != 2:
+        raise ValueError("Hausdorff point sets must be two-dimensional arrays.")
+    if predicted_points.shape[1] != 2 or target_points.shape[1] != 2:
+        raise ValueError("Hausdorff point sets must have shape (N, 2) and (M, 2).")
+
+    predicted_finite = np.isfinite(predicted_points[:, 0]) & np.isfinite(
+        predicted_points[:, 1]
+    )
+    target_finite = np.isfinite(target_points[:, 0]) & np.isfinite(target_points[:, 1])
+    predicted_points = predicted_points[predicted_finite]
+    target_points = target_points[target_finite]
+    if len(predicted_points) == 0 or len(target_points) == 0:
+        return float("nan")
+
+    distances = np.linalg.norm(
+        predicted_points[:, None, :] - target_points[None, :, :],
+        axis=2,
+    )
+    directed_pred_to_target = float(np.max(np.min(distances, axis=1)))
+    directed_target_to_pred = float(np.max(np.min(distances, axis=0)))
+    return max(directed_pred_to_target, directed_target_to_pred)
+
+
+def compute_normalized_hausdorff_distance(
+    predicted_landmarks: np.ndarray,
+    target_landmarks: np.ndarray,
+    valid_mask: np.ndarray,
+    normalization_landmarks: np.ndarray | None = None,
+    eps: float = 1e-6,
+) -> tuple[float, float]:
+    """Compute pixel and box-normalized symmetric Hausdorff distance.
+
+    The point sets are filtered by ``valid_mask`` and finite coordinates. The
+    normalization denominator is computed from ``normalization_landmarks`` when
+    provided, otherwise from the filtered target landmarks. This mirrors the
+    existing NME box-normalization convention and allows protocols such as
+    InfantFace non-contour to exclude contour points from Hausdorff point sets
+    while retaining the full-face denominator.
+    """
+    predicted_landmarks = np.asarray(predicted_landmarks, dtype=np.float32)
+    target_landmarks = np.asarray(target_landmarks, dtype=np.float32)
+    valid_mask = np.asarray(valid_mask, dtype=bool)
+    finite_mask = (
+        np.isfinite(predicted_landmarks[:, 0])
+        & np.isfinite(predicted_landmarks[:, 1])
+        & np.isfinite(target_landmarks[:, 0])
+        & np.isfinite(target_landmarks[:, 1])
+    )
+    point_mask = valid_mask & finite_mask
+    pixel_distance = compute_symmetric_hausdorff_distance(
+        predicted_landmarks[point_mask],
+        target_landmarks[point_mask],
+    )
+    if not np.isfinite(pixel_distance):
+        return float("nan"), float("nan")
+
+    if normalization_landmarks is None:
+        normalization_landmarks = target_landmarks[point_mask]
+    normalization_landmarks = np.asarray(normalization_landmarks, dtype=np.float32)
+    normalization_mask = np.isfinite(normalization_landmarks[:, 0]) & np.isfinite(
+        normalization_landmarks[:, 1]
+    )
+    if not normalization_mask.any():
+        return pixel_distance, float("nan")
+    normalization = compute_box_normalization_factor(
+        normalization_landmarks[normalization_mask],
+        eps=eps,
+    )
+    return pixel_distance, float(pixel_distance / normalization)
+
+
 def compute_interocular_normalization_factor(
     target_landmarks: np.ndarray,
     left_eye_corner_index: int = 36,
@@ -305,6 +389,26 @@ def save_metrics_summary_csv(
                     "median_nme_box_point_to_line_visible_intersection",
                     summary.get("median_nme_box_point_to_line_visible_intersection"),
                 ),
+                (
+                    "mean_hausdorff_box_visible_intersection",
+                    summary.get("mean_hausdorff_box_visible_intersection"),
+                ),
+                (
+                    "median_hausdorff_box_visible_intersection",
+                    summary.get("median_hausdorff_box_visible_intersection"),
+                ),
+                (
+                    "p90_hausdorff_box_visible_intersection",
+                    summary.get("p90_hausdorff_box_visible_intersection"),
+                ),
+                (
+                    "p95_hausdorff_box_visible_intersection",
+                    summary.get("p95_hausdorff_box_visible_intersection"),
+                ),
+                (
+                    "p99_hausdorff_box_visible_intersection",
+                    summary.get("p99_hausdorff_box_visible_intersection"),
+                ),
             ]
         )
     else:
@@ -320,6 +424,11 @@ def save_metrics_summary_csv(
                     "median_nme_box_point_to_line",
                     summary.get("median_nme_box_point_to_line"),
                 ),
+                ("mean_hausdorff_box", summary.get("mean_hausdorff_box")),
+                ("median_hausdorff_box", summary.get("median_hausdorff_box")),
+                ("p90_hausdorff_box", summary.get("p90_hausdorff_box")),
+                ("p95_hausdorff_box", summary.get("p95_hausdorff_box")),
+                ("p99_hausdorff_box", summary.get("p99_hausdorff_box")),
             ]
         )
     rows.extend(
@@ -333,6 +442,46 @@ def save_metrics_summary_csv(
             (
                 "median_nme_box_point_to_line_gt_valid",
                 summary.get("median_nme_box_point_to_line_gt_valid"),
+            ),
+            (
+                "mean_hausdorff_box_gt_valid",
+                summary.get("mean_hausdorff_box_gt_valid"),
+            ),
+            (
+                "median_hausdorff_box_gt_valid",
+                summary.get("median_hausdorff_box_gt_valid"),
+            ),
+            (
+                "p90_hausdorff_box_gt_valid",
+                summary.get("p90_hausdorff_box_gt_valid"),
+            ),
+            (
+                "p95_hausdorff_box_gt_valid",
+                summary.get("p95_hausdorff_box_gt_valid"),
+            ),
+            (
+                "p99_hausdorff_box_gt_valid",
+                summary.get("p99_hausdorff_box_gt_valid"),
+            ),
+            (
+                "mean_hausdorff_box_non_contour",
+                summary.get("mean_hausdorff_box_non_contour"),
+            ),
+            (
+                "median_hausdorff_box_non_contour",
+                summary.get("median_hausdorff_box_non_contour"),
+            ),
+            (
+                "p90_hausdorff_box_non_contour",
+                summary.get("p90_hausdorff_box_non_contour"),
+            ),
+            (
+                "p95_hausdorff_box_non_contour",
+                summary.get("p95_hausdorff_box_non_contour"),
+            ),
+            (
+                "p99_hausdorff_box_non_contour",
+                summary.get("p99_hausdorff_box_non_contour"),
             ),
             ("mean_nme_interocular", summary.get("mean_nme_interocular")),
             ("landmark_loss", summary.get("landmark_loss")),
@@ -459,6 +608,14 @@ def save_metrics_summary_csv(
                             ),
                         ),
                         (
+                            f"mean_hausdorff_box_visible_intersection_{orientation_name}",
+                            metrics.get("mean_hausdorff_box_visible_intersection"),
+                        ),
+                        (
+                            f"median_hausdorff_box_visible_intersection_{orientation_name}",
+                            metrics.get("median_hausdorff_box_visible_intersection"),
+                        ),
+                        (
                             f"mean_nme_box_gt_valid_{orientation_name}",
                             metrics.get("mean_nme_box_gt_valid"),
                         ),
@@ -474,6 +631,14 @@ def save_metrics_summary_csv(
                             f"median_nme_box_point_to_line_gt_valid_{orientation_name}",
                             metrics.get("median_nme_box_point_to_line_gt_valid"),
                         ),
+                        (
+                            f"mean_hausdorff_box_gt_valid_{orientation_name}",
+                            metrics.get("mean_hausdorff_box_gt_valid"),
+                        ),
+                        (
+                            f"median_hausdorff_box_gt_valid_{orientation_name}",
+                            metrics.get("median_hausdorff_box_gt_valid"),
+                        ),
                     ]
                 )
             else:
@@ -484,6 +649,30 @@ def save_metrics_summary_csv(
                     (
                         f"mean_nme_box_point_to_line_{orientation_name}",
                         metrics.get("mean_nme_box_point_to_line"),
+                    )
+                )
+                rows.append(
+                    (
+                        f"mean_hausdorff_box_{orientation_name}",
+                        metrics.get("mean_hausdorff_box"),
+                    )
+                )
+                rows.append(
+                    (
+                        f"median_hausdorff_box_{orientation_name}",
+                        metrics.get("median_hausdorff_box"),
+                    )
+                )
+                rows.append(
+                    (
+                        f"mean_hausdorff_box_non_contour_{orientation_name}",
+                        metrics.get("mean_hausdorff_box_non_contour"),
+                    )
+                )
+                rows.append(
+                    (
+                        f"median_hausdorff_box_non_contour_{orientation_name}",
+                        metrics.get("median_hausdorff_box_non_contour"),
                     )
                 )
             rows.append(
@@ -564,10 +753,18 @@ def save_per_image_nme_csv(
                 "yaw_group",
                 "mean_nme_box",
                 "mean_nme_box_point_to_line",
+                "hausdorff_pixel",
+                "hausdorff_box",
+                "hausdorff_pixel_visible_intersection",
+                "hausdorff_box_visible_intersection",
                 "mean_nme_box_gt_valid",
                 "mean_nme_box_point_to_line_gt_valid",
+                "hausdorff_pixel_gt_valid",
+                "hausdorff_box_gt_valid",
                 "mean_nme_box_non_contour",
                 "mean_nme_box_point_to_line_non_contour",
+                "hausdorff_pixel_non_contour",
+                "hausdorff_box_non_contour",
                 "mean_nme_interocular",
             ]
         )
@@ -594,6 +791,42 @@ def save_per_image_nme_csv(
                     ),
                     (
                         format_metric_value(
+                            round_metric_value(float(row["hausdorff_pixel"]))
+                        )
+                        if row.get("hausdorff_pixel") is not None
+                        and np.isfinite(row.get("hausdorff_pixel"))
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(float(row["hausdorff_box"]))
+                        )
+                        if row.get("hausdorff_box") is not None
+                        and np.isfinite(row.get("hausdorff_box"))
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(
+                                float(row["hausdorff_pixel_visible_intersection"])
+                            )
+                        )
+                        if row.get("hausdorff_pixel_visible_intersection") is not None
+                        and np.isfinite(row.get("hausdorff_pixel_visible_intersection"))
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(
+                                float(row["hausdorff_box_visible_intersection"])
+                            )
+                        )
+                        if row.get("hausdorff_box_visible_intersection") is not None
+                        and np.isfinite(row.get("hausdorff_box_visible_intersection"))
+                        else None
+                    ),
+                    (
+                        format_metric_value(
                             round_metric_value(float(row["mean_nme_box_gt_valid"]))
                         )
                         if row.get("mean_nme_box_gt_valid") is not None
@@ -608,6 +841,22 @@ def save_per_image_nme_csv(
                     ),
                     (
                         format_metric_value(
+                            round_metric_value(float(row["hausdorff_pixel_gt_valid"]))
+                        )
+                        if row.get("hausdorff_pixel_gt_valid") is not None
+                        and np.isfinite(row.get("hausdorff_pixel_gt_valid"))
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(float(row["hausdorff_box_gt_valid"]))
+                        )
+                        if row.get("hausdorff_box_gt_valid") is not None
+                        and np.isfinite(row.get("hausdorff_box_gt_valid"))
+                        else None
+                    ),
+                    (
+                        format_metric_value(
                             round_metric_value(float(row["mean_nme_box_non_contour"]))
                         )
                         if row.get("mean_nme_box_non_contour") is not None
@@ -618,6 +867,24 @@ def save_per_image_nme_csv(
                             round_metric_value(float(row["mean_nme_box_point_to_line_non_contour"]))
                         )
                         if row.get("mean_nme_box_point_to_line_non_contour") is not None
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(
+                                float(row["hausdorff_pixel_non_contour"])
+                            )
+                        )
+                        if row.get("hausdorff_pixel_non_contour") is not None
+                        and np.isfinite(row.get("hausdorff_pixel_non_contour"))
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(float(row["hausdorff_box_non_contour"]))
+                        )
+                        if row.get("hausdorff_box_non_contour") is not None
+                        and np.isfinite(row.get("hausdorff_box_non_contour"))
                         else None
                     ),
                     (
