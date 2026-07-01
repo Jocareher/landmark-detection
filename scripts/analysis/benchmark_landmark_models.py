@@ -39,7 +39,12 @@ POINT_TO_POINT_IMAGE_NME_ALIASES = (
     "box_nme",
     "nme_box",
 )
-POINT_TO_POINT_LANDMARK_NME_ALIASES = ("nme", "point_to_point_nme_box", "landmark_nme", "nme_box")
+POINT_TO_POINT_LANDMARK_NME_ALIASES = (
+    "nme",
+    "point_to_point_nme_box",
+    "landmark_nme",
+    "nme_box",
+)
 POINT_TO_LINE_IMAGE_NME_ALIASES = (
     "mean_nme_box_point_to_line",
     "point_to_line_nme_box",
@@ -57,7 +62,13 @@ HAUSDORFF_IMAGE_NME_ALIASES = (
     "hausdorff_box_visible_intersection",
     "hausdorff_box_gt_valid",
 )
-LANDMARK_INDEX_ALIASES = ("landmark_index", "landmark_idx", "landmark_id", "landmark", "point_index")
+LANDMARK_INDEX_ALIASES = (
+    "landmark_index",
+    "landmark_idx",
+    "landmark_id",
+    "landmark",
+    "point_index",
+)
 ORIENTATION_ALIASES = ("orientation", "yaw_group", "yaw_angle", "class_idx", "pose")
 DETECTED_ALIASES = ("detected", "is_detected", "success", "valid_detection")
 
@@ -165,7 +176,9 @@ class DatasetBenchmarkConfig:
     model_order: list[str] = field(default_factory=list)
     model_display_names: dict[str, str] = field(default_factory=dict)
     model_colors: dict[str, str] = field(default_factory=dict)
-    orientation_order: list[str] = field(default_factory=lambda: list(ORIENTATION_ORDER))
+    orientation_order: list[str] = field(
+        default_factory=lambda: list(ORIENTATION_ORDER)
+    )
     include_unknown_orientations: bool = False
     ced_zoom_max_nme: float = 0.40
     plot_dpi: int = 300
@@ -295,6 +308,8 @@ DEFAULT_COLUMN_MAPPINGS = {
                 },
                 "hausdorff": {
                     "candidates": [
+                        "hausdorff_box_gt_valid",
+                        "mean_hausdorff_box_gt_valid",
                         "hausdorff_box",
                         "mean_hausdorff_box",
                         "image_hausdorff_box",
@@ -356,7 +371,11 @@ DEFAULT_COLUMN_MAPPINGS = {
         "per_landmark": {
             "standard": {
                 "point_to_point": {
-                    "candidates": ["point_to_point_nme_box", "point_to_point_nme", "nme"]
+                    "candidates": [
+                        "point_to_point_nme_box",
+                        "point_to_point_nme",
+                        "nme",
+                    ]
                 },
                 "point_to_line": {
                     "candidates": ["point_to_line_nme_box", "point_to_line_nme"]
@@ -464,7 +483,9 @@ DEFAULT_COLUMN_MAPPINGS = {
 }
 
 
-def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -> BenchmarkAnalysisConfig:
+def load_config(
+    config_path: str | Path, drop_invalid_nme: bool | None = None
+) -> BenchmarkAnalysisConfig:
     """Load a benchmark config from YAML or JSON."""
     config_path = Path(config_path)
     if not config_path.exists():
@@ -472,7 +493,9 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
 
     if config_path.suffix.lower() in {".yaml", ".yml"}:
         if yaml is None:
-            raise ImportError("PyYAML is required to read YAML configs. Install pyyaml or use JSON.")
+            raise ImportError(
+                "PyYAML is required to read YAML configs. Install pyyaml or use JSON."
+            )
         with config_path.open("r", encoding="utf-8") as file:
             raw = yaml.safe_load(file)
     else:
@@ -505,7 +528,9 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
         dataset_type=dataset_type,
         primary_model=dataset_raw.get("primary_model"),
         reference_models=list(dataset_raw.get("reference_models", [])),
-        orientation_mapping={str(key): str(value) for key, value in orientation_mapping.items()},
+        orientation_mapping={
+            str(key): str(value) for key, value in orientation_mapping.items()
+        },
         anatomical_regions={str(key): list(value) for key, value in regions.items()},
         total_images=(
             None
@@ -514,20 +539,35 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
         ),
         landmark_count=dataset_raw.get("landmark_count"),
         landmark_index_base=str(dataset_raw.get("landmark_index_base", "auto")),
-        image_id_strip_regexes=list(dataset_raw.get("image_id_strip_regexes", [r"__det_\\d+$"])),
-        suspicious_nme_threshold=float(dataset_raw.get("suspicious_nme_threshold", 1.0)),
+        image_id_strip_regexes=list(
+            dataset_raw.get("image_id_strip_regexes", [r"__det_\\d+$"])
+        ),
+        suspicious_nme_threshold=float(
+            dataset_raw.get("suspicious_nme_threshold", 1.0)
+        ),
         model_order=list(dataset_raw.get("model_order", raw.get("model_order", []))),
         model_display_names={
             str(key): str(value)
-            for key, value in dataset_raw.get("model_display_names", raw.get("model_display_names", {})).items()
+            for key, value in dataset_raw.get(
+                "model_display_names", raw.get("model_display_names", {})
+            ).items()
         },
         model_colors={
             str(key): str(value)
-            for key, value in dataset_raw.get("model_colors", raw.get("model_colors", {})).items()
+            for key, value in dataset_raw.get(
+                "model_colors", raw.get("model_colors", {})
+            ).items()
         },
-        orientation_order=list(dataset_raw.get("orientation_order", raw.get("orientation_order", ORIENTATION_ORDER))),
+        orientation_order=list(
+            dataset_raw.get(
+                "orientation_order", raw.get("orientation_order", ORIENTATION_ORDER)
+            )
+        ),
         include_unknown_orientations=bool(
-            dataset_raw.get("include_unknown_orientations", raw.get("include_unknown_orientations", False))
+            dataset_raw.get(
+                "include_unknown_orientations",
+                raw.get("include_unknown_orientations", False),
+            )
         ),
         ced_zoom_max_nme=float(
             dataset_raw.get(
@@ -535,23 +575,40 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
                 plotting_raw.get("ced_zoom_max_nme", raw.get("ced_zoom_max_nme", 0.40)),
             )
         ),
-        plot_dpi=int(dataset_raw.get("plot_dpi", plotting_raw.get("plot_dpi", raw.get("plot_dpi", 300)))),
-        use_percent_axis=bool(dataset_raw.get("use_percent_axis", raw.get("use_percent_axis", False))),
-        annotate_bars=bool(dataset_raw.get("annotate_bars", raw.get("annotate_bars", True))),
-        annotate_boxplot_means=bool(
-            dataset_raw.get("annotate_boxplot_means", raw.get("annotate_boxplot_means", True))
+        plot_dpi=int(
+            dataset_raw.get(
+                "plot_dpi", plotting_raw.get("plot_dpi", raw.get("plot_dpi", 300))
+            )
         ),
-        show_violin_plots=bool(dataset_raw.get("show_violin_plots", raw.get("show_violin_plots", True))),
+        use_percent_axis=bool(
+            dataset_raw.get("use_percent_axis", raw.get("use_percent_axis", False))
+        ),
+        annotate_bars=bool(
+            dataset_raw.get("annotate_bars", raw.get("annotate_bars", True))
+        ),
+        annotate_boxplot_means=bool(
+            dataset_raw.get(
+                "annotate_boxplot_means", raw.get("annotate_boxplot_means", True)
+            )
+        ),
+        show_violin_plots=bool(
+            dataset_raw.get("show_violin_plots", raw.get("show_violin_plots", True))
+        ),
         generate_log_scale_variants=bool(
             dataset_raw.get(
                 "generate_log_scale_variants",
-                plotting_raw.get("generate_log_scale_variants", raw.get("generate_log_scale_variants", True)),
+                plotting_raw.get(
+                    "generate_log_scale_variants",
+                    raw.get("generate_log_scale_variants", True),
+                ),
             )
         ),
         log_scale_epsilon=float(
             dataset_raw.get(
                 "log_scale_epsilon",
-                plotting_raw.get("log_scale_epsilon", raw.get("log_scale_epsilon", 1.0e-8)),
+                plotting_raw.get(
+                    "log_scale_epsilon", raw.get("log_scale_epsilon", 1.0e-8)
+                ),
             )
         ),
     )
@@ -562,16 +619,24 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
             ModelBenchmarkConfig(
                 name=str(item["name"]),
                 detection_rate=(
-                    None if item.get("detection_rate") is None else float(item["detection_rate"])
+                    None
+                    if item.get("detection_rate") is None
+                    else float(item["detection_rate"])
                 ),
                 detection_rate_fallback=(
                     None
                     if item.get("detection_rate_fallback") is None
                     else float(item["detection_rate_fallback"])
                 ),
-                per_image_csv=Path(item["per_image_csv"]) if item.get("per_image_csv") else None,
-                per_landmark_csv=Path(item["per_landmark_csv"]) if item.get("per_landmark_csv") else None,
-                landmark_format=None if item.get("landmark_format") is None else str(item["landmark_format"]),
+                per_image_csv=Path(item["per_image_csv"])
+                if item.get("per_image_csv")
+                else None,
+                per_landmark_csv=Path(item["per_landmark_csv"])
+                if item.get("per_landmark_csv")
+                else None,
+                landmark_format=None
+                if item.get("landmark_format") is None
+                else str(item["landmark_format"]),
                 display_name=item.get("display_name"),
                 predicts_visibility=bool(item.get("predicts_visibility", False)),
                 columns=dict(item.get("columns", {})),
@@ -611,7 +676,8 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
                     str(value) for value in item.get("per_image_column_candidates", [])
                 ),
                 per_landmark_column_candidates=tuple(
-                    str(value) for value in item.get("per_landmark_column_candidates", [])
+                    str(value)
+                    for value in item.get("per_landmark_column_candidates", [])
                 ),
             )
         )
@@ -625,7 +691,11 @@ def load_config(config_path: str | Path, drop_invalid_nme: bool | None = None) -
         dataset=dataset,
         models=models,
         evaluation_protocols=protocol_configs,
-        drop_invalid_nme=bool(raw.get("drop_invalid_nme", False) if drop_invalid_nme is None else drop_invalid_nme),
+        drop_invalid_nme=bool(
+            raw.get("drop_invalid_nme", False)
+            if drop_invalid_nme is None
+            else drop_invalid_nme
+        ),
         bootstrap_iterations=int(raw.get("bootstrap_iterations", 2000)),
         random_seed=int(raw.get("random_seed", 12345)),
         save_pdf=bool(plotting_raw.get("save_pdf", raw.get("save_pdf", False))),
@@ -644,7 +714,9 @@ def normalize_image_id(value: Any, strip_regexes: list[str] | None = None) -> st
     return text.strip()
 
 
-def get_model_display_name(model_name: str, config: BenchmarkAnalysisConfig | DatasetBenchmarkConfig) -> str:
+def get_model_display_name(
+    model_name: str, config: BenchmarkAnalysisConfig | DatasetBenchmarkConfig
+) -> str:
     """Return the configured display name for a raw model name."""
     dataset = config.dataset if isinstance(config, BenchmarkAnalysisConfig) else config
     return dataset.model_display_names.get(model_name, model_name)
@@ -676,7 +748,9 @@ def build_model_style_maps(
 ) -> tuple[dict[str, str], dict[str, str], list[str]]:
     """Build display-name and color maps for all models, with deterministic fallbacks."""
     ordered = get_ordered_model_names(model_names, dataset_config)
-    display_names = {name: get_model_display_name(name, dataset_config) for name in ordered}
+    display_names = {
+        name: get_model_display_name(name, dataset_config) for name in ordered
+    }
     colors = dict(DEFAULT_MODEL_COLORS)
     colors.update(dataset_config.model_colors)
     fallback_warnings = []
@@ -712,7 +786,9 @@ def resolve_column(
     if canonical_name in explicit_mapping:
         column = explicit_mapping[canonical_name]
         if column not in df.columns:
-            raise ValueError(f"Configured column {column!r} for {canonical_name!r} is not present.")
+            raise ValueError(
+                f"Configured column {column!r} for {canonical_name!r} is not present."
+            )
         return column
 
     normalized = {str(column).lower(): column for column in df.columns}
@@ -804,7 +880,9 @@ def build_column_audit_row(
             "number_of_unique_images": 0,
             "number_of_unique_landmarks": 0,
         }
-    image_column = next((column for column in IMAGE_ID_ALIASES if column in raw.columns), None)
+    image_column = next(
+        (column for column in IMAGE_ID_ALIASES if column in raw.columns), None
+    )
     landmark_column = next(
         (column for column in LANDMARK_INDEX_ALIASES if column in raw.columns),
         None,
@@ -823,7 +901,9 @@ def build_column_audit_row(
         "selected_nme_column": selected_nme_column or "",
         "missing_required_columns": " | ".join(missing_required_columns),
         "number_of_rows": int(len(raw)),
-        "number_of_unique_images": int(raw[image_column].nunique()) if image_column else 0,
+        "number_of_unique_images": int(raw[image_column].nunique())
+        if image_column
+        else 0,
         "number_of_unique_landmarks": int(raw[landmark_column].nunique())
         if landmark_column
         else 0,
@@ -962,13 +1042,17 @@ def collect_orientation_warnings(
     if orientation_col is None:
         return []
     raw_values = raw[orientation_col]
-    unknown_mask = raw_values.notna() & raw_values.astype(str).str.strip().ne("") & mapped.eq("")
+    unknown_mask = (
+        raw_values.notna() & raw_values.astype(str).str.strip().ne("") & mapped.eq("")
+    )
     if not unknown_mask.any():
         return []
     rows = []
     counts = raw_values[unknown_mask].astype(str).value_counts()
     for label, count in counts.items():
-        rows.append({"model": model_name, "raw_orientation": label, "count": int(count)})
+        rows.append(
+            {"model": model_name, "raw_orientation": label, "count": int(count)}
+        )
     return rows
 
 
@@ -981,8 +1065,10 @@ def _read_csv(path: Path) -> pd.DataFrame:
 
 def _truthy_detection_series(series: pd.Series) -> pd.Series:
     """Parse common truthy detection values from a CSV column."""
-    return series.astype(str).str.lower().isin(
-        {"1", "true", "yes", "y", "detected", "success", "valid"}
+    return (
+        series.astype(str)
+        .str.lower()
+        .isin({"1", "true", "yes", "y", "detected", "success", "valid"})
     )
 
 
@@ -1001,7 +1087,9 @@ def read_detection_rate_from_summary(summary_path: Path) -> DetectionRateInfo | 
         for _, row in summary.iterrows()
         if str(row.get("metric", "")).strip()
     }
-    rate = pd.to_numeric(pd.Series([values.get("detection_rate")]), errors="coerce").iloc[0]
+    rate = pd.to_numeric(
+        pd.Series([values.get("detection_rate")]), errors="coerce"
+    ).iloc[0]
     if not np.isfinite(rate):
         return None
     n_detected = pd.to_numeric(
@@ -1056,7 +1144,11 @@ def infer_detection_rate_info(
             valid_rows = raw
         n_detected = int(
             valid_rows[image_col]
-            .map(lambda value: normalize_image_id(value, dataset_config.image_id_strip_regexes))
+            .map(
+                lambda value: normalize_image_id(
+                    value, dataset_config.image_id_strip_regexes
+                )
+            )
             .nunique()
         )
         return DetectionRateInfo(
@@ -1127,10 +1219,22 @@ def load_model_results(
             metric_config,
         )
         image_col = resolve_column_with_warning(
-            raw, "image_id", IMAGE_ID_ALIASES, mapping, model_config.name, "per-image", warnings
+            raw,
+            "image_id",
+            IMAGE_ID_ALIASES,
+            mapping,
+            model_config.name,
+            "per-image",
+            warnings,
         )
         nme_col = resolve_column_with_warning(
-            raw, "nme", per_image_candidates, mapping, model_config.name, "per-image", warnings
+            raw,
+            "nme",
+            per_image_candidates,
+            mapping,
+            model_config.name,
+            "per-image",
+            warnings,
         )
         orientation_col = resolve_column_with_warning(
             raw,
@@ -1166,7 +1270,9 @@ def load_model_results(
             dataset_config=dataset_config,
         )
         if detection_rate_info.warning_message:
-            warnings.append(f"{model_config.name} detection rate: {detection_rate_info.warning_message}")
+            warnings.append(
+                f"{model_config.name} detection rate: {detection_rate_info.warning_message}"
+            )
         column_audit.append(
             build_column_audit_row(
                 model_config,
@@ -1188,7 +1294,9 @@ def load_model_results(
                     "model": model_config.name,
                     "image_id": raw[image_col].astype(str),
                     "image_key": raw[image_col].map(
-                        lambda value: normalize_image_id(value, dataset_config.image_id_strip_regexes)
+                        lambda value: normalize_image_id(
+                            value, dataset_config.image_id_strip_regexes
+                        )
                     ),
                     "nme": pd.to_numeric(raw[nme_col], errors="coerce"),
                     "source_csv_path": str(model_config.per_image_csv),
@@ -1199,7 +1307,12 @@ def load_model_results(
                     raw[orientation_col], dataset_config.orientation_mapping
                 )
                 orientation_warnings.extend(
-                    collect_orientation_warnings(raw, orientation_col, per_image["orientation"], model_config.name)
+                    collect_orientation_warnings(
+                        raw,
+                        orientation_col,
+                        per_image["orientation"],
+                        model_config.name,
+                    )
                 )
             else:
                 per_image["orientation"] = ""
@@ -1214,7 +1327,11 @@ def load_model_results(
             per_image["predicts_visibility"] = bool(model_config.predicts_visibility)
             per_image["selected_metric_column"] = nme_col
 
-            warnings.extend(validate_nme_table(per_image, model_config.name, "per-image", dataset_config))
+            warnings.extend(
+                validate_nme_table(
+                    per_image, model_config.name, "per-image", dataset_config
+                )
+            )
             if per_image["nme"].notna().sum() == 0:
                 warnings.append(
                     f"{model_config.name} per-image: selected column {nme_col!r} has no usable values "
@@ -1232,7 +1349,9 @@ def load_model_results(
             dataset_config=dataset_config,
         )
         if detection_rate_info.warning_message:
-            warnings.append(f"{model_config.name} detection rate: {detection_rate_info.warning_message}")
+            warnings.append(
+                f"{model_config.name} detection rate: {detection_rate_info.warning_message}"
+            )
 
     if metric_config.name == "hausdorff":
         warnings.append(
@@ -1249,10 +1368,22 @@ def load_model_results(
             metric_config,
         )
         image_col = resolve_column_with_warning(
-            raw, "image_id", IMAGE_ID_ALIASES, mapping, model_config.name, "per-landmark", warnings
+            raw,
+            "image_id",
+            IMAGE_ID_ALIASES,
+            mapping,
+            model_config.name,
+            "per-landmark",
+            warnings,
         )
         nme_col = resolve_column_with_warning(
-            raw, "nme", per_landmark_candidates, mapping, model_config.name, "per-landmark", warnings
+            raw,
+            "nme",
+            per_landmark_candidates,
+            mapping,
+            model_config.name,
+            "per-landmark",
+            warnings,
         )
         landmark_col = resolve_column_with_warning(
             raw,
@@ -1335,7 +1466,9 @@ def load_model_results(
                 "model": model_config.name,
                 "image_id": raw[image_col].astype(str),
                 "image_key": raw[image_col].map(
-                    lambda value: normalize_image_id(value, dataset_config.image_id_strip_regexes)
+                    lambda value: normalize_image_id(
+                        value, dataset_config.image_id_strip_regexes
+                    )
                 ),
                 "landmark_index": landmark_index,
                 "nme": pd.to_numeric(raw[nme_col], errors="coerce"),
@@ -1347,13 +1480,18 @@ def load_model_results(
                 raw[orientation_col], dataset_config.orientation_mapping
             )
             orientation_warnings.extend(
-                collect_orientation_warnings(raw, orientation_col, per_landmark["orientation"], model_config.name)
+                collect_orientation_warnings(
+                    raw, orientation_col, per_landmark["orientation"], model_config.name
+                )
             )
         else:
             per_landmark["orientation"] = ""
         if valid_col is not None:
-            per_landmark["valid"] = raw[valid_col].astype(str).str.lower().isin(
-                {"1", "true", "yes", "y", "valid"}
+            per_landmark["valid"] = (
+                raw[valid_col]
+                .astype(str)
+                .str.lower()
+                .isin({"1", "true", "yes", "y", "valid"})
             )
         else:
             per_landmark["valid"] = per_landmark["nme"].notna()
@@ -1364,7 +1502,11 @@ def load_model_results(
         per_landmark["predicts_visibility"] = bool(model_config.predicts_visibility)
         per_landmark["selected_metric_column"] = nme_col
 
-        warnings.extend(validate_nme_table(per_landmark, model_config.name, "per-landmark", dataset_config))
+        warnings.extend(
+            validate_nme_table(
+                per_landmark, model_config.name, "per-landmark", dataset_config
+            )
+        )
         if per_landmark["nme"].notna().sum() == 0:
             warnings.append(
                 f"{model_config.name} per-landmark: selected column {nme_col!r} has no usable values "
@@ -1372,7 +1514,8 @@ def load_model_results(
             )
         if drop_invalid_nme:
             per_landmark = per_landmark[
-                np.isfinite(per_landmark["nme"]) & per_landmark["landmark_index"].notna()
+                np.isfinite(per_landmark["nme"])
+                & per_landmark["landmark_index"].notna()
             ].copy()
 
     return LoadedModelResults(
@@ -1416,12 +1559,18 @@ def validate_nme_table(
 ) -> list[str]:
     """Return non-fatal validation warnings for a normalized NME table."""
     warnings = []
-    duplicate_count = int(df.duplicated(["image_key"]).sum()) if table_name == "per-image" else 0
+    duplicate_count = (
+        int(df.duplicated(["image_key"]).sum()) if table_name == "per-image" else 0
+    )
     if duplicate_count:
-        warnings.append(f"{model_name} {table_name}: {duplicate_count} duplicate normalized image IDs.")
+        warnings.append(
+            f"{model_name} {table_name}: {duplicate_count} duplicate normalized image IDs."
+        )
     invalid_count = int((~np.isfinite(df["nme"])).sum())
     if invalid_count:
-        warnings.append(f"{model_name} {table_name}: {invalid_count} rows have NaN or infinite NME.")
+        warnings.append(
+            f"{model_name} {table_name}: {invalid_count} rows have NaN or infinite NME."
+        )
     suspicious_count = int((df["nme"] > dataset_config.suspicious_nme_threshold).sum())
     if suspicious_count:
         warnings.append(
@@ -1431,7 +1580,10 @@ def validate_nme_table(
     if "landmark_index" in df.columns and dataset_config.landmark_count is not None:
         outside = df[
             df["landmark_index"].notna()
-            & ((df["landmark_index"] < 0) | (df["landmark_index"] >= dataset_config.landmark_count))
+            & (
+                (df["landmark_index"] < 0)
+                | (df["landmark_index"] >= dataset_config.landmark_count)
+            )
         ]
         if len(outside):
             warnings.append(
@@ -1493,7 +1645,11 @@ def compute_global_image_metrics(results: list[LoadedModelResults]) -> pd.DataFr
                     "analysis_name": first.get("analysis_name", ""),
                     "selected_metric_source": first.get("selected_metric_source", ""),
                     "selected_metric_column": first.get("selected_metric_column", ""),
-                    "predicts_visibility": bool(first.get("predicts_visibility", result.config.predicts_visibility)),
+                    "predicts_visibility": bool(
+                        first.get(
+                            "predicts_visibility", result.config.predicts_visibility
+                        )
+                    ),
                 }
             )
         else:
@@ -1515,7 +1671,13 @@ def compute_global_image_metrics(results: list[LoadedModelResults]) -> pd.DataFr
         row["n_total"] = result.detection_rate_info.n_total
         row["detected_column_name"] = result.detection_rate_info.detected_column_name
         row["detection_rate_warning"] = result.detection_rate_info.warning_message
-        row.update({key: value for key, value in summarize_nme(data["nme"], "image").items() if key != "n_image"})
+        row.update(
+            {
+                key: value
+                for key, value in summarize_nme(data["nme"], "image").items()
+                if key != "n_image"
+            }
+        )
         rows.append(row)
     out = pd.DataFrame(rows)
     if out.empty:
@@ -1562,15 +1724,21 @@ def compute_best_worst_cases(
                         "detection_status": row.get("detected", True),
                         "source_csv_path": row.get("source_csv_path", ""),
                         "original_image_path": row.get("original_image_path", ""),
-                        "prediction_overlay_path": row.get("prediction_overlay_path", ""),
+                        "prediction_overlay_path": row.get(
+                            "prediction_overlay_path", ""
+                        ),
                         "gt_overlay_path": row.get("gt_overlay_path", ""),
-                        "comparison_overlay_path": row.get("comparison_overlay_path", ""),
+                        "comparison_overlay_path": row.get(
+                            "comparison_overlay_path", ""
+                        ),
                     }
                 )
     return pd.DataFrame(rows)
 
 
-def split_best_worst_case_tables(best_worst_cases: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def split_best_worst_case_tables(
+    best_worst_cases: pd.DataFrame,
+) -> dict[str, pd.DataFrame]:
     """Split per-model best/worst rows into two consolidated CSV-ready tables."""
     if best_worst_cases.empty:
         return {
@@ -1588,7 +1756,9 @@ def split_best_worst_case_tables(best_worst_cases: pd.DataFrame) -> dict[str, pd
     }
 
 
-def write_best_worst_case_tables(output_dir: Path, best_worst_cases: pd.DataFrame) -> None:
+def write_best_worst_case_tables(
+    output_dir: Path, best_worst_cases: pd.DataFrame
+) -> None:
     """Write combined best/worst CSV tables for one protocol/metric."""
     tables_dir = output_dir / "tables"
     tables_dir.mkdir(parents=True, exist_ok=True)
@@ -1618,7 +1788,9 @@ def compute_orientation_metrics(
                 "analysis_name": first.get("analysis_name", ""),
                 "selected_metric_source": first.get("selected_metric_source", ""),
                 "selected_metric_column": first.get("selected_metric_column", ""),
-                "predicts_visibility": bool(first.get("predicts_visibility", result.config.predicts_visibility)),
+                "predicts_visibility": bool(
+                    first.get("predicts_visibility", result.config.predicts_visibility)
+                ),
             }
             row.update(summarize_nme(group["nme"], "image"))
             rows.append(row)
@@ -1648,7 +1820,11 @@ def compute_landmark_pooled_metrics(results: list[LoadedModelResults]) -> pd.Dat
                     "analysis_name": first.get("analysis_name", ""),
                     "selected_metric_source": first.get("selected_metric_source", ""),
                     "selected_metric_column": first.get("selected_metric_column", ""),
-                    "predicts_visibility": bool(first.get("predicts_visibility", result.config.predicts_visibility)),
+                    "predicts_visibility": bool(
+                        first.get(
+                            "predicts_visibility", result.config.predicts_visibility
+                        )
+                    ),
                 }
             )
         row.update(summarize_nme(data["nme"], "landmark"))
@@ -1673,7 +1849,9 @@ def compute_per_landmark_metrics(results: list[LoadedModelResults]) -> pd.DataFr
                 "analysis_name": first.get("analysis_name", ""),
                 "selected_metric_source": first.get("selected_metric_source", ""),
                 "selected_metric_column": first.get("selected_metric_column", ""),
-                "predicts_visibility": bool(first.get("predicts_visibility", result.config.predicts_visibility)),
+                "predicts_visibility": bool(
+                    first.get("predicts_visibility", result.config.predicts_visibility)
+                ),
             }
             row.update(summarize_nme(group["nme"], "landmark"))
             rows.append(row)
@@ -1707,7 +1885,11 @@ def compute_anatomical_region_metrics(
                     "analysis_name": first.get("analysis_name", ""),
                     "selected_metric_source": first.get("selected_metric_source", ""),
                     "selected_metric_column": first.get("selected_metric_column", ""),
-                    "predicts_visibility": bool(first.get("predicts_visibility", result.config.predicts_visibility)),
+                    "predicts_visibility": bool(
+                        first.get(
+                            "predicts_visibility", result.config.predicts_visibility
+                        )
+                    ),
                     "n_observations": summary["n_landmark"],
                     "mean_nme": summary["mean_landmark_nme"],
                     "median_nme": summary["median_landmark_nme"],
@@ -1740,10 +1922,9 @@ def compute_pairwise_image_comparisons(
         for model_b in names[i + 1 :]:
             groups = [("", None)]
             if by_orientation:
-                common_orientations = (
-                    set(image_tables[model_a]["orientation"].dropna().astype(str))
-                    & set(image_tables[model_b]["orientation"].dropna().astype(str))
-                )
+                common_orientations = set(
+                    image_tables[model_a]["orientation"].dropna().astype(str)
+                ) & set(image_tables[model_b]["orientation"].dropna().astype(str))
                 orientations = [
                     orientation
                     for orientation in dataset_config.orientation_order
@@ -1754,10 +1935,15 @@ def compute_pairwise_image_comparisons(
                         sorted(
                             orientation
                             for orientation in common_orientations
-                            if orientation and orientation not in dataset_config.orientation_order
+                            if orientation
+                            and orientation not in dataset_config.orientation_order
                         )
                     )
-                groups = [(orientation, orientation) for orientation in orientations if orientation]
+                groups = [
+                    (orientation, orientation)
+                    for orientation in orientations
+                    if orientation
+                ]
             for orientation_label, orientation_value in groups:
                 left = image_tables[model_a]
                 right = image_tables[model_b]
@@ -1837,7 +2023,10 @@ def bootstrap_mean_ci(
     for index in range(iterations):
         sample = rng.choice(values, size=len(values), replace=True)
         sample_means[index] = np.mean(sample)
-    return (float(np.quantile(sample_means, 0.025)), float(np.quantile(sample_means, 0.975)))
+    return (
+        float(np.quantile(sample_means, 0.025)),
+        float(np.quantile(sample_means, 0.975)),
+    )
 
 
 def compute_primary_vs_baselines(
@@ -1868,8 +2057,12 @@ def compute_primary_vs_baselines(
                     "primary_median_nme": row.get("median_nme_a"),
                     "baseline_median_nme": row.get("median_nme_b"),
                     "primary_win_rate": row.get("win_rate_a"),
-                    "mean_signed_diff_primary_minus_baseline": row.get("mean_signed_diff_a_minus_b"),
-                    "median_signed_diff_primary_minus_baseline": row.get("median_signed_diff_a_minus_b"),
+                    "mean_signed_diff_primary_minus_baseline": row.get(
+                        "mean_signed_diff_a_minus_b"
+                    ),
+                    "median_signed_diff_primary_minus_baseline": row.get(
+                        "median_signed_diff_a_minus_b"
+                    ),
                     "wilcoxon_pvalue": row.get("wilcoxon_pvalue"),
                     "mean_diff_ci95_low": row.get("mean_diff_ci95_low"),
                     "mean_diff_ci95_high": row.get("mean_diff_ci95_high"),
@@ -1887,8 +2080,12 @@ def compute_primary_vs_baselines(
                     "primary_median_nme": row.get("median_nme_b"),
                     "baseline_median_nme": row.get("median_nme_a"),
                     "primary_win_rate": 1.0 - row.get("win_rate_a", np.nan),
-                    "mean_signed_diff_primary_minus_baseline": -row.get("mean_signed_diff_a_minus_b", np.nan),
-                    "median_signed_diff_primary_minus_baseline": -row.get("median_signed_diff_a_minus_b", np.nan),
+                    "mean_signed_diff_primary_minus_baseline": -row.get(
+                        "mean_signed_diff_a_minus_b", np.nan
+                    ),
+                    "median_signed_diff_primary_minus_baseline": -row.get(
+                        "median_signed_diff_a_minus_b", np.nan
+                    ),
                     "wilcoxon_pvalue": row.get("wilcoxon_pvalue"),
                     "mean_diff_ci95_low": -row.get("mean_diff_ci95_high", np.nan),
                     "mean_diff_ci95_high": -row.get("mean_diff_ci95_low", np.nan),
@@ -1913,7 +2110,11 @@ def compute_model_ranking_summary(
     ]
     for column, lower_is_better, label in metric_specs:
         if column in global_metrics and global_metrics[column].notna().any():
-            idx = global_metrics[column].idxmin() if lower_is_better else global_metrics[column].idxmax()
+            idx = (
+                global_metrics[column].idxmin()
+                if lower_is_better
+                else global_metrics[column].idxmax()
+            )
             rows.append(
                 {
                     "ranking_scope": label,
@@ -1958,14 +2159,18 @@ def compute_dataset_input_summary(results: list[LoadedModelResults]) -> pd.DataF
             for row in result.column_audit:
                 row = dict(row)
                 row["detection_rate"] = result.detection_rate_info.detection_rate
-                row["detection_rate_source"] = result.detection_rate_info.detection_rate_source
+                row[
+                    "detection_rate_source"
+                ] = result.detection_rate_info.detection_rate_source
                 row["n_detected"] = result.detection_rate_info.n_detected
                 row["n_total"] = result.detection_rate_info.n_total
-                row["detected_column_name"] = result.detection_rate_info.detected_column_name
+                row[
+                    "detected_column_name"
+                ] = result.detection_rate_info.detected_column_name
                 row["warning_message"] = result.detection_rate_info.warning_message
-                row["detection_rate_fallback_config"] = (
-                    result.config.detection_rate_fallback
-                )
+                row[
+                    "detection_rate_fallback_config"
+                ] = result.config.detection_rate_fallback
                 row["legacy_detection_rate_config"] = result.config.detection_rate
                 row["landmark_format"] = result.config.landmark_format
                 row["normalized_rows_used"] = (
@@ -1987,13 +2192,19 @@ def compute_dataset_input_summary(results: list[LoadedModelResults]) -> pd.DataF
                 "model_name": result.config.name,
                 "predicts_visibility": bool(result.config.predicts_visibility),
                 "analysis_name": (
-                    "" if result.per_image is None or result.per_image.empty else result.per_image.iloc[0].get("analysis_name", "")
+                    ""
+                    if result.per_image is None or result.per_image.empty
+                    else result.per_image.iloc[0].get("analysis_name", "")
                 ),
                 "selected_metric_source": (
-                    "" if result.per_image is None or result.per_image.empty else result.per_image.iloc[0].get("selected_metric_source", "")
+                    ""
+                    if result.per_image is None or result.per_image.empty
+                    else result.per_image.iloc[0].get("selected_metric_source", "")
                 ),
                 "selected_metric_column": (
-                    "" if result.per_image is None or result.per_image.empty else result.per_image.iloc[0].get("selected_metric_column", "")
+                    ""
+                    if result.per_image is None or result.per_image.empty
+                    else result.per_image.iloc[0].get("selected_metric_column", "")
                 ),
                 "detection_rate": result.detection_rate_info.detection_rate,
                 "detection_rate_source": result.detection_rate_info.detection_rate_source,
@@ -2004,10 +2215,18 @@ def compute_dataset_input_summary(results: list[LoadedModelResults]) -> pd.DataF
                 "detection_rate_fallback_config": result.config.detection_rate_fallback,
                 "legacy_detection_rate_config": result.config.detection_rate,
                 "landmark_format": result.config.landmark_format,
-                "per_image_csv": str(result.config.per_image_csv) if result.config.per_image_csv else "",
-                "per_image_rows": 0 if result.per_image is None else int(len(result.per_image)),
-                "per_landmark_csv": str(result.config.per_landmark_csv) if result.config.per_landmark_csv else "",
-                "per_landmark_rows": 0 if result.per_landmark is None else int(len(result.per_landmark)),
+                "per_image_csv": str(result.config.per_image_csv)
+                if result.config.per_image_csv
+                else "",
+                "per_image_rows": 0
+                if result.per_image is None
+                else int(len(result.per_image)),
+                "per_landmark_csv": str(result.config.per_landmark_csv)
+                if result.config.per_landmark_csv
+                else "",
+                "per_landmark_rows": 0
+                if result.per_landmark is None
+                else int(len(result.per_landmark)),
                 "warnings": " | ".join(result.warnings),
             }
         )
@@ -2057,7 +2276,9 @@ def import_matplotlib_pyplot() -> Any:
             warnings.simplefilter("ignore")
             import matplotlib.pyplot as plt
     except Exception as error:  # pragma: no cover - depends on local binary deps.
-        raise ImportError(f"Could not import matplotlib for plot generation: {error}") from error
+        raise ImportError(
+            f"Could not import matplotlib for plot generation: {error}"
+        ) from error
     return plt
 
 
@@ -2099,7 +2320,9 @@ def apply_axis_style(ax: Any, grid_axis: str = "y") -> None:
     ax.spines["right"].set_visible(False)
 
 
-def maybe_percent(values: pd.Series | np.ndarray, use_percent_axis: bool) -> pd.Series | np.ndarray:
+def maybe_percent(
+    values: pd.Series | np.ndarray, use_percent_axis: bool
+) -> pd.Series | np.ndarray:
     """Scale values to percent when configured."""
     return values * 100.0 if use_percent_axis else values
 
@@ -2132,7 +2355,16 @@ def add_ced_reference_lines(ax: Any) -> None:
     """Add common NME reference lines to a CED plot."""
     for threshold, label in [(0.05, "5%"), (0.10, "10%"), (0.20, "20%")]:
         ax.axvline(threshold, color="0.45", linestyle="--", linewidth=0.9, alpha=0.8)
-        ax.text(threshold, 0.03, label, rotation=90, va="bottom", ha="right", color="0.35", fontsize=8)
+        ax.text(
+            threshold,
+            0.03,
+            label,
+            rotation=90,
+            va="bottom",
+            ha="right",
+            color="0.35",
+            fontsize=8,
+        )
 
 
 def generate_benchmark_plots(
@@ -2170,15 +2402,25 @@ def generate_benchmark_plots(
     if global_metrics.empty:
         return plot_paths
 
-    model_order = get_ordered_model_names(global_metrics["model"].tolist(), config.dataset)
-    global_metrics = global_metrics.set_index("model").reindex(model_order).dropna(how="all").reset_index()
+    model_order = get_ordered_model_names(
+        global_metrics["model"].tolist(), config.dataset
+    )
+    global_metrics = (
+        global_metrics.set_index("model")
+        .reindex(model_order)
+        .dropna(how="all")
+        .reset_index()
+    )
     model_order = global_metrics["model"].tolist()
     display_names, color_map, _ = build_model_style_maps(model_order, config.dataset)
     labels = [label_for_model(model, display_names) for model in model_order]
     colors = [color_map[model] for model in model_order]
     x = np.arange(len(model_order))
     use_percent = config.dataset.use_percent_axis
-    protocol_label = config.dataset.evaluation_protocol_display_name or config.dataset.evaluation_protocol
+    protocol_label = (
+        config.dataset.evaluation_protocol_display_name
+        or config.dataset.evaluation_protocol
+    )
     metric_label = config.metrics[0].display_name if len(config.metrics) == 1 else "NME"
     title_prefix = " | ".join(
         part for part in [config.dataset.name, protocol_label, metric_label] if part
@@ -2216,11 +2458,23 @@ def generate_benchmark_plots(
     ax.set_title(contextual_title("Mean image-level NME by model"))
     apply_axis_style(ax)
     if config.dataset.annotate_bars:
-        ann = [format_metric_label(value, use_percent) for value in global_metrics["mean_image_nme"]]
+        ann = [
+            format_metric_label(value, use_percent)
+            for value in global_metrics["mean_image_nme"]
+        ]
         annotate_bars(ax, bars, ann)
         for idx, det in enumerate(detection_rates):
             det_label = f"det {det * 100:.1f}%" if np.isfinite(det) else "det n/a"
-            ax.text(idx, 0, det_label, rotation=90, ha="center", va="bottom", fontsize=8, color="0.35")
+            ax.text(
+                idx,
+                0,
+                det_label,
+                rotation=90,
+                ha="center",
+                va="bottom",
+                fontsize=8,
+                color="0.35",
+            )
     path = plot_dir / "mean_image_nme_bar.png"
     save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
     plot_paths.append(str(path.relative_to(output_dir)))
@@ -2232,7 +2486,12 @@ def generate_benchmark_plots(
         det = detection_rates.iloc[idx]
         if not np.isfinite(det):
             continue
-        ax.annotate(labels[idx], (det * 100.0, y_values[idx]), xytext=(5, 5), textcoords="offset points")
+        ax.annotate(
+            labels[idx],
+            (det * 100.0, y_values[idx]),
+            xytext=(5, 5),
+            textcoords="offset points",
+        )
     ax.set_xlabel("Detection rate (%)")
     ax.set_ylabel("Mean image-level NME (%)" if use_percent else "Mean image-level NME")
     ax.set_title(contextual_title("Mean NME vs detection rate"))
@@ -2241,10 +2500,17 @@ def generate_benchmark_plots(
     save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
     plot_paths.append(str(path.relative_to(output_dir)))
 
-    image_frames = [finite_nme(result.per_image) for result in results if result.per_image is not None]
+    image_frames = [
+        finite_nme(result.per_image)
+        for result in results
+        if result.per_image is not None
+    ]
     if image_frames:
         image_all = pd.concat(image_frames, ignore_index=True)
-        ordered_data = [image_all.loc[image_all["model"] == model, "nme"].to_numpy() for model in model_order]
+        ordered_data = [
+            image_all.loc[image_all["model"] == model, "nme"].to_numpy()
+            for model in model_order
+        ]
         plot_data = [maybe_percent(values, use_percent) for values in ordered_data]
 
         fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 5.0))
@@ -2253,7 +2519,12 @@ def generate_benchmark_plots(
             tick_labels=labels,
             showfliers=False,
             showmeans=True,
-            meanprops={"marker": "D", "markerfacecolor": "white", "markeredgecolor": "black", "markersize": 6},
+            meanprops={
+                "marker": "D",
+                "markerfacecolor": "white",
+                "markeredgecolor": "black",
+                "markersize": 6,
+            },
             medianprops={"color": "black", "linewidth": 1.8},
             patch_artist=True,
         )
@@ -2264,7 +2535,15 @@ def generate_benchmark_plots(
         ax.set_ylabel("Image-level NME (%)" if use_percent else "Image-level NME")
         ax.set_title(contextual_title("Image-level NME distribution by model"))
         ax.plot([], [], color="black", linewidth=1.8, label="Median")
-        ax.plot([], [], marker="D", markerfacecolor="white", markeredgecolor="black", linestyle="None", label="Mean")
+        ax.plot(
+            [],
+            [],
+            marker="D",
+            markerfacecolor="white",
+            markeredgecolor="black",
+            linestyle="None",
+            label="Mean",
+        )
         ax.legend(loc="upper right")
         apply_axis_style(ax)
         if config.dataset.annotate_boxplot_means:
@@ -2272,25 +2551,42 @@ def generate_benchmark_plots(
                 if len(values):
                     mean = float(np.mean(values))
                     display_value = mean * 100.0 if use_percent else mean
-                    ax.annotate(format_metric_label(mean, use_percent), xy=(idx, display_value), xytext=(0, 12), textcoords="offset points", ha="center", fontsize=8)
+                    ax.annotate(
+                        format_metric_label(mean, use_percent),
+                        xy=(idx, display_value),
+                        xytext=(0, 12),
+                        textcoords="offset points",
+                        ha="center",
+                        fontsize=8,
+                    )
         path = plot_dir / "image_nme_boxplot_by_model.png"
         save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
         plot_paths.append(str(path.relative_to(output_dir)))
 
         if config.dataset.generate_log_scale_variants and any(
-            np.nanmax(values) / max(np.nanmedian(values), config.dataset.log_scale_epsilon) > 4
+            np.nanmax(values)
+            / max(np.nanmedian(values), config.dataset.log_scale_epsilon)
+            > 4
             for values in ordered_data
             if len(values)
         ):
             fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 5.0))
-            box = ax.boxplot(plot_data, tick_labels=labels, showfliers=False, showmeans=True, patch_artist=True)
+            box = ax.boxplot(
+                plot_data,
+                tick_labels=labels,
+                showfliers=False,
+                showmeans=True,
+                patch_artist=True,
+            )
             for patch, color in zip(box["boxes"], colors):
                 patch.set_facecolor(color)
                 patch.set_alpha(0.55)
             ax.set_yscale("log")
             ax.set_xticklabels(labels, rotation=30, ha="right")
             ax.set_ylabel("Image-level NME (%)" if use_percent else "Image-level NME")
-            ax.set_title(contextual_title("Image-level NME distribution by model (log scale)"))
+            ax.set_title(
+                contextual_title("Image-level NME distribution by model (log scale)")
+            )
             apply_axis_style(ax)
             path = plot_dir / "image_nme_boxplot_by_model_log.png"
             save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
@@ -2298,7 +2594,9 @@ def generate_benchmark_plots(
 
         if config.dataset.show_violin_plots:
             fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 5.0))
-            violin = ax.violinplot(plot_data, showmeans=False, showmedians=False, showextrema=False)
+            violin = ax.violinplot(
+                plot_data, showmeans=False, showmedians=False, showextrema=False
+            )
             for body, color in zip(violin["bodies"], colors):
                 body.set_facecolor(color)
                 body.set_edgecolor("black")
@@ -2309,9 +2607,28 @@ def generate_benchmark_plots(
                 q1, median, q3 = np.percentile(values, [25, 50, 75])
                 mean = np.mean(values)
                 ax.vlines(idx, q1, q3, color="black", linewidth=3)
-                ax.scatter(idx, median, marker="_", color="black", s=120, zorder=3, label="Median" if idx == 1 else None)
-                ax.scatter(idx, mean, marker="D", facecolor="white", edgecolor="black", s=36, zorder=3, label="Mean" if idx == 1 else None)
-            ax.set_xticks(np.arange(1, len(model_order) + 1), labels, rotation=30, ha="right")
+                ax.scatter(
+                    idx,
+                    median,
+                    marker="_",
+                    color="black",
+                    s=120,
+                    zorder=3,
+                    label="Median" if idx == 1 else None,
+                )
+                ax.scatter(
+                    idx,
+                    mean,
+                    marker="D",
+                    facecolor="white",
+                    edgecolor="black",
+                    s=36,
+                    zorder=3,
+                    label="Mean" if idx == 1 else None,
+                )
+            ax.set_xticks(
+                np.arange(1, len(model_order) + 1), labels, rotation=30, ha="right"
+            )
             ax.set_ylabel("Image-level NME (%)" if use_percent else "Image-level NME")
             ax.set_title(contextual_title("Image-level NME distribution by model"))
             ax.legend(loc="upper right")
@@ -2321,17 +2638,20 @@ def generate_benchmark_plots(
             plot_paths.append(str(path.relative_to(output_dir)))
 
             if config.dataset.generate_log_scale_variants and any(
-                np.nanmax(values) / max(np.nanmedian(values), config.dataset.log_scale_epsilon) > 4
+                np.nanmax(values)
+                / max(np.nanmedian(values), config.dataset.log_scale_epsilon)
+                > 4
                 for values in ordered_data
                 if len(values)
             ):
-                epsilon = config.dataset.log_scale_epsilon * (100.0 if use_percent else 1.0)
-                log_plot_data = [
-                    np.maximum(values, epsilon)
-                    for values in plot_data
-                ]
+                epsilon = config.dataset.log_scale_epsilon * (
+                    100.0 if use_percent else 1.0
+                )
+                log_plot_data = [np.maximum(values, epsilon) for values in plot_data]
                 fig, ax = plt.subplots(figsize=(max(7, len(model_order) * 1.25), 5.0))
-                violin = ax.violinplot(log_plot_data, showmeans=False, showmedians=False, showextrema=False)
+                violin = ax.violinplot(
+                    log_plot_data, showmeans=False, showmedians=False, showextrema=False
+                )
                 for body, color in zip(violin["bodies"], colors):
                     body.set_facecolor(color)
                     body.set_edgecolor("black")
@@ -2342,12 +2662,37 @@ def generate_benchmark_plots(
                     q1, median, q3 = np.percentile(values, [25, 50, 75])
                     mean = np.mean(values)
                     ax.vlines(idx, q1, q3, color="black", linewidth=3)
-                    ax.scatter(idx, median, marker="_", color="black", s=120, zorder=3, label="Median" if idx == 1 else None)
-                    ax.scatter(idx, mean, marker="D", facecolor="white", edgecolor="black", s=36, zorder=3, label="Mean" if idx == 1 else None)
+                    ax.scatter(
+                        idx,
+                        median,
+                        marker="_",
+                        color="black",
+                        s=120,
+                        zorder=3,
+                        label="Median" if idx == 1 else None,
+                    )
+                    ax.scatter(
+                        idx,
+                        mean,
+                        marker="D",
+                        facecolor="white",
+                        edgecolor="black",
+                        s=36,
+                        zorder=3,
+                        label="Mean" if idx == 1 else None,
+                    )
                 ax.set_yscale("log")
-                ax.set_xticks(np.arange(1, len(model_order) + 1), labels, rotation=30, ha="right")
-                ax.set_ylabel("Image-level NME (%)" if use_percent else "Image-level NME")
-                ax.set_title(contextual_title("Image-level NME distribution by model (log scale)"))
+                ax.set_xticks(
+                    np.arange(1, len(model_order) + 1), labels, rotation=30, ha="right"
+                )
+                ax.set_ylabel(
+                    "Image-level NME (%)" if use_percent else "Image-level NME"
+                )
+                ax.set_title(
+                    contextual_title(
+                        "Image-level NME distribution by model (log scale)"
+                    )
+                )
                 ax.legend(loc="upper right")
                 apply_axis_style(ax)
                 path = plot_dir / "image_nme_violin_by_model_log.png"
@@ -2357,7 +2702,9 @@ def generate_benchmark_plots(
         def plot_ced(path: Path, zoom: bool = False) -> None:
             fig, ax = plt.subplots(figsize=(7.2, 5.0))
             for model, label, color in zip(model_order, labels, colors):
-                values = np.sort(image_all.loc[image_all["model"] == model, "nme"].to_numpy())
+                values = np.sort(
+                    image_all.loc[image_all["model"] == model, "nme"].to_numpy()
+                )
                 if len(values) == 0:
                     continue
                 y = np.arange(1, len(values) + 1) / len(values)
@@ -2368,7 +2715,9 @@ def generate_benchmark_plots(
             ax.set_ylim(0, 1.01)
             ax.set_xlabel("Image-level NME threshold")
             ax.set_ylabel("Fraction of images with NME <= threshold")
-            ax.set_title(contextual_title("Cumulative Error Distribution (Image-level NME)"))
+            ax.set_title(
+                contextual_title("Cumulative Error Distribution (Image-level NME)")
+            )
             ax.legend(fontsize=9)
             apply_axis_style(ax)
             save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
@@ -2383,16 +2732,31 @@ def generate_benchmark_plots(
     if not orientation_metrics.empty:
         orient = orientation_metrics.copy()
         orient = orient[orient["orientation"].isin(config.dataset.orientation_order)]
-        pivot = orient.pivot(index="model", columns="orientation", values="mean_image_nme")
-        pivot = pivot.reindex(index=model_order, columns=config.dataset.orientation_order).dropna(how="all")
+        pivot = orient.pivot(
+            index="model", columns="orientation", values="mean_image_nme"
+        )
+        pivot = pivot.reindex(
+            index=model_order, columns=config.dataset.orientation_order
+        ).dropna(how="all")
         if not pivot.empty:
-            fig, ax = plt.subplots(figsize=(max(7, pivot.shape[1] * 1.15), max(4, pivot.shape[0] * 0.55)))
+            fig, ax = plt.subplots(
+                figsize=(max(7, pivot.shape[1] * 1.15), max(4, pivot.shape[0] * 0.55))
+            )
             values = pivot.to_numpy() * (100.0 if use_percent else 1.0)
             image = ax.imshow(values, aspect="auto", cmap="viridis")
-            ax.set_xticks(np.arange(pivot.shape[1]), pivot.columns, rotation=30, ha="right")
-            ax.set_yticks(np.arange(pivot.shape[0]), [label_for_model(model, display_names) for model in pivot.index])
+            ax.set_xticks(
+                np.arange(pivot.shape[1]), pivot.columns, rotation=30, ha="right"
+            )
+            ax.set_yticks(
+                np.arange(pivot.shape[0]),
+                [label_for_model(model, display_names) for model in pivot.index],
+            )
             ax.set_title(contextual_title("Orientation-wise mean image NME"))
-            fig.colorbar(image, ax=ax, label="Mean image NME (%)" if use_percent else "Mean image NME")
+            fig.colorbar(
+                image,
+                ax=ax,
+                label="Mean image NME (%)" if use_percent else "Mean image NME",
+            )
             path = plot_dir / "orientation_mean_nme_heatmap.png"
             save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
             plot_paths.append(str(path.relative_to(output_dir)))
@@ -2402,7 +2766,13 @@ def generate_benchmark_plots(
             orientation_x = np.arange(len(pivot.columns))
             for idx, model in enumerate(pivot.index):
                 offset = (idx - (len(pivot.index) - 1) / 2) * width
-                ax.bar(orientation_x + offset, pivot.loc[model].to_numpy() * (100.0 if use_percent else 1.0), width, label=label_for_model(model, display_names), color=color_map[model])
+                ax.bar(
+                    orientation_x + offset,
+                    pivot.loc[model].to_numpy() * (100.0 if use_percent else 1.0),
+                    width,
+                    label=label_for_model(model, display_names),
+                    color=color_map[model],
+                )
             ax.set_xticks(orientation_x, pivot.columns, rotation=30, ha="right")
             ax.set_ylabel("Mean image NME (%)" if use_percent else "Mean image NME")
             ax.set_title(contextual_title("Orientation-wise mean image NME"))
@@ -2414,15 +2784,33 @@ def generate_benchmark_plots(
 
     primary = config.dataset.primary_model
     if primary and not per_landmark_metrics.empty:
-        primary_raw = next((finite_nme(r.per_landmark) for r in results if r.config.name == primary and r.per_landmark is not None), pd.DataFrame())
+        primary_raw = next(
+            (
+                finite_nme(r.per_landmark)
+                for r in results
+                if r.config.name == primary and r.per_landmark is not None
+            ),
+            pd.DataFrame(),
+        )
         if not primary_raw.empty:
             landmark_indices = sorted(primary_raw["landmark_index"].dropna().unique())
-            data = [primary_raw.loc[primary_raw["landmark_index"] == idx, "nme"].to_numpy() for idx in landmark_indices]
+            data = [
+                primary_raw.loc[primary_raw["landmark_index"] == idx, "nme"].to_numpy()
+                for idx in landmark_indices
+            ]
             fig, ax = plt.subplots(figsize=(max(10, len(landmark_indices) * 0.22), 4.8))
-            ax.boxplot(data, tick_labels=[str(int(idx)) for idx in landmark_indices], showfliers=False)
+            ax.boxplot(
+                data,
+                tick_labels=[str(int(idx)) for idx in landmark_indices],
+                showfliers=False,
+            )
             ax.set_xlabel("Landmark index (0-based)")
             ax.set_ylabel("Per-landmark NME")
-            ax.set_title(contextual_title(f"Per-landmark NME for {label_for_model(primary, display_names)}"))
+            ax.set_title(
+                contextual_title(
+                    f"Per-landmark NME for {label_for_model(primary, display_names)}"
+                )
+            )
             apply_axis_style(ax)
             path = plot_dir / "primary_per_landmark_nme_boxplot.png"
             save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
@@ -2430,13 +2818,26 @@ def generate_benchmark_plots(
 
         fig, ax = plt.subplots(figsize=(10, 5))
         common_limit = min(
-            [int(pd.to_numeric(m.landmark_format, errors="coerce")) for m in (r.config for r in results) if m.landmark_format and str(m.landmark_format).isdigit()]
+            [
+                int(pd.to_numeric(m.landmark_format, errors="coerce"))
+                for m in (r.config for r in results)
+                if m.landmark_format and str(m.landmark_format).isdigit()
+            ]
             or [int(per_landmark_metrics["landmark_index"].max()) + 1]
         )
         for model, color in zip(model_order, colors):
-            model_rows = per_landmark_metrics[(per_landmark_metrics["model"] == model) & (per_landmark_metrics["landmark_index"] < common_limit)].sort_values("landmark_index")
+            model_rows = per_landmark_metrics[
+                (per_landmark_metrics["model"] == model)
+                & (per_landmark_metrics["landmark_index"] < common_limit)
+            ].sort_values("landmark_index")
             if not model_rows.empty:
-                ax.plot(model_rows["landmark_index"], model_rows["mean_landmark_nme"], label=label_for_model(model, display_names), color=color, linewidth=1.8)
+                ax.plot(
+                    model_rows["landmark_index"],
+                    model_rows["mean_landmark_nme"],
+                    label=label_for_model(model, display_names),
+                    color=color,
+                    linewidth=1.8,
+                )
         ax.set_xlabel("Landmark index (0-based)")
         ax.set_ylabel("Mean landmark NME")
         ax.set_title(contextual_title("Per-landmark mean NME across models"))
@@ -2447,12 +2848,18 @@ def generate_benchmark_plots(
         plot_paths.append(str(path.relative_to(output_dir)))
 
     if not region_metrics.empty:
-        region_order = list(config.dataset.anatomical_regions.keys()) or sorted(region_metrics["region"].unique())
-        pivot = region_metrics.pivot(index="region", columns="model", values="mean_nme").reindex(index=region_order, columns=model_order)
+        region_order = list(config.dataset.anatomical_regions.keys()) or sorted(
+            region_metrics["region"].unique()
+        )
+        pivot = region_metrics.pivot(
+            index="region", columns="model", values="mean_nme"
+        ).reindex(index=region_order, columns=model_order)
         pivot = pivot.dropna(how="all")
         if not pivot.empty:
             fig, ax = plt.subplots(figsize=(max(11, len(pivot) * 0.75), 5.5))
-            pivot.rename(columns=display_names).plot(kind="bar", ax=ax, color=[color_map[m] for m in pivot.columns])
+            pivot.rename(columns=display_names).plot(
+                kind="bar", ax=ax, color=[color_map[m] for m in pivot.columns]
+            )
             ax.set_ylabel("Mean NME")
             ax.set_title(contextual_title("Anatomical-region mean NME"))
             ax.legend(title="Model", fontsize=8)
@@ -2462,13 +2869,21 @@ def generate_benchmark_plots(
             save_figure(fig, path, config.save_pdf, config.dataset.plot_dpi)
             plot_paths.append(str(path.relative_to(output_dir)))
 
-            common68_regions = [region for region in pivot.index if max(config.dataset.anatomical_regions.get(region, [-1])) < 68]
+            common68_regions = [
+                region
+                for region in pivot.index
+                if max(config.dataset.anatomical_regions.get(region, [-1])) < 68
+            ]
             pivot68 = pivot.loc[common68_regions]
             if not pivot68.empty:
                 fig, ax = plt.subplots(figsize=(max(10, len(pivot68) * 0.85), 5.2))
-                pivot68.rename(columns=display_names).plot(kind="bar", ax=ax, color=[color_map[m] for m in pivot68.columns])
+                pivot68.rename(columns=display_names).plot(
+                    kind="bar", ax=ax, color=[color_map[m] for m in pivot68.columns]
+                )
                 ax.set_ylabel("Mean NME")
-                ax.set_title(contextual_title("Anatomical-region mean NME (common 68 landmarks)"))
+                ax.set_title(
+                    contextual_title("Anatomical-region mean NME (common 68 landmarks)")
+                )
                 ax.legend(title="Model", fontsize=8)
                 ax.set_xticklabels(ax.get_xticklabels(), rotation=45, ha="right")
                 apply_axis_style(ax)
@@ -2485,11 +2900,23 @@ def generate_benchmark_plots(
         bars = ax.bar(x_win, values, color=primary_color, alpha=0.85)
         ax.axhline(50.0, color="black", linestyle="--", linewidth=1.1, label="50%")
         ax.set_ylim(0, 100)
-        ax.set_xticks(x_win, [label_for_model(model, display_names) for model in baselines], rotation=30, ha="right")
+        ax.set_xticks(
+            x_win,
+            [label_for_model(model, display_names) for model in baselines],
+            rotation=30,
+            ha="right",
+        )
         ax.set_ylabel("Images where primary model has lower NME (%)")
-        ax.set_title(contextual_title(f"{label_for_model(primary, display_names)} pairwise win rate on common images"))
+        ax.set_title(
+            contextual_title(
+                f"{label_for_model(primary, display_names)} pairwise win rate on common images"
+            )
+        )
         if config.dataset.annotate_bars:
-            ann = [f"{rate:.1f}%\n(n={int(n)})" for rate, n in zip(values, primary_vs_baselines["n_common_images"])]
+            ann = [
+                f"{rate:.1f}%\n(n={int(n)})"
+                for rate, n in zip(values, primary_vs_baselines["n_common_images"])
+            ]
             annotate_bars(ax, bars, ann)
         ax.legend(loc="upper right")
         apply_axis_style(ax)
@@ -2520,7 +2947,9 @@ def generate_benchmark_plots(
 
 def format_float(value: Any, digits: int = 4) -> str:
     """Format floats for Markdown tables."""
-    if value is None or (isinstance(value, float) and (math.isnan(value) or math.isinf(value))):
+    if value is None or (
+        isinstance(value, float) and (math.isnan(value) or math.isinf(value))
+    ):
         return ""
     if isinstance(value, (float, np.floating)):
         return f"{float(value):.{digits}f}"
@@ -2538,7 +2967,9 @@ def dataframe_to_markdown(df: pd.DataFrame, max_rows: int = 20) -> str:
         "| " + " | ".join(["---"] * len(columns)) + " |",
     ]
     for _, row in shown.iterrows():
-        lines.append("| " + " | ".join(format_float(row[col]) for col in columns) + " |")
+        lines.append(
+            "| " + " | ".join(format_float(row[col]) for col in columns) + " |"
+        )
     if len(df) > max_rows:
         lines.append(f"\n_Showing first {max_rows} of {len(df)} rows._")
     return "\n".join(lines)
@@ -2608,7 +3039,7 @@ def write_markdown_report(
         "This is preferred for visibility-aware datasets because landmark-pooled metrics "
         "can overweight images with more visible landmarks.",
         "",
-    *get_babyland_visibility_report_note(dataset, protocol_config),
+        *get_babyland_visibility_report_note(dataset, protocol_config),
         *(
             [
                 "Hausdorff distance measures the worst-case mismatch between the "
@@ -2657,7 +3088,9 @@ def write_markdown_report(
         if not best_by_orientation.empty:
             lines.extend(["", "Best model by orientation:"])
             for _, row in best_by_orientation.iterrows():
-                lines.append(f"- `{row['group']}`: `{row['best_model']}` ({row['metric']}={format_float(row['best_value'])})")
+                lines.append(
+                    f"- `{row['group']}`: `{row['best_model']}` ({row['metric']}={format_float(row['best_value'])})"
+                )
 
     lines.extend(["", "## Pairwise analysis", ""])
     if primary_vs.empty:
@@ -2665,7 +3098,9 @@ def write_markdown_report(
     else:
         lines.append(dataframe_to_markdown(primary_vs, max_rows=50))
         lines.append("")
-        lines.append("Negative signed differences mean the primary model has lower NME than the baseline.")
+        lines.append(
+            "Negative signed differences mean the primary model has lower NME than the baseline."
+        )
         lines.append(
             "Primary win rate is computed only on common images: it is the percentage "
             "of shared images where the primary model has lower image-level NME than "
@@ -2691,12 +3126,26 @@ def write_markdown_report(
         for model_name in model_names:
             lines.extend(["", f"### {model_name}", "", "10 best cases:"])
             best = best_cases[best_cases["model_name"] == model_name][
-                ["rank", "image_id", "orientation", "image_level_nme", "prediction_overlay_path", "comparison_overlay_path"]
+                [
+                    "rank",
+                    "image_id",
+                    "orientation",
+                    "image_level_nme",
+                    "prediction_overlay_path",
+                    "comparison_overlay_path",
+                ]
             ]
             lines.append(dataframe_to_markdown(best, max_rows=10))
             lines.extend(["", "10 worst cases:"])
             worst = worst_cases[worst_cases["model_name"] == model_name][
-                ["rank", "image_id", "orientation", "image_level_nme", "prediction_overlay_path", "comparison_overlay_path"]
+                [
+                    "rank",
+                    "image_id",
+                    "orientation",
+                    "image_level_nme",
+                    "prediction_overlay_path",
+                    "comparison_overlay_path",
+                ]
             ]
             lines.append(dataframe_to_markdown(worst, max_rows=10))
 
@@ -2709,9 +3158,13 @@ def write_markdown_report(
     elif tables["per_landmark_metrics"].empty:
         lines.append("_Per-landmark CSVs were unavailable._")
     else:
-        lines.append("Landmark-pooled metrics are secondary and should not replace the image-level ranking.")
+        lines.append(
+            "Landmark-pooled metrics are secondary and should not replace the image-level ranking."
+        )
         lines.append("")
-        lines.append(dataframe_to_markdown(tables["global_landmark_pooled_metrics"], max_rows=50))
+        lines.append(
+            dataframe_to_markdown(tables["global_landmark_pooled_metrics"], max_rows=50)
+        )
         primary = dataset.primary_model
         if primary:
             primary_landmarks = tables["per_landmark_metrics"][
@@ -2726,7 +3179,9 @@ def write_markdown_report(
 
     lines.extend(["", "## Anatomical-region analysis", ""])
     if tables["anatomical_region_metrics"].empty:
-        lines.append("_Anatomical-region mapping was unavailable or no per-landmark data were provided._")
+        lines.append(
+            "_Anatomical-region mapping was unavailable or no per-landmark data were provided._"
+        )
     else:
         if "babyland" in dataset.name.lower():
             lines.append(
@@ -2735,14 +3190,22 @@ def write_markdown_report(
                 "formats are not directly comparable on landmarks 68-71."
             )
         lines.append("")
-        lines.append(dataframe_to_markdown(tables["anatomical_region_metrics"], max_rows=100))
+        lines.append(
+            dataframe_to_markdown(tables["anatomical_region_metrics"], max_rows=100)
+        )
 
     lines.extend(["", "## Strengths of the primary model", ""])
-    lines.extend(generate_primary_strengths(global_metrics, primary_vs, dataset.primary_model))
+    lines.extend(
+        generate_primary_strengths(global_metrics, primary_vs, dataset.primary_model)
+    )
     lines.extend(["", "## Weaknesses / limitations", ""])
-    lines.extend(generate_primary_limitations(global_metrics, primary_vs, dataset.primary_model))
+    lines.extend(
+        generate_primary_limitations(global_metrics, primary_vs, dataset.primary_model)
+    )
     lines.extend(["", "## Recommended claims", ""])
-    lines.extend(generate_recommended_claims(global_metrics, primary_vs, dataset.primary_model))
+    lines.extend(
+        generate_recommended_claims(global_metrics, primary_vs, dataset.primary_model)
+    )
 
     lines.extend(["", "## Figures", ""])
     for plot_path in plot_paths:
@@ -2771,9 +3234,13 @@ def generate_primary_strengths(
     if row.empty:
         return [f"- `{primary_model}` was not found in global metrics."]
     row = row.iloc[0]
-    detection_rate = pd.to_numeric(pd.Series([row.get("detection_rate")]), errors="coerce").iloc[0]
+    detection_rate = pd.to_numeric(
+        pd.Series([row.get("detection_rate")]), errors="coerce"
+    ).iloc[0]
     if np.isfinite(detection_rate) and detection_rate >= 0.999:
-        lines.append(f"- `{primary_model}` achieves full or near-full detection coverage.")
+        lines.append(
+            f"- `{primary_model}` achieves full or near-full detection coverage."
+        )
     if not primary_vs.empty:
         wins = primary_vs[primary_vs["primary_win_rate"] > 0.5]
         for _, item in wins.iterrows():
@@ -2783,8 +3250,12 @@ def generate_primary_strengths(
             )
     best_mean = global_metrics.sort_values("mean_image_nme").iloc[0]
     if best_mean["model"] == primary_model:
-        lines.append(f"- `{primary_model}` has the lowest mean image-level NME among evaluated models.")
-    return lines or ["- No automatic strength was identified; inspect the tables for nuanced behavior."]
+        lines.append(
+            f"- `{primary_model}` has the lowest mean image-level NME among evaluated models."
+        )
+    return lines or [
+        "- No automatic strength was identified; inspect the tables for nuanced behavior."
+    ]
 
 
 def generate_primary_limitations(
@@ -2818,7 +3289,9 @@ def generate_primary_limitations(
                 f"- `{primary_model}` has lower NME than `{item['baseline_model']}` on fewer than half "
                 "of common images."
             )
-    return lines or ["- No automatic limitation was identified; still avoid claims beyond the configured datasets."]
+    return lines or [
+        "- No automatic limitation was identified; still avoid claims beyond the configured datasets."
+    ]
 
 
 def generate_recommended_claims(
@@ -2839,7 +3312,7 @@ def generate_recommended_claims(
                 claims.append(
                     f"- `{primary_model}` is better than `{row['baseline_model']}` on most common images "
                     f"({format_float(row['primary_win_rate'] * 100, 1)}% win rate)."
-    )
+                )
     if not global_metrics.empty:
         primary_row = global_metrics[global_metrics["model"] == primary_model]
         if primary_row.empty:
@@ -2849,7 +3322,9 @@ def generate_recommended_claims(
             errors="coerce",
         ).iloc[0]
         if np.isfinite(detection_rate) and detection_rate >= 0.999:
-            claims.append(f"- `{primary_model}` provides full detection coverage on this benchmark configuration.")
+            claims.append(
+                f"- `{primary_model}` provides full detection coverage on this benchmark configuration."
+            )
     return claims[:5]
 
 
@@ -2915,7 +3390,9 @@ def run_benchmark_analysis(config: BenchmarkAnalysisConfig) -> dict[str, pd.Data
     benchmark_rows = []
     for protocol_config in config.evaluation_protocols:
         for metric_config in config.metrics:
-            metric_output_dir = config.dataset.output_dir / protocol_config.name / metric_config.name
+            metric_output_dir = (
+                config.dataset.output_dir / protocol_config.name / metric_config.name
+            )
             metric_config_dataset = dataclasses_replace_dataset_output(
                 config,
                 metric_output_dir,
@@ -2938,11 +3415,15 @@ def run_benchmark_analysis(config: BenchmarkAnalysisConfig) -> dict[str, pd.Data
                 input_summary_parts.append(dataset_input)
             global_metrics = tables.get("global_image_metrics", pd.DataFrame())
             if not global_metrics.empty and "mean_image_nme" in global_metrics:
-                ranked = global_metrics.sort_values("mean_image_nme").reset_index(drop=True)
+                ranked = global_metrics.sort_values("mean_image_nme").reset_index(
+                    drop=True
+                )
                 best = ranked.iloc[0]
                 primary_rank = ""
                 if config.dataset.primary_model:
-                    matches = ranked.index[ranked["model"].eq(config.dataset.primary_model)]
+                    matches = ranked.index[
+                        ranked["model"].eq(config.dataset.primary_model)
+                    ]
                     primary_rank = int(matches[0] + 1) if len(matches) else ""
                 benchmark_rows.append(
                     {
@@ -2960,7 +3441,9 @@ def run_benchmark_analysis(config: BenchmarkAnalysisConfig) -> dict[str, pd.Data
             config.dataset.output_dir / "dataset_input_summary.csv",
             index=False,
         )
-    write_top_level_benchmark_summary(config.dataset.output_dir, config, pd.DataFrame(benchmark_rows))
+    write_top_level_benchmark_summary(
+        config.dataset.output_dir, config, pd.DataFrame(benchmark_rows)
+    )
     return all_tables
 
 
@@ -3011,7 +3494,9 @@ def run_benchmark_analysis_for_metric(
     ]
     warnings = list(analysis_warnings)
     if not results:
-        warnings.append(f"No models were available for analysis `{protocol_config.name}`.")
+        warnings.append(
+            f"No models were available for analysis `{protocol_config.name}`."
+        )
     warnings.extend([warning for result in results for warning in result.warnings])
     _, _, style_warnings = build_model_style_maps(
         [result.config.name for result in results],
@@ -3026,7 +3511,9 @@ def run_benchmark_analysis_for_metric(
     orientation_metrics = compute_orientation_metrics(results, config.dataset)
     landmark_pooled = compute_landmark_pooled_metrics(results)
     per_landmark = compute_per_landmark_metrics(results)
-    region_metrics = compute_anatomical_region_metrics(results, config.dataset.anatomical_regions)
+    region_metrics = compute_anatomical_region_metrics(
+        results, config.dataset.anatomical_regions
+    )
     pairwise = compute_pairwise_image_comparisons(
         results,
         config.dataset,
@@ -3046,7 +3533,9 @@ def run_benchmark_analysis_for_metric(
         config.dataset.primary_model,
         config.dataset.reference_models,
     )
-    rankings = compute_model_ranking_summary(global_metrics, orientation_metrics, region_metrics)
+    rankings = compute_model_ranking_summary(
+        global_metrics, orientation_metrics, region_metrics
+    )
     input_summary = compute_dataset_input_summary(results)
     best_worst_cases = compute_best_worst_cases(results, config.dataset, metric_config)
     best_worst_tables = split_best_worst_case_tables(best_worst_cases)
@@ -3054,7 +3543,9 @@ def run_benchmark_analysis_for_metric(
     if not pairwise.empty:
         missing_common = pairwise[pairwise["n_common_images"].fillna(0) == 0]
         for _, row in missing_common.iterrows():
-            warnings.append(f"No common images for {row['model_a']} vs {row['model_b']}.")
+            warnings.append(
+                f"No common images for {row['model_a']} vs {row['model_b']}."
+            )
 
     tables = {
         "global_image_metrics": global_metrics,
@@ -3072,7 +3563,9 @@ def run_benchmark_analysis_for_metric(
         "best_cases": best_worst_tables["best_cases"],
         "worst_cases": best_worst_tables["worst_cases"],
     }
-    tables = add_analysis_context_to_tables(tables, config.dataset, protocol_config, metric_config)
+    tables = add_analysis_context_to_tables(
+        tables, config.dataset, protocol_config, metric_config
+    )
     write_tables(output_dir, tables)
     write_best_worst_case_tables(output_dir, best_worst_cases)
     plot_paths = generate_benchmark_plots(
@@ -3103,8 +3596,15 @@ def run_benchmark_analysis_for_metric(
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description="Analyze landmark detection benchmark CSVs.")
-    parser.add_argument("--config", type=Path, required=True, help="Path to YAML or JSON benchmark config.")
+    parser = argparse.ArgumentParser(
+        description="Analyze landmark detection benchmark CSVs."
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        required=True,
+        help="Path to YAML or JSON benchmark config.",
+    )
     parser.add_argument(
         "--drop-invalid-nme",
         action="store_true",

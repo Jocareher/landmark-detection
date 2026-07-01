@@ -16,6 +16,7 @@ from scripts.analysis.benchmark_landmark_models import (
     expand_models_for_analysis,
     filter_per_landmark_by_protocol,
     infer_detection_rate_info,
+    load_model_results,
     split_best_worst_case_tables,
 )
 from scripts.engine.evaluate import (
@@ -210,6 +211,55 @@ def test_detection_rate_unavailable_without_source() -> None:
     assert isinstance(info, DetectionRateInfo)
     assert info.detection_rate is None
     assert info.detection_rate_source == "unavailable"
+
+
+def test_babyland_standard_hausdorff_prefers_gt_valid_column(tmp_path) -> None:
+    """Main-comparison SOTA Hausdorff should not select the empty generic column."""
+    per_image_csv = tmp_path / "per_image_nme.csv"
+    pd.DataFrame(
+        {
+            "sample_id": ["a", "b"],
+            "hausdorff_box": [np.nan, np.nan],
+            "hausdorff_box_gt_valid": [0.2, 0.4],
+        }
+    ).to_csv(per_image_csv, index=False)
+    config = BenchmarkAnalysisConfig(
+        dataset=DatasetBenchmarkConfig(
+            name="BabyLand-72",
+            output_dir=tmp_path,
+            dataset_type="babyland72",
+            total_images=2,
+        ),
+        models=[],
+        column_mappings={
+            "per_image": {
+                "standard": {
+                    "hausdorff": {
+                        "candidates": ["hausdorff_box_gt_valid", "hausdorff_box"]
+                    }
+                }
+            }
+        },
+    )
+    protocol = EvaluationProtocolConfig(name="standard", display_name="Standard")
+    metric = BenchmarkMetricConfig(
+        name="hausdorff",
+        display_name="Hausdorff",
+        per_image_column_candidates=("hausdorff_box",),
+        per_landmark_column_candidates=(),
+    )
+
+    result = load_model_results(
+        ModelBenchmarkConfig(name="sota", per_image_csv=per_image_csv),
+        config,
+        protocol,
+        metric,
+        selected_metric_source="standard",
+    )
+
+    assert result.per_image is not None
+    assert result.per_image["selected_metric_column"].iloc[0] == "hausdorff_box_gt_valid"
+    assert result.per_image["nme"].tolist() == [0.2, 0.4]
 
 
 def test_best_worst_cases_limits_to_ten_per_side() -> None:

@@ -957,8 +957,7 @@ def plot_yaw_view_boxplots(
             summary_parts.append(f"Mean NME box: {mean_nme_box:.4f}")
         if mean_nme_point_to_line is not None:
             summary_parts.append(
-                "Mean NME point-to-line: "
-                f"{mean_nme_point_to_line:.4f}"
+                "Mean NME point-to-line: " f"{mean_nme_point_to_line:.4f}"
             )
         if current_metrics.get("mean_nme_interocular") is not None:
             summary_parts.append(

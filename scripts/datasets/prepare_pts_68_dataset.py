@@ -310,7 +310,9 @@ def _load_configs(config_path: Path) -> list[PtsDatasetConfig]:
     for dataset in datasets:
         if not isinstance(dataset, dict):
             raise ValueError("Each dataset entry must be a mapping.")
-        dataset_options = _parse_options({**raw.get("options", {}), **dataset.get("options", {})})
+        dataset_options = _parse_options(
+            {**raw.get("options", {}), **dataset.get("options", {})}
+        )
         configs.append(
             PtsDatasetConfig(
                 name=str(dataset["name"]),
@@ -335,7 +337,9 @@ def parse_pts_68_file(label_path: Path) -> PtsParseResult:
     in_block = False
     coordinates: list[list[float]] = []
 
-    for line_number, raw_line in enumerate(label_path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, raw_line in enumerate(
+        label_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
         line = raw_line.strip()
         if not line:
             continue
@@ -404,7 +408,10 @@ def parse_pts_68_file(label_path: Path) -> PtsParseResult:
 def find_matching_image_by_stem(images_dir: Path, stem: str) -> Path | None:
     """Return the first supported image under `images_dir` matching `stem`."""
     for suffix in sorted(SUPPORTED_IMAGE_SUFFIXES):
-        for candidate in (images_dir / f"{stem}{suffix}", images_dir / f"{stem}{suffix.upper()}"):
+        for candidate in (
+            images_dir / f"{stem}{suffix}",
+            images_dir / f"{stem}{suffix.upper()}",
+        ):
             if candidate.is_file():
                 return candidate
     matches = [
@@ -447,7 +454,9 @@ def build_newborn_prediction_index(
     index: dict[str, dict[str, object]] = {}
     warnings: list[str] = []
     if not newborn_predictions_dir.exists():
-        warnings.append(f"NewBORN predictions directory does not exist: {newborn_predictions_dir}")
+        warnings.append(
+            f"NewBORN predictions directory does not exist: {newborn_predictions_dir}"
+        )
         return index, warnings
 
     for prediction_path in sorted(newborn_predictions_dir.rglob("*.txt")):
@@ -495,11 +504,15 @@ def write_infanface_style_label_68(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     landmarks = np.asarray(landmarks, dtype=np.float32)
     if landmarks.shape != (NUM_LANDMARKS, 2):
-        raise ValueError(f"Expected landmarks with shape ({NUM_LANDMARKS}, 2), got {landmarks.shape}.")
+        raise ValueError(
+            f"Expected landmarks with shape ({NUM_LANDMARKS}, 2), got {landmarks.shape}."
+        )
     if not np.isfinite(landmarks).all():
         raise ValueError("Cannot write landmarks containing non-finite coordinates.")
     if class_idx is not None and int(class_idx) not in VALID_CLASS_INDICES:
-        raise ValueError(f"Invalid class_idx={class_idx}. Expected an integer in [0, 4].")
+        raise ValueError(
+            f"Invalid class_idx={class_idx}. Expected an integer in [0, 4]."
+        )
 
     with output_path.open("w", encoding="utf-8") as handle:
         if class_idx is not None:
@@ -520,7 +533,9 @@ def validate_infanface_style_label_68(
     ]
     expected_lines = NUM_LANDMARKS + (1 if require_class_header else 0)
     if len(lines) != expected_lines:
-        raise ValueError(f"Expected {expected_lines} non-empty lines in {label_path}, got {len(lines)}.")
+        raise ValueError(
+            f"Expected {expected_lines} non-empty lines in {label_path}, got {len(lines)}."
+        )
     if require_class_header:
         if not infanface_label_has_class_header(label_path):
             raise ValueError(f"Invalid class_idx header in {label_path}.")
@@ -528,7 +543,9 @@ def validate_infanface_style_label_68(
     else:
         landmark_lines = lines
 
-    for line_number, raw_line in enumerate(landmark_lines, start=(2 if require_class_header else 1)):
+    for line_number, raw_line in enumerate(
+        landmark_lines, start=(2 if require_class_header else 1)
+    ):
         tokens = raw_line.split()
         if len(tokens) != 2:
             raise ValueError(f"Invalid coordinate row at {label_path}:{line_number}.")
@@ -545,7 +562,10 @@ def _index_images(images_dir: Path) -> tuple[dict[str, Path], list[str]]:
         warnings.append(f"Images directory does not exist: {images_dir}")
         return index, warnings
     for image_path in sorted(images_dir.rglob("*")):
-        if not image_path.is_file() or image_path.suffix.lower() not in SUPPORTED_IMAGE_SUFFIXES:
+        if (
+            not image_path.is_file()
+            or image_path.suffix.lower() not in SUPPORTED_IMAGE_SUFFIXES
+        ):
             continue
         if image_path.stem in index:
             warnings.append(
@@ -658,7 +678,9 @@ def draw_landmark_overlay_68(
     source_image.save(output_path, format="JPEG", quality=90)
 
 
-def _output_paths(config: PtsDatasetConfig, stem: str, source_image_path: Path | None) -> tuple[Path, Path, Path]:
+def _output_paths(
+    config: PtsDatasetConfig, stem: str, source_image_path: Path | None
+) -> tuple[Path, Path, Path]:
     """Return output image, label, and plot paths for one stem."""
     image_suffix = source_image_path.suffix if source_image_path is not None else ".jpg"
     if not config.options.preserve_image_extension:
@@ -707,7 +729,9 @@ def prepare_single_pts_dataset(config: PtsDatasetConfig) -> dict[str, object]:
 
     image_index, image_warnings = _index_images(images_dir)
     pts_index, pts_warnings = _index_pts_labels(labels_dir)
-    newborn_index, newborn_warnings = build_newborn_prediction_index(config.newborn_predictions_dir)
+    newborn_index, newborn_warnings = build_newborn_prediction_index(
+        config.newborn_predictions_dir
+    )
 
     report_rows: list[dict[str, Any]] = []
     missing_newborn_rows: list[dict[str, Any]] = []
@@ -722,17 +746,23 @@ def prepare_single_pts_dataset(config: PtsDatasetConfig) -> dict[str, object]:
         image_path = image_index.get(stem)
         pts_path = pts_index.get(stem)
         newborn_record = newborn_index.get(stem)
-        output_image_path, output_label_path, output_plot_path = _output_paths(config, stem, image_path)
+        output_image_path, output_label_path, output_plot_path = _output_paths(
+            config, stem, image_path
+        )
 
         row = _empty_report_row(config, stem)
         row.update(
             {
                 "source_image_path": str(image_path) if image_path else "",
                 "source_pts_path": str(pts_path) if pts_path else "",
-                "newborn_prediction_path": str(newborn_record["path"]) if newborn_record else "",
+                "newborn_prediction_path": str(newborn_record["path"])
+                if newborn_record
+                else "",
                 "output_image_path": str(output_image_path) if image_path else "",
                 "output_label_path": str(output_label_path) if pts_path else "",
-                "output_plot_path": str(output_plot_path) if image_path and pts_path else "",
+                "output_plot_path": str(output_plot_path)
+                if image_path and pts_path
+                else "",
                 "image_found": image_path is not None,
                 "pts_found": pts_path is not None,
                 "newborn_prediction_found": newborn_record is not None,
@@ -854,7 +884,9 @@ def prepare_single_pts_dataset(config: PtsDatasetConfig) -> dict[str, object]:
             )
         else:
             row["status"] = "missing_or_invalid_newborn_prediction"
-            row["warning_message"] = "Missing NewBORN prediction or no valid class_idx in [0, 4]."
+            row[
+                "warning_message"
+            ] = "Missing NewBORN prediction or no valid class_idx in [0, 4]."
             missing_newborn_rows.append(
                 {
                     "dataset_name": config.name,
@@ -874,7 +906,9 @@ def prepare_single_pts_dataset(config: PtsDatasetConfig) -> dict[str, object]:
         existing_outputs = [path for path in output_candidates if path.exists()]
         if existing_outputs and not config.options.overwrite_existing:
             row["status"] = "output_exists"
-            row["warning_message"] = "Output exists and overwrite_existing is false: " + "|".join(
+            row[
+                "warning_message"
+            ] = "Output exists and overwrite_existing is false: " + "|".join(
                 str(path) for path in existing_outputs
             )
             report_rows.append(row)
@@ -929,9 +963,14 @@ def prepare_single_pts_dataset(config: PtsDatasetConfig) -> dict[str, object]:
         row["warning_message"] = " | ".join(warnings)
         report_rows.append(row)
 
-    prediction_only_stems = sorted(set(newborn_index) - (set(image_index) | set(pts_index)))
+    prediction_only_stems = sorted(
+        set(newborn_index) - (set(image_index) | set(pts_index))
+    )
     for stem in prediction_only_stems:
-        if not any(row["stem"] == stem and row["status"] == "unmatched_newborn_prediction" for row in report_rows):
+        if not any(
+            row["stem"] == stem and row["status"] == "unmatched_newborn_prediction"
+            for row in report_rows
+        ):
             unmatched_rows.append(
                 {
                     "dataset_name": config.name,
@@ -945,11 +984,15 @@ def prepare_single_pts_dataset(config: PtsDatasetConfig) -> dict[str, object]:
 
     converted_count = sum(1 for row in report_rows if row["converted"] is True)
     plot_count = sum(1 for row in report_rows if row["plot_generated"] is True)
-    missing_labels_count = sum(1 for row in unmatched_rows if row["reason"] == "image_without_label")
+    missing_labels_count = sum(
+        1 for row in unmatched_rows if row["reason"] == "image_without_label"
+    )
     missing_images_count = len(missing_image_rows)
     invalid_newborn_count = len(missing_newborn_rows)
     malformed_pts_count = len(malformed_pts_rows)
-    valid_prediction_count = sum(1 for record in newborn_index.values() if record.get("valid"))
+    valid_prediction_count = sum(
+        1 for record in newborn_index.values() if record.get("valid")
+    )
 
     _write_csv(reports_dir / "conversion_report.csv", report_rows, REPORT_COLUMNS)
     _write_csv(
@@ -1011,13 +1054,17 @@ def prepare_single_pts_dataset(config: PtsDatasetConfig) -> dict[str, object]:
         "coordinate_convention": "pixel coordinates in original image space",
         "landmark_order": "original .pts row order; standard 68-point landmark order assumed",
         "preserve_image_extension": config.options.preserve_image_extension,
-        "output_image_extension": "source extension" if config.options.preserve_image_extension else ".jpg",
+        "output_image_extension": "source extension"
+        if config.options.preserve_image_extension
+        else ".jpg",
         "overwrite_existing": config.options.overwrite_existing,
         "allow_missing_class_idx": config.options.allow_missing_class_idx,
         "class_idx_distribution": dict(sorted(class_counts.items())),
         "warnings": image_warnings + pts_warnings + newborn_warnings,
     }
-    _write_dataset_summary_md(reports_dir / "conversion_summary.md", config, summary, class_counts)
+    _write_dataset_summary_md(
+        reports_dir / "conversion_summary.md", config, summary, class_counts
+    )
     logging.info(
         "Finished %s: %s converted, %s overlays, %s malformed .pts, %s missing/invalid NewBORN.",
         config.name,
@@ -1098,7 +1145,9 @@ def prepare_multiple_pts_datasets(config_path: Path) -> dict[str, object]:
     return {"output_root": str(output_root), "datasets": summaries}
 
 
-def _write_top_level_summary(output_root: Path, summaries: list[dict[str, object]]) -> None:
+def _write_top_level_summary(
+    output_root: Path, summaries: list[dict[str, object]]
+) -> None:
     """Write top-level CSV and Markdown summaries across all processed datasets."""
     fieldnames = [
         "dataset_name",
@@ -1123,10 +1172,14 @@ def _write_top_level_summary(output_root: Path, summaries: list[dict[str, object
         "overwrite_existing",
         "allow_missing_class_idx",
     ]
-    rows = [{field: summary.get(field, "") for field in fieldnames} for summary in summaries]
+    rows = [
+        {field: summary.get(field, "") for field in fieldnames} for summary in summaries
+    ]
     _write_csv(output_root / "preparation_summary.csv", rows, fieldnames)
 
-    total_converted = sum(int(summary["successfully_converted_labels"]) for summary in summaries)
+    total_converted = sum(
+        int(summary["successfully_converted_labels"]) for summary in summaries
+    )
     total_plots = sum(int(summary["overlays_generated"]) for summary in summaries)
     lines = [
         "# 68-Landmark `.pts` Dataset Preparation Summary",
@@ -1156,7 +1209,9 @@ def _write_top_level_summary(output_root: Path, summaries: list[dict[str, object
                 "",
             ]
         )
-    (output_root / "preparation_summary.md").write_text("\n".join(lines), encoding="utf-8")
+    (output_root / "preparation_summary.md").write_text(
+        "\n".join(lines), encoding="utf-8"
+    )
 
 
 def parse_args() -> argparse.Namespace:
@@ -1165,7 +1220,9 @@ def parse_args() -> argparse.Namespace:
         description="Prepare 68-landmark datasets from .pts labels and NewBORN class predictions.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--config", type=Path, required=True, help="YAML or JSON conversion config.")
+    parser.add_argument(
+        "--config", type=Path, required=True, help="YAML or JSON conversion config."
+    )
     parser.add_argument(
         "--log-path",
         type=Path,
@@ -1191,7 +1248,9 @@ def main() -> None:
             "[INFO] Converted labels: "
             f"{sum(int(summary['successfully_converted_labels']) for summary in summaries)}"
         )
-        print(f"[INFO] Top-level summary: {configs[0].output_root / 'preparation_summary.md'}")
+        print(
+            f"[INFO] Top-level summary: {configs[0].output_root / 'preparation_summary.md'}"
+        )
 
 
 if __name__ == "__main__":

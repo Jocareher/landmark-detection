@@ -1,9 +1,9 @@
 # Example multi-protocol benchmark configuration for InfAnFace.
 
 dataset:
-  name: "TIF"
+  name: "InfAnFace"
   dataset_type: "infanface"
-  output_dir: "/Users/jocareher/Documents/tif_benchmark_output"
+  output_dir: "/Users/jocareher/Documents/infanface_benchmark_output"
   # Replace with the number of source images/samples in TIF when per-image CSVs
   # contain only successfully evaluated detections and no `detected` column.
   total_images: 0
@@ -47,28 +47,28 @@ metrics:
 
 models:
   - name: "dlib"
-    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/tif/dlib/per_image_nme.csv"
-    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/tif/dlib/per_image_per_landmark_nme.csv"
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/dlib/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/dlib/per_image_per_landmark_nme.csv"
     landmark_format: "68"
   - name: "infanface"
-    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/tif/infanface/per_image_nme.csv"
-    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/tif/infanface/per_image_per_landmark_nme.csv"
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/infanface/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/infanface/per_image_per_landmark_nme.csv"
     landmark_format: "68"
   - name: "mediapipe"
-    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/tif/mediapipe/per_image_nme.csv"
-    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/tif/mediapipe/per_image_per_landmark_nme.csv"
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/mediapipe/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/mediapipe/per_image_per_landmark_nme.csv"
     landmark_format: "68"
   - name: "vggheads"
-    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/tif/vggheads/per_image_nme.csv"
-    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/tif/vggheads/per_image_per_landmark_nme.csv"
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/vggheads/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/vggheads/per_image_per_landmark_nme.csv"
     landmark_format: "68"
   - name: "dslpt"
-    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/tif/dslpt/per_image_nme.csv"
-    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/tif/dslpt/per_image_per_landmark_nme.csv"
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/dslpt/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/dslpt/per_image_per_landmark_nme.csv"
     landmark_format: "68"
   - name: "BabyLand-72"
-    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/tif/babyland/per_image_nme.csv"
-    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/tif/babyland/per_image_per_landmark_nme.csv"
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/babyland72/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/infanface/babyland72/per_image_per_landmark_nme.csv"
     landmark_format: "68"
 
 plotting:

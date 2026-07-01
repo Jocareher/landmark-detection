@@ -135,8 +135,7 @@ def main() -> None:
         )
     if summary.get("mean_nme_box_gt_valid") is not None:
         print(
-            "[INFO] Mean NME box GT-valid: "
-            f"{summary['mean_nme_box_gt_valid']:.4f}"
+            "[INFO] Mean NME box GT-valid: " f"{summary['mean_nme_box_gt_valid']:.4f}"
         )
     else:
         print("[INFO] Mean NME box GT-valid: n/a")

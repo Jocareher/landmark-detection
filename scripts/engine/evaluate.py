@@ -488,7 +488,9 @@ def save_metrics_summary_csv(
             ("coordinate_decoder", summary.get("coordinate_decoder")),
             (
                 "visibility_global_precision",
-                summary.get("visibility_metrics", {}).get("global", {}).get("precision"),
+                summary.get("visibility_metrics", {})
+                .get("global", {})
+                .get("precision"),
             ),
             (
                 "visibility_global_recall",
@@ -500,7 +502,9 @@ def save_metrics_summary_csv(
             ),
             (
                 "visibility_visible_precision",
-                summary.get("visibility_metrics", {}).get("visible", {}).get("precision"),
+                summary.get("visibility_metrics", {})
+                .get("visible", {})
+                .get("precision"),
             ),
             (
                 "visibility_visible_recall",
@@ -518,7 +522,9 @@ def save_metrics_summary_csv(
             ),
             (
                 "visibility_invisible_recall",
-                summary.get("visibility_metrics", {}).get("invisible", {}).get("recall"),
+                summary.get("visibility_metrics", {})
+                .get("invisible", {})
+                .get("recall"),
             ),
             (
                 "visibility_invisible_f1",
@@ -834,7 +840,9 @@ def save_per_image_nme_csv(
                     ),
                     (
                         format_metric_value(
-                            round_metric_value(float(row["mean_nme_box_point_to_line_gt_valid"]))
+                            round_metric_value(
+                                float(row["mean_nme_box_point_to_line_gt_valid"])
+                            )
                         )
                         if row.get("mean_nme_box_point_to_line_gt_valid") is not None
                         else None
@@ -864,7 +872,9 @@ def save_per_image_nme_csv(
                     ),
                     (
                         format_metric_value(
-                            round_metric_value(float(row["mean_nme_box_point_to_line_non_contour"]))
+                            round_metric_value(
+                                float(row["mean_nme_box_point_to_line_non_contour"])
+                            )
                         )
                         if row.get("mean_nme_box_point_to_line_non_contour") is not None
                         else None
@@ -1481,10 +1491,14 @@ def evaluate_checkpoint(
             np.median([row["mean_nme_box_gt_valid"] for row in per_image_nme])
         ),
         "mean_nme_box_point_to_line_gt_valid": float(
-            np.mean([row["mean_nme_box_point_to_line_gt_valid"] for row in per_image_nme])
+            np.mean(
+                [row["mean_nme_box_point_to_line_gt_valid"] for row in per_image_nme]
+            )
         ),
         "median_nme_box_point_to_line_gt_valid": float(
-            np.median([row["mean_nme_box_point_to_line_gt_valid"] for row in per_image_nme])
+            np.median(
+                [row["mean_nme_box_point_to_line_gt_valid"] for row in per_image_nme]
+            )
         ),
         "evaluation_modes": {
             "visible_intersection": "not applicable for synthetic final evaluation unless visibility masks are used",

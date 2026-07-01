@@ -342,7 +342,9 @@ def evaluate_natural_checkpoint(
                             ),
                             "evaluation_landmark_inclusion": "gt_valid",
                             "gt_visibility": int(target_visibility[landmark_index]),
-                            "pred_visibility": int(predicted_visibility[landmark_index]),
+                            "pred_visibility": int(
+                                predicted_visibility[landmark_index]
+                            ),
                             "landmark_count": int(len(target_visibility)),
                         }
                     )
@@ -474,9 +476,7 @@ def evaluate_natural_checkpoint(
                             ]
                         )
                     )
-                    if orientation_to_box_nme_point_to_line_gt_valid_values[
-                        orientation
-                    ]
+                    if orientation_to_box_nme_point_to_line_gt_valid_values[orientation]
                     else None
                 ),
                 "median_nme_box_point_to_line_gt_valid": (
@@ -487,9 +487,7 @@ def evaluate_natural_checkpoint(
                             ]
                         )
                     )
-                    if orientation_to_box_nme_point_to_line_gt_valid_values[
-                        orientation
-                    ]
+                    if orientation_to_box_nme_point_to_line_gt_valid_values[orientation]
                     else None
                 ),
                 "mean_nme_interocular": None,

@@ -23,7 +23,9 @@ def compute_masked_natural_per_landmark_nme(
     )
     if inclusion_mode == "visible_intersection":
         normalization_mask = (target_visibility == 1) & finite_target_mask
-        valid_mask = normalization_mask & (predicted_visibility == 1) & finite_prediction_mask
+        valid_mask = (
+            normalization_mask & (predicted_visibility == 1) & finite_prediction_mask
+        )
     elif inclusion_mode == "gt_valid":
         normalization_mask = finite_target_mask
         valid_mask = finite_target_mask & finite_prediction_mask

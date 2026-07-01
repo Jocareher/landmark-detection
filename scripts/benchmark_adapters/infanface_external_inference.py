@@ -132,7 +132,9 @@ def load_config(config_path: Path) -> ExternalInfAnFaceInferenceConfig:
 
     metadata_path = data.get("crop_metadata_path") or data.get("crop_metadata_dir")
     if metadata_path is None:
-        raise KeyError("Config must define data.crop_metadata_path or data.crop_metadata_dir.")
+        raise KeyError(
+            "Config must define data.crop_metadata_path or data.crop_metadata_dir."
+        )
 
     external_repo_root = Path(external["external_repo_root"])
     external_config_path = external.get("external_config_path")
@@ -240,7 +242,9 @@ def crop_external_hrnet(
     The adapter uses this only with ``rot=0`` for inference on detector crops.
     """
     if rot != 0:
-        raise ValueError("Rotated external HRNet crops are not supported in this adapter.")
+        raise ValueError(
+            "Rotated external HRNet crops are not supported in this adapter."
+        )
     center_new = center.clone()
     height, width = image.shape[:2]
     scale_factor = scale * 200.0 / output_size[0]
@@ -250,7 +254,9 @@ def crop_external_hrnet(
         new_height = int(math.floor(height / scale_factor))
         new_width = int(math.floor(width / scale_factor))
         if max(new_height, new_width) < 2:
-            return np.zeros((output_size[0], output_size[1], image.shape[2]), dtype=np.float32)
+            return np.zeros(
+                (output_size[0], output_size[1], image.shape[2]), dtype=np.float32
+            )
         image = np.asarray(
             Image.fromarray(image.astype(np.uint8)).resize(
                 (new_width, new_height),
@@ -263,12 +269,19 @@ def crop_external_hrnet(
         scale = scale / scale_factor
 
     upper_left = np.asarray(
-        transform_pixel_external_hrnet([0, 0], center_new, scale, output_size, invert=True)
+        transform_pixel_external_hrnet(
+            [0, 0], center_new, scale, output_size, invert=True
+        )
     )
     bottom_right = np.asarray(
-        transform_pixel_external_hrnet(output_size, center_new, scale, output_size, invert=True)
+        transform_pixel_external_hrnet(
+            output_size, center_new, scale, output_size, invert=True
+        )
     )
-    new_shape = [int(bottom_right[1] - upper_left[1]), int(bottom_right[0] - upper_left[0])]
+    new_shape = [
+        int(bottom_right[1] - upper_left[1]),
+        int(bottom_right[0] - upper_left[0]),
+    ]
     if image.ndim > 2:
         new_shape.append(image.shape[2])
     new_image = np.zeros(new_shape, dtype=np.float32)
@@ -378,7 +391,11 @@ def load_external_infanface_model(
     model = external_models.get_face_alignment_net(external_config)
     checkpoint_path = resolve_path(config.checkpoint_path, config.external_repo_root)
     checkpoint = torch.load(checkpoint_path, map_location="cpu")
-    state_dict = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+    state_dict = (
+        checkpoint.get("state_dict", checkpoint)
+        if isinstance(checkpoint, dict)
+        else checkpoint
+    )
     cleaned_state_dict = {
         key.removeprefix("module."): value for key, value in state_dict.items()
     }
@@ -455,7 +472,9 @@ def parse_transform_matrix(metadata: dict[str, Any]) -> np.ndarray:
         raw = json.loads(raw)
     matrix = np.asarray(raw, dtype=np.float32)
     if matrix.shape != (3, 3):
-        raise ValueError(f"Expected transform_crop_to_orig shape (3, 3), got {matrix.shape}.")
+        raise ValueError(
+            f"Expected transform_crop_to_orig shape (3, 3), got {matrix.shape}."
+        )
     return matrix
 
 
@@ -471,7 +490,9 @@ def resolve_original_image_path(
         or metadata.get("image_path_original")
     )
     if not raw_path:
-        raise KeyError("Missing source_image_path/original_image_path in crop metadata.")
+        raise KeyError(
+            "Missing source_image_path/original_image_path in crop metadata."
+        )
     path = Path(str(raw_path))
     candidates = []
     if path.is_absolute():
@@ -484,7 +505,9 @@ def resolve_original_image_path(
     for candidate in candidates:
         if candidate.exists():
             return candidate.resolve()
-    raise FileNotFoundError(f"Could not resolve original image path from metadata: {raw_path}")
+    raise FileNotFoundError(
+        f"Could not resolve original image path from metadata: {raw_path}"
+    )
 
 
 def index_crop_samples(config: ExternalInfAnFaceInferenceConfig) -> list[CropSample]:
@@ -500,7 +523,9 @@ def index_crop_samples(config: ExternalInfAnFaceInferenceConfig) -> list[CropSam
         metadata = metadata_index.get(crop_path.stem)
         if metadata is None:
             continue
-        metadata_path = Path(str(metadata.get("_metadata_path", config.crop_metadata_path)))
+        metadata_path = Path(
+            str(metadata.get("_metadata_path", config.crop_metadata_path))
+        )
         source_image_path = resolve_original_image_path(
             metadata=metadata,
             original_images_dir=config.original_images_dir,
@@ -519,7 +544,9 @@ def index_crop_samples(config: ExternalInfAnFaceInferenceConfig) -> list[CropSam
             )
         )
     if not samples:
-        raise RuntimeError(f"No crop images with matching metadata found in {config.crop_images_dir}.")
+        raise RuntimeError(
+            f"No crop images with matching metadata found in {config.crop_images_dir}."
+        )
     return samples
 
 
@@ -538,7 +565,9 @@ def preprocess_external_model_input(
     scale = torch.tensor(scale_value, dtype=torch.float32)
 
     input_size = list(external_config.MODEL.IMAGE_SIZE)
-    cropped = external_crop(image_np, center.clone(), float(scale.item()), input_size, rot=0)
+    cropped = external_crop(
+        image_np, center.clone(), float(scale.item()), input_size, rot=0
+    )
     mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
     std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
     tensor = ((cropped.astype(np.float32) / 255.0 - mean) / std).transpose(2, 0, 1)
@@ -629,7 +658,11 @@ def save_fallback_landmark_overlay_image(
     for landmark_index, (x_coord, y_coord) in enumerate(predicted_landmarks):
         if not np.isfinite(x_coord) or not np.isfinite(y_coord):
             continue
-        color = (255, 0, 0) if int(predicted_visibility[landmark_index]) > 0 else (0, 0, 255)
+        color = (
+            (255, 0, 0)
+            if int(predicted_visibility[landmark_index]) > 0
+            else (0, 0, 255)
+        )
         draw.ellipse(
             (
                 float(x_coord) - point_radius,
@@ -770,7 +803,9 @@ def run_infanface_external_inference(
                 "crop_image_path": str(sample.crop_image_path),
                 "original_image_path": str(sample.source_image_path),
                 "output_label_path": str(label_path),
-                "output_overlay_path": str(overlay_path) if config.save_overlays else "",
+                "output_overlay_path": str(overlay_path)
+                if config.save_overlays
+                else "",
                 "inference_success": False,
                 "failure_reason": "",
                 "num_landmarks_predicted": 0,
@@ -780,7 +815,12 @@ def run_infanface_external_inference(
                 "external_repo_root": str(config.external_repo_root),
             }
             try:
-                tensor, center, scale, _transformed_size = preprocess_external_model_input(
+                (
+                    tensor,
+                    center,
+                    scale,
+                    _transformed_size,
+                ) = preprocess_external_model_input(
                     crop_image_path=sample.crop_image_path,
                     external_config=external_config,
                     external_crop=external_crop,
@@ -877,9 +917,15 @@ def parse_args() -> argparse.Namespace:
         description="Run the external InfAnFace infant landmark model on detector crops.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-    parser.add_argument("--config", type=Path, required=True, help="YAML/JSON config path.")
-    parser.add_argument("--device", type=str, default=None, help="Override runtime.device.")
-    parser.add_argument("--output-dir", type=Path, default=None, help="Override output.output_dir.")
+    parser.add_argument(
+        "--config", type=Path, required=True, help="YAML/JSON config path."
+    )
+    parser.add_argument(
+        "--device", type=str, default=None, help="Override runtime.device."
+    )
+    parser.add_argument(
+        "--output-dir", type=Path, default=None, help="Override output.output_dir."
+    )
     return parser.parse_args()
 
 

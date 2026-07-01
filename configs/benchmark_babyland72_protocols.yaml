@@ -5,11 +5,11 @@ dataset:
   dataset_type: "babyland72"
   output_dir: "/Users/jocareher/Documents/babyland72_benchmark_output"
   total_images: 622
-  primary_model: "BabyLand-72 Exp10"
+  primary_model: "BabyLand-72"
   reference_models: ["infanface", "vggheads", "dslpt", "mediapipe", "dlib"]
-  model_order: ["BabyLand-72 Exp10", "infanface", "vggheads", "dslpt", "mediapipe", "dlib"]
+  model_order: ["BabyLand-72", "infanface", "vggheads", "dslpt", "mediapipe", "dlib"]
   model_display_names:
-    "BabyLand-72 Exp11": "Exp10"
+    "BabyLand-72": "BabyLand-72"
     "infanface": "InfAnFace"
     "vggheads": "VGGHeads"
     "dslpt": "DSLPT"
@@ -69,10 +69,10 @@ models:
     per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dslpt/per_image_nme.csv"
     per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dslpt/per_image_per_landmark_nme.csv"
     landmark_format: "68"
-  - name: "BabyLand-72 Exp10"
+  - name: "BabyLand-72"
     predicts_visibility: true
-    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/exp11/per_image_nme.csv"
-    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/exp11/per_image_per_landmark_nme.csv"
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/babyland72/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/babyland72/per_image_per_landmark_nme.csv"
     landmark_format: "72"
 
 plotting:
