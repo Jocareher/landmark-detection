@@ -86,6 +86,9 @@ WASSERSTEIN_EPSILON = 1e-8
 WASSERSTEIN_VALIDATE_NORMALIZATION = False
 PCA_PRIOR_PATH = None
 LAMBDA_PCA_PROJECTION = 0.0
+APPLY_PCA_INFERENCE = False
+PCA_INFERENCE_NUM_COMPONENTS = None
+PCA_INFERENCE_ALPHA = 1.0
 PATIENCE = 15
 USE_AMP = True
 RUN_SMOKE_TEST = False
@@ -208,6 +211,9 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "wasserstein_validate_normalization": WASSERSTEIN_VALIDATE_NORMALIZATION,
     "pca_prior_path": PCA_PRIOR_PATH,
     "lambda_pca_projection": LAMBDA_PCA_PROJECTION,
+    "apply_pca_inference": APPLY_PCA_INFERENCE,
+    "pca_inference_num_components": PCA_INFERENCE_NUM_COMPONENTS,
+    "pca_inference_alpha": PCA_INFERENCE_ALPHA,
     "patience": PATIENCE,
     "use_amp": USE_AMP,
     "run_smoke_test": RUN_SMOKE_TEST,

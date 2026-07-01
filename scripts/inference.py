@@ -22,6 +22,7 @@ from scripts.config import (
 )
 from scripts.engine.inference import export_inference_outputs
 from scripts.engine.metrics import decoder_from_landmark_loss
+from scripts.engine.pca_shape_prior import load_pca_shape_prior
 from scripts.models import HRNetLandmarkVisibility
 from scripts.utils import get_default_device, set_seed
 
@@ -272,6 +273,30 @@ def parse_args() -> argparse.Namespace:
         help="Spatial softmax temperature used by barycenter decoding.",
     )
     parser.add_argument(
+        "--pca-prior-path",
+        type=Path,
+        default=defaults.pca_prior_path,
+        help="Path to the precomputed train-set PCA shape prior .pt file.",
+    )
+    parser.add_argument(
+        "--apply-pca-inference",
+        action="store_true",
+        default=defaults.apply_pca_inference,
+        help="Project decoded landmarks through the PCA shape prior before saving.",
+    )
+    parser.add_argument(
+        "--pca-inference-num-components",
+        type=int,
+        default=defaults.pca_inference_num_components,
+        help="Number of PCA prior components used for inference correction.",
+    )
+    parser.add_argument(
+        "--pca-inference-alpha",
+        type=float,
+        default=defaults.pca_inference_alpha,
+        help="Soft PCA correction strength in [0, 1].",
+    )
+    parser.add_argument(
         "--disable-overlays",
         action="store_true",
         default=not defaults.save_inference_overlays,
@@ -321,6 +346,10 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.landmark_loss = args.landmark_loss
     config.coordinate_decoder = decoder_from_landmark_loss(args.landmark_loss)
     config.wasserstein_softmax_temperature = args.wasserstein_softmax_temperature
+    config.pca_prior_path = args.pca_prior_path
+    config.apply_pca_inference = args.apply_pca_inference
+    config.pca_inference_num_components = args.pca_inference_num_components
+    config.pca_inference_alpha = args.pca_inference_alpha
     config.save_inference_overlays = not args.disable_overlays
     config.show_landmark_indices = args.show_indices
     config.project_to_original = args.project_to_original
@@ -396,6 +425,12 @@ def main() -> None:
         f"landmark_loss={config.landmark_loss}, "
         f"coordinate_decoder={config.coordinate_decoder}"
     )
+    pca_shape_prior = None
+    if config.apply_pca_inference:
+        if config.pca_prior_path is None:
+            raise ValueError("--apply-pca-inference requires --pca-prior-path.")
+        pca_shape_prior = load_pca_shape_prior(config.pca_prior_path, device=device)
+        print(f"[INFO] PCA prior: {config.pca_prior_path}")
 
     dataloader = build_inference_dataloader(args.input_dir, config)
 
@@ -423,6 +458,10 @@ def main() -> None:
         landmark_loss=config.landmark_loss,
         coordinate_decoder=config.coordinate_decoder,
         wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
+        apply_pca_inference=config.apply_pca_inference,
+        pca_shape_prior=pca_shape_prior,
+        pca_inference_num_components=config.pca_inference_num_components,
+        pca_inference_alpha=config.pca_inference_alpha,
     )
 
     print("[INFO] Inference finished.")

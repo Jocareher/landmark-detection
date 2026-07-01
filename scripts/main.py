@@ -146,6 +146,24 @@ def parse_args() -> argparse.Namespace:
         help="Weight assigned to the PCA projection loss on final landmarks.",
     )
     parser.add_argument(
+        "--apply-pca-inference",
+        action="store_true",
+        default=defaults.apply_pca_inference,
+        help="Project decoded landmarks through the PCA shape prior during evaluation/inference.",
+    )
+    parser.add_argument(
+        "--pca-inference-num-components",
+        type=int,
+        default=defaults.pca_inference_num_components,
+        help="Number of PCA prior components used for inference correction.",
+    )
+    parser.add_argument(
+        "--pca-inference-alpha",
+        type=float,
+        default=defaults.pca_inference_alpha,
+        help="Soft PCA inference correction strength in [0, 1].",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=defaults.seed,
@@ -419,6 +437,9 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.wasserstein_epsilon = args.wasserstein_epsilon
     config.pca_prior_path = args.pca_prior_path
     config.lambda_pca_projection = args.lambda_pca_projection
+    config.apply_pca_inference = args.apply_pca_inference
+    config.pca_inference_num_components = args.pca_inference_num_components
+    config.pca_inference_alpha = args.pca_inference_alpha
     config.seed = args.seed
     config.device = args.device
     config.transfer_mode = args.transfer_mode
@@ -661,6 +682,9 @@ def main() -> None:
             f"coordinate_decoder={config.coordinate_decoder} "
             f"lambda_pca_projection={config.lambda_pca_projection} "
             f"pca_prior_path={config.pca_prior_path} "
+            f"apply_pca_inference={config.apply_pca_inference} "
+            f"pca_inference_num_components={config.pca_inference_num_components} "
+            f"pca_inference_alpha={config.pca_inference_alpha} "
         )
         if config.landmark_loss == "adaptive_wing":
             print(

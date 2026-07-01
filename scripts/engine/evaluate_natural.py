@@ -21,6 +21,7 @@ from .evaluate import (
     save_per_landmark_nme_csv,
 )
 from .evaluation_modes import compute_masked_natural_per_landmark_nme
+from .inference import apply_optional_pca_inference_correction
 from .metrics import decode_heatmaps_to_image_coords
 from .postprocessing import (
     apply_homogeneous_transform,
@@ -76,6 +77,10 @@ def evaluate_natural_checkpoint(
     landmark_loss: str | None = None,
     coordinate_decoder: str = "argmax_subpixel",
     wasserstein_softmax_temperature: float = 1.0,
+    apply_pca_inference: bool = False,
+    pca_shape_prior: dict[str, Any] | None = None,
+    pca_inference_num_components: int | None = None,
+    pca_inference_alpha: float = 1.0,
 ) -> dict[str, Any]:
     """Evaluate a checkpoint on detector-export crops and original-image GT."""
     output_dir = Path(output_dir)
@@ -128,6 +133,16 @@ def evaluate_natural_checkpoint(
         orientation: [] for orientation in orientation_names
     }
     orientation_sample_counts = {orientation: 0 for orientation in orientation_names}
+    pca_displacement_sum = 0.0
+    pca_displacement_batches = 0
+    pca_max_displacement = 0.0
+
+    if apply_pca_inference:
+        print(
+            "[INFO] PCA inference correction enabled: "
+            f"num_components={pca_inference_num_components or 'all'}, "
+            f"alpha={float(pca_inference_alpha):.3f}"
+        )
 
     with torch.inference_mode():
         for batch in tqdm(dataloader, desc="Evaluating", dynamic_ncols=True):
@@ -141,7 +156,22 @@ def evaluate_natural_checkpoint(
                 use_subpixel=True,
                 decoder=coordinate_decoder,
                 softmax_temperature=wasserstein_softmax_temperature,
-            ).cpu()
+            )
+            predicted_landmarks_batch, pca_stats = apply_optional_pca_inference_correction(
+                predicted_landmarks=predicted_landmarks_batch,
+                apply_pca_inference=apply_pca_inference,
+                pca_shape_prior=pca_shape_prior,
+                pca_inference_num_components=pca_inference_num_components,
+                pca_inference_alpha=pca_inference_alpha,
+            )
+            if apply_pca_inference:
+                pca_displacement_sum += pca_stats["mean_displacement"]
+                pca_displacement_batches += 1
+                pca_max_displacement = max(
+                    pca_max_displacement,
+                    pca_stats["max_displacement"],
+                )
+            predicted_landmarks_batch = predicted_landmarks_batch.cpu()
 
             predicted_visibility_logits = outputs["visibility_logits"].cpu()
             predicted_visibility_scores = torch.sigmoid(predicted_visibility_logits)
@@ -537,6 +567,17 @@ def evaluate_natural_checkpoint(
     )
     confusion_matrix_normalized = normalize_confusion_matrix(confusion_matrix_raw)
     visibility_metrics = compute_visibility_classification_metrics(confusion_matrix_raw)
+    pca_mean_displacement = (
+        pca_displacement_sum / pca_displacement_batches
+        if pca_displacement_batches
+        else 0.0
+    )
+    if apply_pca_inference:
+        print(
+            "[INFO] PCA inference correction displacement: "
+            f"mean={pca_mean_displacement:.4f}px, "
+            f"max={pca_max_displacement:.4f}px"
+        )
 
     plot_confusion_matrix(
         matrix=confusion_matrix_raw,
@@ -619,6 +660,11 @@ def evaluate_natural_checkpoint(
         "visibility_threshold": float(visibility_threshold),
         "landmark_loss": landmark_loss,
         "coordinate_decoder": coordinate_decoder,
+        "apply_pca_inference": bool(apply_pca_inference),
+        "pca_inference_num_components": pca_inference_num_components,
+        "pca_inference_alpha": float(pca_inference_alpha),
+        "pca_mean_displacement": pca_mean_displacement,
+        "pca_max_displacement": pca_max_displacement,
         "confusion_matrix_raw": confusion_matrix_raw.tolist(),
         "confusion_matrix_normalized": confusion_matrix_normalized.tolist(),
         "predictions_dir": str(predictions_dir)

@@ -20,6 +20,7 @@ from scripts.dataset import build_dataloaders, build_natural_evaluation_dataload
 from scripts.engine.evaluate import evaluate_checkpoint
 from scripts.engine.evaluate_natural import evaluate_natural_checkpoint
 from scripts.engine.metrics import decoder_from_landmark_loss
+from scripts.engine.pca_shape_prior import load_pca_shape_prior
 from scripts.models import HRNetLandmarkVisibility
 from scripts.utils import get_default_device, set_seed
 
@@ -123,6 +124,30 @@ def parse_args() -> argparse.Namespace:
         help="Spatial softmax temperature used by barycenter decoding.",
     )
     parser.add_argument(
+        "--pca-prior-path",
+        type=Path,
+        default=defaults.pca_prior_path,
+        help="Path to the precomputed train-set PCA shape prior .pt file.",
+    )
+    parser.add_argument(
+        "--apply-pca-inference",
+        action="store_true",
+        default=defaults.apply_pca_inference,
+        help="Project decoded landmarks through the PCA shape prior before evaluation.",
+    )
+    parser.add_argument(
+        "--pca-inference-num-components",
+        type=int,
+        default=defaults.pca_inference_num_components,
+        help="Number of PCA prior components used for inference correction.",
+    )
+    parser.add_argument(
+        "--pca-inference-alpha",
+        type=float,
+        default=defaults.pca_inference_alpha,
+        help="Soft PCA correction strength in [0, 1].",
+    )
+    parser.add_argument(
         "--use-landmark-names",
         action="store_true",
         default=defaults.use_landmark_names_in_boxplot,
@@ -172,6 +197,10 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.landmark_loss = args.landmark_loss
     config.coordinate_decoder = decoder_from_landmark_loss(args.landmark_loss)
     config.wasserstein_softmax_temperature = args.wasserstein_softmax_temperature
+    config.pca_prior_path = args.pca_prior_path
+    config.apply_pca_inference = args.apply_pca_inference
+    config.pca_inference_num_components = args.pca_inference_num_components
+    config.pca_inference_alpha = args.pca_inference_alpha
     config.use_landmark_names_in_boxplot = args.use_landmark_names
     config.save_natural_crop_overlays = args.save_crop_overlays
 
@@ -275,6 +304,13 @@ def main() -> None:
     if args.save_config:
         maybe_save_config(config, output_dir)
 
+    pca_shape_prior = None
+    if config.apply_pca_inference:
+        if config.pca_prior_path is None:
+            raise ValueError("--apply-pca-inference requires --pca-prior-path.")
+        pca_shape_prior = load_pca_shape_prior(config.pca_prior_path, device=device)
+        print(f"[INFO] PCA prior: {config.pca_prior_path}")
+
     if args.eval_mode == "synthetic":
         dataloaders = build_dataloaders(config)
         summary = evaluate_checkpoint(
@@ -293,6 +329,10 @@ def main() -> None:
             landmark_loss=config.landmark_loss,
             coordinate_decoder=config.coordinate_decoder,
             wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
+            apply_pca_inference=config.apply_pca_inference,
+            pca_shape_prior=pca_shape_prior,
+            pca_inference_num_components=config.pca_inference_num_components,
+            pca_inference_alpha=config.pca_inference_alpha,
         )
     else:
         dataloader = build_natural_evaluation_dataloader(
@@ -318,6 +358,10 @@ def main() -> None:
             landmark_loss=config.landmark_loss,
             coordinate_decoder=config.coordinate_decoder,
             wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
+            apply_pca_inference=config.apply_pca_inference,
+            pca_shape_prior=pca_shape_prior,
+            pca_inference_num_components=config.pca_inference_num_components,
+            pca_inference_alpha=config.pca_inference_alpha,
         )
 
     print("[INFO] Evaluation finished.")

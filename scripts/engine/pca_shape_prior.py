@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -90,6 +91,20 @@ def apply_similarity_transform_torch(
     return (scale * (coords @ rotation)) + translation
 
 
+def invert_similarity_transform_torch(
+    coords: torch.Tensor,
+    rotation: torch.Tensor,
+    scale: torch.Tensor,
+    translation: torch.Tensor,
+    eps: float = PCA_ALIGNMENT_EPS,
+) -> torch.Tensor:
+    """Invert a row-vector similarity transform for one `(N, 2)` landmark shape."""
+    coords = coords.to(dtype=torch.float32)
+    if float(torch.abs(scale).item()) <= eps:
+        raise ValueError("Cannot invert a similarity transform with near-zero scale.")
+    return ((coords - translation) / scale.clamp_min(eps)) @ rotation.T
+
+
 def align_shape_to_reference_torch(
     coords: torch.Tensor,
     reference_shape: torch.Tensor,
@@ -104,6 +119,165 @@ def align_shape_to_reference_torch(
         eps=eps,
     )
     return apply_similarity_transform_torch(coords, rotation, scale, translation)
+
+
+def _project_shape_vector_to_pca_subspace(
+    shape_vector: torch.Tensor,
+    global_prior: dict[str, Any],
+    num_components: int | None = None,
+) -> torch.Tensor:
+    """Project one aligned shape vector onto the stored PCA subspace."""
+    if shape_vector.ndim != 2 or shape_vector.shape[0] != 1:
+        raise ValueError(
+            f"Expected shape_vector with shape (1, 2N), got {tuple(shape_vector.shape)}."
+        )
+
+    mean_shape = global_prior["mean_shape"].to(
+        device=shape_vector.device,
+        dtype=shape_vector.dtype,
+    )
+    components = global_prior["components"].to(
+        device=shape_vector.device,
+        dtype=shape_vector.dtype,
+    )
+    selected_components = _validate_pca_component_count(
+        components=components,
+        requested_num_components=num_components,
+    )
+    components = components[:selected_components]
+    centered = shape_vector - mean_shape
+    coefficients = centered @ components.T
+    return mean_shape + coefficients @ components
+
+
+def _validate_pca_component_count(
+    components: torch.Tensor,
+    requested_num_components: int | None,
+) -> int:
+    """Validate and return the number of PCA components used for projection."""
+    available_components = int(components.shape[0])
+    if available_components < 1:
+        raise ValueError("PCA prior does not contain any components.")
+    if requested_num_components is None:
+        return available_components
+    selected_components = int(requested_num_components)
+    if selected_components < 1:
+        raise ValueError("pca_inference_num_components must be at least 1.")
+    if selected_components > available_components:
+        raise ValueError(
+            "pca_inference_num_components cannot exceed the number of components "
+            f"stored in the prior ({available_components})."
+        )
+    return selected_components
+
+
+def project_landmarks_with_pca(
+    predicted_landmarks: torch.Tensor,
+    pca_prior: dict[str, Any],
+    num_components: int | None = None,
+    alpha: float = 1.0,
+) -> torch.Tensor:
+    """
+    Project predicted landmark shapes through the training PCA shape prior.
+
+    Each sample is aligned to the prior reference shape with the same no-reflection
+    Procrustes transform used by `compute_pca_projection_loss`, projected onto the
+    stored PCA subspace, reconstructed, and mapped back to the original image
+    coordinate system. `alpha` controls soft correction: `0.0` returns the original
+    predictions and `1.0` returns the full PCA reconstruction.
+    """
+    if predicted_landmarks.ndim != 3 or predicted_landmarks.shape[-1] != 2:
+        raise ValueError(
+            "Expected predicted_landmarks with shape (B, N, 2), "
+            f"got {tuple(predicted_landmarks.shape)}."
+        )
+    alpha_value = float(alpha)
+    if not 0.0 <= alpha_value <= 1.0:
+        raise ValueError("pca_inference_alpha must be in the interval [0, 1].")
+    if alpha_value == 0.0:
+        return predicted_landmarks.clone()
+
+    alignment_config = pca_prior["alignment"]
+    allow_reflection = bool(alignment_config.get("allow_reflection", False))
+    eps = float(alignment_config.get("eps", PCA_ALIGNMENT_EPS))
+    global_prior = pca_prior["global_prior"]
+    expected_landmarks = int(global_prior["num_landmarks"])
+    if predicted_landmarks.shape[1] != expected_landmarks:
+        raise ValueError(
+            f"Global PCA prior expects {expected_landmarks} landmarks, "
+            f"got {predicted_landmarks.shape[1]}."
+        )
+
+    components = global_prior["components"].to(
+        device=predicted_landmarks.device,
+        dtype=torch.float32,
+    )
+    _validate_pca_component_count(
+        components=components,
+        requested_num_components=num_components,
+    )
+
+    original_dtype = predicted_landmarks.dtype
+    working_landmarks = predicted_landmarks.to(dtype=torch.float32)
+    corrected = working_landmarks.clone()
+    reference_shape = global_prior["reference_shape"].to(
+        device=working_landmarks.device,
+        dtype=working_landmarks.dtype,
+    )
+
+    for sample_index in range(working_landmarks.shape[0]):
+        current_shape = working_landmarks[sample_index]
+        if not torch.isfinite(current_shape).all():
+            warnings.warn(
+                f"PCA inference correction skipped sample {sample_index}: "
+                "predicted landmarks contain NaN or Inf values.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            continue
+        try:
+            rotation, scale, translation = estimate_similarity_transform_torch(
+                source=current_shape,
+                target=reference_shape,
+                allow_reflection=allow_reflection,
+                eps=eps,
+            )
+            aligned_shape = apply_similarity_transform_torch(
+                current_shape,
+                rotation,
+                scale,
+                translation,
+            )
+            shape_vector = aligned_shape.reshape(1, -1)
+            reconstructed_vector = _project_shape_vector_to_pca_subspace(
+                shape_vector=shape_vector,
+                global_prior=global_prior,
+                num_components=num_components,
+            )
+            reconstructed_aligned = reconstructed_vector.reshape_as(current_shape)
+            reconstructed_original = invert_similarity_transform_torch(
+                reconstructed_aligned,
+                rotation,
+                scale,
+                translation,
+                eps=eps,
+            )
+            final_shape = (
+                (1.0 - alpha_value) * current_shape
+                + alpha_value * reconstructed_original
+            )
+            if not torch.isfinite(final_shape).all():
+                raise ValueError("PCA reconstruction produced NaN or Inf values.")
+            corrected[sample_index] = final_shape
+        except Exception as exc:
+            warnings.warn(
+                f"PCA inference correction skipped sample {sample_index}: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            corrected[sample_index] = current_shape
+
+    return corrected.to(dtype=original_dtype)
 
 
 def generalized_procrustes_analysis_torch(
@@ -398,17 +572,11 @@ def compute_pca_projection_loss(
             eps=eps,
         )
         shape_vector = aligned_shape.reshape(1, -1)
-        mean_shape = global_prior["mean_shape"].to(
-            device=shape_vector.device,
-            dtype=shape_vector.dtype,
+        reconstructed = _project_shape_vector_to_pca_subspace(
+            shape_vector=shape_vector,
+            global_prior=global_prior,
+            num_components=None,
         )
-        components = global_prior["components"].to(
-            device=shape_vector.device,
-            dtype=shape_vector.dtype,
-        )
-        centered = shape_vector - mean_shape
-        coefficients = centered @ components.T
-        reconstructed = mean_shape + coefficients @ components
         sample_losses.append(F.mse_loss(shape_vector, reconstructed))
 
     return torch.stack(sample_losses).mean()

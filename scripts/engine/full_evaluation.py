@@ -12,6 +12,7 @@ from .benchmark import benchmark_infantface_prediction_directory
 from .evaluate import evaluate_checkpoint
 from .evaluate_natural import evaluate_natural_checkpoint
 from .inference import export_inference_outputs
+from .pca_shape_prior import load_pca_shape_prior
 
 
 def _optional_path(value: str | Path | None) -> Path | None:
@@ -153,6 +154,7 @@ def evaluate_synbaby(
     device: torch.device,
     config: ExperimentConfig,
     output_dir: str | Path,
+    pca_shape_prior: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run the synthetic SynBaby evaluation."""
     output_dir = Path(output_dir)
@@ -182,6 +184,10 @@ def evaluate_synbaby(
         landmark_loss=config.landmark_loss,
         coordinate_decoder=config.coordinate_decoder,
         wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
+        apply_pca_inference=config.apply_pca_inference,
+        pca_shape_prior=pca_shape_prior,
+        pca_inference_num_components=config.pca_inference_num_components,
+        pca_inference_alpha=config.pca_inference_alpha,
     )
     print("[INFO] SynBaby evaluation finished.")
     print_evaluation_summary("SynBaby", summary, output_dir)
@@ -193,6 +199,7 @@ def evaluate_babyland(
     device: torch.device,
     config: ExperimentConfig,
     output_dir: str | Path,
+    pca_shape_prior: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run BabyLand crop inference, original-image reprojection, and evaluation."""
     crop_root = _require_path(config, "babyland_crop_root", "BabyLand")
@@ -240,6 +247,10 @@ def evaluate_babyland(
         landmark_loss=config.landmark_loss,
         coordinate_decoder=config.coordinate_decoder,
         wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
+        apply_pca_inference=config.apply_pca_inference,
+        pca_shape_prior=pca_shape_prior,
+        pca_inference_num_components=config.pca_inference_num_components,
+        pca_inference_alpha=config.pca_inference_alpha,
     )
     print("[INFO] BabyLand metrics computed.")
     print("[INFO] BabyLand evaluation finished.")
@@ -252,6 +263,7 @@ def evaluate_infanface(
     device: torch.device,
     config: ExperimentConfig,
     output_dir: str | Path,
+    pca_shape_prior: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Run InfAnFace crop inference, reprojection, and benchmark evaluation."""
     crop_root = _require_path(config, "infanface_crop_root", "InfAnFace")
@@ -300,6 +312,10 @@ def evaluate_infanface(
         landmark_loss=config.landmark_loss,
         coordinate_decoder=config.coordinate_decoder,
         wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
+        apply_pca_inference=config.apply_pca_inference,
+        pca_shape_prior=pca_shape_prior,
+        pca_inference_num_components=config.pca_inference_num_components,
+        pca_inference_alpha=config.pca_inference_alpha,
     )
     inference_summary_for_return = {
         key: value for key, value in inference_summary.items() if key != "predictions"
@@ -343,6 +359,12 @@ def run_full_evaluation(
         f"coordinate_decoder={config.coordinate_decoder}"
     )
     summaries: dict[str, Any] = {}
+    pca_shape_prior = None
+    if getattr(config, "apply_pca_inference", False):
+        if getattr(config, "pca_prior_path", None) is None:
+            raise ValueError("apply_pca_inference=True requires config.pca_prior_path.")
+        pca_shape_prior = load_pca_shape_prior(config.pca_prior_path, device=device)
+        print(f"[INFO] PCA inference prior: {config.pca_prior_path}")
     output_dirs = {
         "synbaby": evaluation_root / "synbaby",
         "babyland": evaluation_root / "babyland",
@@ -360,6 +382,7 @@ def run_full_evaluation(
             device=device,
             config=config,
             output_dir=output_dirs["synbaby"],
+            pca_shape_prior=pca_shape_prior,
         )
     else:
         print("[INFO] SynBaby evaluation disabled by config.")
@@ -370,6 +393,7 @@ def run_full_evaluation(
             device=device,
             config=config,
             output_dir=output_dirs["babyland"],
+            pca_shape_prior=pca_shape_prior,
         )
     else:
         print("[INFO] BabyLand evaluation disabled by config.")
@@ -380,6 +404,7 @@ def run_full_evaluation(
             device=device,
             config=config,
             output_dir=output_dirs["infanface"],
+            pca_shape_prior=pca_shape_prior,
         )
     else:
         print("[INFO] InfAnFace evaluation disabled by config.")
