@@ -43,16 +43,8 @@ def apply_homogeneous_transform(
     transform_matrix: np.ndarray | torch.Tensor,
 ) -> np.ndarray:
     """Apply a 3x3 homogeneous transform to a set of `(x, y)` landmark coordinates."""
-    landmarks_np = (
-        landmarks.detach().cpu().numpy()
-        if isinstance(landmarks, torch.Tensor)
-        else np.asarray(landmarks, dtype=np.float32)
-    )
-    transform_np = (
-        transform_matrix.detach().cpu().numpy()
-        if isinstance(transform_matrix, torch.Tensor)
-        else np.asarray(transform_matrix, dtype=np.float32)
-    )
+    landmarks_np = _as_numpy_array(landmarks, dtype=np.float32)
+    transform_np = _as_numpy_array(transform_matrix, dtype=np.float32)
 
     if landmarks_np.ndim != 2 or landmarks_np.shape[1] != 2:
         raise ValueError(
@@ -74,6 +66,20 @@ def apply_homogeneous_transform(
     scale = transformed[:, 2:3]
     scale[scale == 0.0] = 1.0
     return transformed[:, :2] / scale
+
+
+def _as_numpy_array(
+    value: np.ndarray | torch.Tensor,
+    dtype: np.dtype = np.float32,
+) -> np.ndarray:
+    """Convert arrays or tensors to NumPy, with a PyTorch no-NumPy fallback."""
+    if isinstance(value, torch.Tensor):
+        detached = value.detach().cpu()
+        try:
+            return detached.numpy().astype(dtype, copy=False)
+        except RuntimeError:
+            return np.asarray(detached.tolist(), dtype=dtype)
+    return np.asarray(value, dtype=dtype)
 
 
 def extract_batched_size(

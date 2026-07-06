@@ -207,6 +207,18 @@ def decoder_from_landmark_loss(landmark_loss: str) -> CoordinateDecoder:
     raise ValueError(f"Unsupported landmark loss regime: {landmark_loss}")
 
 
+def compute_box_normalization_factor(
+    target_landmarks: np.ndarray,
+    eps: float = 1e-6,
+) -> float:
+    """Compute the GT landmark-box normalization factor used by NME."""
+    min_xy = target_landmarks.min(axis=0)
+    max_xy = target_landmarks.max(axis=0)
+    box_width = max_xy[0] - min_xy[0]
+    box_height = max_xy[1] - min_xy[1]
+    return float(np.sqrt(max(box_width * box_height, eps)))
+
+
 def compute_box_normalized_nme(
     preds: torch.Tensor, targets: torch.Tensor, eps: float = 1e-6
 ) -> np.ndarray:

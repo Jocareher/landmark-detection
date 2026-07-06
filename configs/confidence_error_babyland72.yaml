@@ -1,0 +1,49 @@
+# Confidence-error diagnostic configuration for BabyLand-72.
+#
+# Run with:
+#   python3 scripts/analyze_confidence_error.py --config configs/confidence_error_babyland72.yaml
+#
+# This analysis is diagnostic only: BabyLand labels are used to measure
+# confidence-error behavior, not for training, adaptation, or pseudo-labeling.
+
+eval_mode: "natural"
+
+# Trained SynBaby-72/BabyLand-72 checkpoint to analyze.
+checkpoint_path: "path/to/best_model.pth"
+
+# Natural-mode inputs. dataset_root must point to the detector-export directory
+# that contains images/ and metadata/ crop subdirectories. natural_gt_root must
+# contain the original-image GT landmark txt files.
+dataset_root: "path/to/babyland_detector_export"
+natural_gt_root: "path/to/babyland_gt_labels"
+natural_source_root: null
+
+# Output directory for CSV files, plots, examples, summary JSON, and the
+# confidence_error_report.md report.
+output_dir: "runs/confidence_error_babyland72"
+
+# Runtime.
+device: "auto"
+seed: 42
+batch_size: 16
+num_workers: 4
+cache_dir: "dataset_cache"
+use_cache: true
+save_config: true
+
+# Decoder must match the checkpoint training loss.
+landmark_loss: "mse"
+wasserstein_softmax_temperature: 1.0
+visibility_threshold: 0.5
+
+# Confidence-error diagnostics.
+tta_samples: 8
+failure_thresholds: [0.05, 0.08, 0.10]
+retention_fractions: [0.10, 0.25, 0.50, 1.0]
+max_visual_examples: 12
+max_batches: null
+
+# Optional PCA shape plausibility. Enable only when pca_prior_path points to a
+# compatible prior built for the same 72-landmark layout.
+compute_pca_shape_plausibility: false
+pca_prior_path: null

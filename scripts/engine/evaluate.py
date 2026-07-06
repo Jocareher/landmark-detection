@@ -11,6 +11,7 @@ from tqdm import tqdm
 
 from .geometry_metrics import compute_per_landmark_point_to_line_distances
 from .metrics import decode_heatmaps_to_image_coords
+from .metrics import compute_box_normalization_factor as _shared_box_normalization_factor
 from .postprocessing import extract_batched_size, project_landmarks_to_original_size
 from ..utils.predictions import save_prediction_file
 from ..utils.visualization import (
@@ -47,13 +48,7 @@ def compute_box_normalization_factor(
     float
         Box-based normalization factor.
     """
-    min_xy = target_landmarks.min(axis=0)
-    max_xy = target_landmarks.max(axis=0)
-
-    box_width = max_xy[0] - min_xy[0]
-    box_height = max_xy[1] - min_xy[1]
-
-    return float(np.sqrt(max(box_width * box_height, eps)))
+    return _shared_box_normalization_factor(target_landmarks=target_landmarks, eps=eps)
 
 
 def compute_per_landmark_nme(
