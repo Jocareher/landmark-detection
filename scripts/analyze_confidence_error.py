@@ -76,7 +76,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=None)
-    parser.add_argument("--device", choices=["auto", "cpu", "cuda", "mps"], default=None)
+    parser.add_argument(
+        "--device", choices=["auto", "cpu", "cuda", "mps"], default=None
+    )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument(
         "--landmark-loss",
@@ -163,7 +165,9 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.eval_mode = _arg_or_config(args, "eval_mode", config, "eval_mode", "natural")
     config.checkpoint_path = _resolve_checkpoint_path(args, config)
     config.dataset_root = _arg_or_config(args, "dataset_root", config, "dataset_root")
-    config.natural_gt_root = _arg_or_config(args, "natural_gt_root", config, "natural_gt_root")
+    config.natural_gt_root = _arg_or_config(
+        args, "natural_gt_root", config, "natural_gt_root"
+    )
     config.natural_source_root = _arg_or_config(
         args,
         "natural_source_root",
@@ -171,7 +175,9 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
         "natural_source_root",
     )
     config.cache_dir = _arg_or_config(args, "cache_dir", config, "cache_dir")
-    config.eval_batch_size = _arg_or_config(args, "batch_size", config, "eval_batch_size")
+    config.eval_batch_size = _arg_or_config(
+        args, "batch_size", config, "eval_batch_size"
+    )
     config.num_workers = _arg_or_config(args, "num_workers", config, "num_workers")
     config.device = _arg_or_config(args, "device", config, "device")
     config.seed = _arg_or_config(args, "seed", config, "seed")
@@ -179,7 +185,9 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.use_cache = (
         config.use_cache if args.disable_cache is None else not args.disable_cache
     )
-    config.landmark_loss = _arg_or_config(args, "landmark_loss", config, "landmark_loss")
+    config.landmark_loss = _arg_or_config(
+        args, "landmark_loss", config, "landmark_loss"
+    )
     config.coordinate_decoder = decoder_from_landmark_loss(config.landmark_loss)
     config.wasserstein_softmax_temperature = _arg_or_config(
         args,
@@ -193,7 +201,9 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
         config,
         "visibility_threshold",
     )
-    config.pca_prior_path = _arg_or_config(args, "pca_prior_path", config, "pca_prior_path")
+    config.pca_prior_path = _arg_or_config(
+        args, "pca_prior_path", config, "pca_prior_path"
+    )
     config.tta_samples = _arg_or_config(args, "tta_samples", config, "tta_samples", 0)
     config.compute_pca_shape_plausibility = bool(
         args.compute_pca_shape_plausibility
@@ -220,7 +230,9 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
         "max_visual_examples",
         12,
     )
-    config.max_batches = _arg_or_config(args, "max_batches", config, "max_batches", None)
+    config.max_batches = _arg_or_config(
+        args, "max_batches", config, "max_batches", None
+    )
     config.output_dir = (
         args.output_dir
         if args.output_dir is not None
@@ -242,9 +254,13 @@ def main() -> None:
     if config.checkpoint_path is None:
         raise ValueError("--checkpoint or checkpoint_path in --config is required.")
     if config.eval_mode == "natural" and config.natural_gt_root is None:
-        raise ValueError("--natural-gt-root is required when --eval-mode natural is used.")
+        raise ValueError(
+            "--natural-gt-root is required when --eval-mode natural is used."
+        )
     if config.compute_pca_shape_plausibility and config.pca_prior_path is None:
-        raise ValueError("--pca-prior-path is required when PCA shape plausibility is enabled.")
+        raise ValueError(
+            "--pca-prior-path is required when PCA shape plausibility is enabled."
+        )
 
     set_seed(config.seed)
     device = get_default_device(config.device)
@@ -257,7 +273,9 @@ def main() -> None:
     print(f"[INFO] TTA samples: {config.tta_samples}")
 
     model = build_model(config)
-    checkpoint = torch.load(config.checkpoint_path, map_location="cpu", weights_only=False)
+    checkpoint = torch.load(
+        config.checkpoint_path, map_location="cpu", weights_only=False
+    )
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
 
@@ -308,7 +326,9 @@ def main() -> None:
     print("[INFO] Confidence-error analysis finished.")
     print(f"[INFO] Images: {summary['num_images']}")
     print(f"[INFO] Landmark rows: {summary['num_landmark_rows']}")
-    print(f"[INFO] Global mean NME: {summary['global_mean_nme']:.4f}")
+    print(f"[INFO] Evaluable landmark rows: {summary['num_evaluable_landmark_rows']}")
+    print(f"[INFO] Mean image NME fraction: {summary['mean_nme_fraction']:.4f}")
+    print(f"[INFO] Mean image NME percent: {summary['mean_nme_percent']:.2f}")
     print(f"[INFO] Report: {summary['outputs']['report']}")
 
 
@@ -329,7 +349,9 @@ def _load_config_file(config_path: Path) -> dict[str, Any]:
         try:
             import yaml
         except Exception as error:
-            raise RuntimeError("PyYAML is required to read YAML config files.") from error
+            raise RuntimeError(
+                "PyYAML is required to read YAML config files."
+            ) from error
         loaded = yaml.safe_load(text)
     else:
         raise ValueError(f"Unsupported config extension: {config_path.suffix}")

@@ -21,6 +21,7 @@ from .postprocessing import (
     project_landmarks_to_original_size,
 )
 from .tta_consistency import compute_tta_consistency
+from ..utils.natural_labels import compute_natural_valid_landmark_mask
 
 FINE_REGION_NAMES = [
     "face_contour",
@@ -95,6 +96,10 @@ def run_confidence_error_analysis(
     per_landmark_rows: list[dict[str, Any]] = []
     per_image_rows: list[dict[str, Any]] = []
     example_candidates: list[dict[str, Any]] = []
+    total_landmarks_seen = 0
+    valid_gt_landmarks_seen = 0
+    invalid_gt_landmarks_seen = 0
+    nan_target_coordinate_rows_seen = 0
 
     with torch.inference_mode():
         for batch_index, batch in enumerate(
@@ -132,7 +137,9 @@ def run_confidence_error_analysis(
                 tta_result.variance.detach().cpu() if tta_result is not None else None
             )
             tta_predictions_input = (
-                tta_result.predictions.detach().cpu() if tta_result is not None else None
+                tta_result.predictions.detach().cpu()
+                if tta_result is not None
+                else None
             )
 
             pca_errors = None
@@ -188,6 +195,14 @@ def run_confidence_error_analysis(
                         None if pca_errors is None else float(pca_errors[sample_index])
                     ),
                 )
+                total_landmarks_seen += int(image_row["total_landmarks"])
+                valid_gt_landmarks_seen += int(image_row["number_of_valid_landmarks"])
+                invalid_gt_landmarks_seen += int(
+                    image_row["number_of_invalid_landmarks"]
+                )
+                nan_target_coordinate_rows_seen += int(
+                    image_row["number_of_nan_target_landmarks"]
+                )
                 per_landmark_rows.extend(sample_rows)
                 per_image_rows.append(image_row)
                 example_candidates.append(
@@ -203,6 +218,7 @@ def run_confidence_error_analysis(
     if not per_landmark_rows:
         raise RuntimeError("No confidence-error rows were produced.")
 
+    evaluable_rows = _evaluable_rows(per_landmark_rows)
     summary_by_region = summarize_by_region(per_landmark_rows)
     correlations = compute_correlations(per_landmark_rows)
     quantile_rows = compute_quantile_error_rows(per_landmark_rows)
@@ -225,6 +241,18 @@ def run_confidence_error_analysis(
     _write_csv(output_dir / "retention_curves.csv", retention_rows)
     _write_csv(output_dir / "failure_detection.csv", failure_rows)
     _write_csv(output_dir / "region_pseudo_label_viability.csv", viability_rows)
+    sanity_checks = build_sanity_checks(
+        per_landmark_rows=per_landmark_rows,
+        per_image_rows=per_image_rows,
+        total_landmarks_seen=total_landmarks_seen,
+        valid_gt_landmarks_seen=valid_gt_landmarks_seen,
+        invalid_gt_landmarks_seen=invalid_gt_landmarks_seen,
+        nan_target_coordinate_rows_seen=nan_target_coordinate_rows_seen,
+    )
+    (output_dir / "sanity_checks.json").write_text(
+        json.dumps(sanity_checks, indent=2),
+        encoding="utf-8",
+    )
 
     plot_outputs = save_confidence_error_plots(
         rows=per_landmark_rows,
@@ -247,6 +275,7 @@ def run_confidence_error_analysis(
         summary_by_region=summary_by_region,
         retention_rows=retention_rows,
         viability_rows=viability_rows,
+        sanity_checks=sanity_checks,
         plot_outputs=plot_outputs,
         example_outputs=example_outputs,
         pose_available=any(_has_value(row.get("pose")) for row in per_landmark_rows),
@@ -260,12 +289,23 @@ def run_confidence_error_analysis(
     summary = {
         "num_images": len(per_image_rows),
         "num_landmark_rows": len(per_landmark_rows),
-        "global_mean_nme": _safe_mean(
-            [row["normalized_error"] for row in per_landmark_rows]
+        "num_evaluable_landmark_rows": len(evaluable_rows),
+        "num_invalid_gt_landmark_rows": invalid_gt_landmarks_seen,
+        "num_nan_target_coordinate_rows": nan_target_coordinate_rows_seen,
+        "mean_nme_fraction": _safe_mean([row["mean_nme"] for row in per_image_rows]),
+        "mean_nme_percent": _scale_fraction_to_percent(
+            _safe_mean([row["mean_nme"] for row in per_image_rows])
         ),
-        "global_median_nme": _safe_median(
-            [row["normalized_error"] for row in per_landmark_rows]
+        "median_image_nme_fraction": _safe_median(
+            [row["mean_nme"] for row in per_image_rows]
         ),
+        "global_landmark_mean_nme_fraction": _safe_mean(
+            [row["normalized_error"] for row in evaluable_rows]
+        ),
+        "global_landmark_median_nme_fraction": _safe_median(
+            [row["normalized_error"] for row in evaluable_rows]
+        ),
+        "evaluation_protocol": sanity_checks["evaluation_protocol"],
         "outputs": {
             "report": str(report_summary),
             "figures": [str(path) for path in plot_outputs],
@@ -294,6 +334,7 @@ def summarize_by_region(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def compute_correlations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Compute Pearson and Spearman confidence-error correlations."""
     output_rows: list[dict[str, Any]] = []
+    rows = _evaluable_rows(rows)
     for scope_name, scope_rows in [("global", rows)] + [
         (region, [row for row in rows if row["region"] == region])
         for region in _ordered_regions(rows)
@@ -319,6 +360,7 @@ def compute_correlations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def compute_quantile_error_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Summarize error retained by top/bottom confidence quantiles."""
     output_rows: list[dict[str, Any]] = []
+    rows = _evaluable_rows(rows)
     for signal in CONFIDENCE_SIGNALS:
         scored = _sorted_by_confidence(rows, signal)
         if not scored:
@@ -350,12 +392,23 @@ def compute_retention_curve_rows(
 ) -> list[dict[str, Any]]:
     """Build retention curves ordered by each confidence signal."""
     output_rows: list[dict[str, Any]] = []
-    scopes = ["global"] + _ordered_regions(rows) + ["contour", "eyebrows", "eyes", "nose", "mouth"]
+    rows = _evaluable_rows(rows)
+    scopes = (
+        ["global"]
+        + _ordered_regions(rows)
+        + ["contour", "eyebrows", "eyes", "nose", "mouth"]
+    )
     for signal in CONFIDENCE_SIGNALS:
         for region in scopes:
-            scope_rows = rows if region == "global" else [
-                row for row in rows if row["region"] == region or row["grouped_region"] == region
-            ]
+            scope_rows = (
+                rows
+                if region == "global"
+                else [
+                    row
+                    for row in rows
+                    if row["region"] == region or row["grouped_region"] == region
+                ]
+            )
             scored = _sorted_by_confidence(scope_rows, signal)
             if not scored:
                 continue
@@ -383,6 +436,7 @@ def compute_failure_detection_rows(
     """Evaluate whether confidence scores detect high-error failures."""
     output_rows: list[dict[str, Any]] = []
     roc_curves: dict[tuple[str, float], list[tuple[float, float]]] = {}
+    rows = _evaluable_rows(rows)
     for signal in CONFIDENCE_SIGNALS:
         pairs = _valid_pairs(rows, signal, "normalized_error")
         if len(pairs) < 2:
@@ -397,8 +451,12 @@ def compute_failure_detection_rows(
             auprc = _binary_auprc(labels, scores)
             roc_curves[(signal, float(threshold))] = roc_points
             for retained_fraction in (0.10, 0.25, 0.50):
-                retained = _select_fraction(_sorted_by_confidence(rows, signal), retained_fraction, True)
-                selected_ids = {(row["image_id"], row["landmark_index"]) for row in retained}
+                retained = _select_fraction(
+                    _sorted_by_confidence(rows, signal), retained_fraction, True
+                )
+                selected_ids = {
+                    (row["image_id"], row["landmark_index"]) for row in retained
+                }
                 predicted_good = np.asarray(
                     [
                         (row["image_id"], row["landmark_index"]) in selected_ids
@@ -424,7 +482,9 @@ def compute_failure_detection_rows(
     return output_rows, roc_curves
 
 
-def compute_region_viability_rows(retention_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def compute_region_viability_rows(
+    retention_rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """Create region-level pseudo-label viability recommendations."""
     output_rows: list[dict[str, Any]] = []
     grouped_regions = ["contour", "eyebrows", "eyes", "nose", "mouth"]
@@ -432,7 +492,8 @@ def compute_region_viability_rows(retention_rows: list[dict[str, Any]]) -> list[
         candidates = [
             row
             for row in retention_rows
-            if row["region"] == region and math.isclose(float(row["retained_fraction"]), 0.25, rel_tol=0.05)
+            if row["region"] == region
+            and math.isclose(float(row["retained_fraction"]), 0.25, rel_tol=0.05)
         ]
         if not candidates:
             continue
@@ -477,8 +538,11 @@ def save_confidence_error_plots(
         return []
     figures_dir.mkdir(parents=True, exist_ok=True)
     outputs: list[Path] = []
-    best_signal = _best_signal_from_rows(rows) or "heatmap_max"
-    signal_rows = [row for row in rows if _is_finite_number(row.get(best_signal))]
+    evaluable_rows = _evaluable_rows(rows)
+    best_signal = _best_signal_from_rows(evaluable_rows) or "heatmap_max"
+    signal_rows = [
+        row for row in evaluable_rows if _is_finite_number(row.get(best_signal))
+    ]
     if signal_rows:
         outputs.append(_plot_scatter(signal_rows, best_signal, figures_dir))
         outputs.append(_plot_quantile_boxplot(signal_rows, best_signal, figures_dir))
@@ -520,13 +584,17 @@ def save_example_visualizations(
     high_error = float(np.quantile(error_values, 0.75))
     low_error = float(np.quantile(error_values, 0.25))
     buckets = {
-        "high_confidence_low_error": lambda c: c["image_row"]["mean_heatmap_max"] >= high_conf
+        "high_confidence_low_error": lambda c: c["image_row"]["mean_heatmap_max"]
+        >= high_conf
         and c["image_row"]["mean_nme"] <= low_error,
-        "high_confidence_high_error": lambda c: c["image_row"]["mean_heatmap_max"] >= high_conf
+        "high_confidence_high_error": lambda c: c["image_row"]["mean_heatmap_max"]
+        >= high_conf
         and c["image_row"]["mean_nme"] >= high_error,
-        "low_confidence_high_error": lambda c: c["image_row"]["mean_heatmap_max"] <= low_conf
+        "low_confidence_high_error": lambda c: c["image_row"]["mean_heatmap_max"]
+        <= low_conf
         and c["image_row"]["mean_nme"] >= high_error,
-        "low_confidence_low_error": lambda c: c["image_row"]["mean_heatmap_max"] <= low_conf
+        "low_confidence_low_error": lambda c: c["image_row"]["mean_heatmap_max"]
+        <= low_conf
         and c["image_row"]["mean_nme"] <= low_error,
     }
     outputs: list[Path] = []
@@ -574,6 +642,7 @@ def write_markdown_report(
     summary_by_region: list[dict[str, Any]],
     retention_rows: list[dict[str, Any]],
     viability_rows: list[dict[str, Any]],
+    sanity_checks: dict[str, Any],
     plot_outputs: list[Path],
     example_outputs: list[Path],
     pose_available: bool,
@@ -615,16 +684,26 @@ def write_markdown_report(
             f"- Dataset: {dataset_description}",
             f"- Checkpoint: `{checkpoint_path}`",
             f"- Images analyzed: {len(per_image_rows)}",
-            f"- Global mean NME: {global_nme:.4f}",
-            f"- Global median NME: {global_median:.4f}",
+            f"- Mean image NME fraction: {_format_optional_float(global_nme, 4)}",
+            f"- Mean image NME percent: {_format_optional_float(_scale_fraction_to_percent(global_nme), 2)}",
+            f"- Median image NME fraction: {_format_optional_float(global_median, 4)}",
+            f"- Median image NME percent: {_format_optional_float(_scale_fraction_to_percent(global_median), 2)}",
+            f"- Total landmark rows: {sanity_checks['total_landmark_rows']}",
+            f"- Valid GT landmark rows: {sanity_checks['valid_gt_landmark_rows']}",
+            f"- Invalid GT landmark rows: {sanity_checks['invalid_gt_landmark_rows']}",
+            f"- NaN target coordinate rows: {sanity_checks['nan_target_coordinate_rows']}",
             f"- TTA samples: {tta_samples}",
             f"- PCA shape plausibility: {'enabled' if pca_available else 'not computed'}",
+            f"- Evaluation protocol: {sanity_checks['evaluation_protocol']}",
             "",
             "This is an offline diagnostic analysis. BabyLand labels are used only to measure confidence-error behavior and must not be used for training, adaptation, or final model tuning without a proper validation split.",
             "",
             "## Best Confidence Signals",
             "",
-            *(best_lines or ["- No valid confidence-error correlations were available."]),
+            *(
+                best_lines
+                or ["- No valid confidence-error correlations were available."]
+            ),
             "",
             "## Region Reliability",
             "",
@@ -632,7 +711,10 @@ def write_markdown_report(
             "",
             "## Pseudo-Label Viability",
             "",
-            *(viability_lines or ["- No region met the retention-summary requirements."]),
+            *(
+                viability_lines
+                or ["- No region met the retention-summary requirements."]
+            ),
             "",
             "## Grouping Availability",
             "",
@@ -650,7 +732,10 @@ def write_markdown_report(
             "",
             "## Plots",
             "",
-            *(plot_lines or ["- Plot generation was skipped because matplotlib was unavailable."]),
+            *(
+                plot_lines
+                or ["- Plot generation was skipped because matplotlib was unavailable."]
+            ),
             "",
             "## Examples",
             "",
@@ -658,6 +743,8 @@ def write_markdown_report(
             "",
             "## Caveats",
             "",
+            "- Error-based summaries exclude invalid GT landmarks; invalid rows remain in the per-landmark CSV with NaN errors for diagnostics.",
+            "- Predicted visibility is retained as an analysis variable only and does not define the official GT error mask.",
             "- Heatmap entropy and spatial variance are computed from a spatial softmax over predicted heatmaps.",
             "- Peak sharpness is the gap between the two strongest local peaks, with a flat top-2 fallback.",
             "- TTA consistency avoids horizontal flips unless a future analysis wires in verified left-right remapping.",
@@ -708,7 +795,9 @@ def _prepare_sample_coordinates(
                         transform_crop_to_orig,
                     ).astype(np.float32)
                 )
-            tta_variance_output = np.stack(projected_tta, axis=0).var(axis=0).sum(axis=1)
+            tta_variance_output = (
+                np.stack(projected_tta, axis=0).var(axis=0).sum(axis=1)
+            )
         elif tta_variance_input is not None:
             scale = max(
                 crop_size[0] / network_input_size[0],
@@ -722,14 +811,18 @@ def _prepare_sample_coordinates(
             "image_id": str(metadata_batch["source_image_name"][sample_index]),
             "prediction_id": sample_id,
             "image_path": str(metadata_batch["source_image_path"][sample_index]),
-            "overlay_image_path": str(metadata_batch["source_image_path"][sample_index]),
+            "overlay_image_path": str(
+                metadata_batch["source_image_path"][sample_index]
+            ),
             "predicted_landmarks": predicted_output,
             "target_landmarks": _tensor_to_numpy(target_landmarks, dtype=np.float32),
             "tta_variance": tta_variance_output,
             "pose": str(metadata_batch.get("orientation", [""])[sample_index]),
         }
 
-    transformed_size = extract_batched_size(metadata_batch["transformed_size"], sample_index)
+    transformed_size = extract_batched_size(
+        metadata_batch["transformed_size"], sample_index
+    )
     original_size = extract_batched_size(metadata_batch["original_size"], sample_index)
     predicted_output = project_landmarks_to_original_size(
         landmarks=predicted_input,
@@ -787,14 +880,37 @@ def _build_sample_rows(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     predicted = sample["predicted_landmarks"]
     target = sample["target_landmarks"]
-    finite_mask = np.isfinite(predicted).all(axis=1) & np.isfinite(target).all(axis=1)
-    normalization = compute_box_normalization_factor(target[finite_mask])
+    target_visibility_for_mask = (
+        np.ones(target.shape[0], dtype=np.int64)
+        if target_visibility is None
+        else np.asarray(target_visibility, dtype=np.int64)
+    )
+    finite_target_mask = np.isfinite(target[:, 0]) & np.isfinite(target[:, 1])
+    finite_prediction_mask = np.isfinite(predicted[:, 0]) & np.isfinite(predicted[:, 1])
+    valid_gt_mask = compute_natural_valid_landmark_mask(
+        landmarks=target,
+        visibility=target_visibility_for_mask,
+    )
+    evaluable_mask = valid_gt_mask & finite_prediction_mask
+    if valid_gt_mask.any():
+        normalization = compute_box_normalization_factor(target[valid_gt_mask])
+    else:
+        normalization = float("nan")
     rows: list[dict[str, Any]] = []
     for landmark_index in range(predicted.shape[0]):
         region = _get_landmark_anatomical_group(landmark_index)
-        if not finite_mask[landmark_index]:
-            continue
-        pixel_error = float(np.linalg.norm(predicted[landmark_index] - target[landmark_index]))
+        is_valid_gt = bool(valid_gt_mask[landmark_index])
+        is_evaluable = bool(evaluable_mask[landmark_index])
+        pixel_error = (
+            float(np.linalg.norm(predicted[landmark_index] - target[landmark_index]))
+            if is_evaluable
+            else float("nan")
+        )
+        normalized_error = (
+            float(pixel_error / normalization)
+            if is_evaluable and math.isfinite(normalization)
+            else float("nan")
+        )
         row = {
             "image_id": sample["image_id"],
             "image_path": sample["image_path"],
@@ -806,36 +922,75 @@ def _build_sample_rows(
             "predicted_y": float(predicted[landmark_index, 1]),
             "target_x": float(target[landmark_index, 0]),
             "target_y": float(target[landmark_index, 1]),
+            "target_is_finite": bool(finite_target_mask[landmark_index]),
+            "prediction_is_finite": bool(finite_prediction_mask[landmark_index]),
+            "gt_valid_for_error": is_valid_gt,
+            "evaluable_for_error": is_evaluable,
             "pixel_error": pixel_error,
-            "normalized_error": float(pixel_error / normalization),
-            "heatmap_max": float(heatmap_metrics.heatmap_max[sample_index, landmark_index].detach().cpu()),
-            "heatmap_entropy": float(heatmap_metrics.heatmap_entropy[sample_index, landmark_index].detach().cpu()),
-            "heatmap_variance": float(heatmap_metrics.heatmap_variance[sample_index, landmark_index].detach().cpu()),
-            "peak_sharpness": float(heatmap_metrics.peak_sharpness[sample_index, landmark_index].detach().cpu()),
+            "normalized_error": normalized_error,
+            "normalized_error_percent": _scale_fraction_to_percent(normalized_error),
+            "heatmap_max": float(
+                heatmap_metrics.heatmap_max[sample_index, landmark_index].detach().cpu()
+            ),
+            "heatmap_entropy": float(
+                heatmap_metrics.heatmap_entropy[sample_index, landmark_index]
+                .detach()
+                .cpu()
+            ),
+            "heatmap_variance": float(
+                heatmap_metrics.heatmap_variance[sample_index, landmark_index]
+                .detach()
+                .cpu()
+            ),
+            "peak_sharpness": float(
+                heatmap_metrics.peak_sharpness[sample_index, landmark_index]
+                .detach()
+                .cpu()
+            ),
             "tta_variance": (
-                None if sample["tta_variance"] is None else float(sample["tta_variance"][landmark_index])
+                None
+                if sample["tta_variance"] is None
+                else float(sample["tta_variance"][landmark_index])
             ),
             "pca_reconstruction_error": pca_error,
             "visibility": (
-                None if target_visibility is None else int(target_visibility[landmark_index])
+                None
+                if target_visibility is None
+                else int(target_visibility[landmark_index])
             ),
             "predicted_visibility": int(predicted_visibility[landmark_index]),
             "pose": sample.get("pose"),
         }
         rows.append(row)
-    image_errors = [row["normalized_error"] for row in rows]
+    evaluable_rows = _evaluable_rows(rows)
+    image_errors = [row["normalized_error"] for row in evaluable_rows]
+    valid_gt_count = int(valid_gt_mask.sum())
+    invalid_gt_count = int(len(valid_gt_mask) - valid_gt_count)
+    nan_target_count = int((~finite_target_mask).sum())
     image_row = {
         "image_id": sample["image_id"],
         "image_path": sample["image_path"],
         "mean_nme": _safe_mean(image_errors),
+        "mean_nme_percent": _scale_fraction_to_percent(_safe_mean(image_errors)),
         "median_nme": _safe_median(image_errors),
+        "median_nme_percent": _scale_fraction_to_percent(_safe_median(image_errors)),
         "max_nme": _safe_max(image_errors),
-        "mean_heatmap_max": _safe_mean([row["heatmap_max"] for row in rows]),
-        "mean_heatmap_entropy": _safe_mean([row["heatmap_entropy"] for row in rows]),
-        "mean_tta_variance": _safe_mean([row["tta_variance"] for row in rows]),
+        "max_nme_percent": _scale_fraction_to_percent(_safe_max(image_errors)),
+        "mean_heatmap_max": _safe_mean([row["heatmap_max"] for row in evaluable_rows]),
+        "mean_heatmap_entropy": _safe_mean(
+            [row["heatmap_entropy"] for row in evaluable_rows]
+        ),
+        "mean_tta_variance": _safe_mean(
+            [row["tta_variance"] for row in evaluable_rows]
+        ),
         "mean_pca_reconstruction_error": pca_error,
         "pose": sample.get("pose"),
-        "number_of_valid_landmarks": len(rows),
+        "total_landmarks": int(predicted.shape[0]),
+        "number_of_valid_landmarks": valid_gt_count,
+        "number_of_evaluable_landmarks": len(evaluable_rows),
+        "number_of_invalid_landmarks": invalid_gt_count,
+        "number_of_nan_target_landmarks": nan_target_count,
+        "box_normalization_factor": normalization,
     }
     return rows, image_row
 
@@ -848,7 +1003,9 @@ def _compute_sample_pca_errors(
     for sample_index in range(predicted_landmarks.shape[0]):
         try:
             loss = compute_pca_projection_loss(
-                predicted_landmarks=predicted_landmarks[sample_index : sample_index + 1],
+                predicted_landmarks=predicted_landmarks[
+                    sample_index : sample_index + 1
+                ],
                 pca_prior=pca_prior,
             )
             errors.append(float(loss.detach().cpu().item()))
@@ -858,17 +1015,41 @@ def _compute_sample_pca_errors(
 
 
 def _summarize_region(region: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    evaluable_rows = _evaluable_rows(rows)
     return {
         "region": region,
-        "landmark_count": len(rows),
-        "mean_nme": _safe_mean([row["normalized_error"] for row in rows]),
-        "median_nme": _safe_median([row["normalized_error"] for row in rows]),
-        "mean_heatmap_max": _safe_mean([row["heatmap_max"] for row in rows]),
-        "mean_heatmap_entropy": _safe_mean([row["heatmap_entropy"] for row in rows]),
-        "mean_tta_variance": _safe_mean([row["tta_variance"] for row in rows]),
-        "spearman_heatmap_max_vs_error": _correlation_for_rows(rows, "heatmap_max", "spearman"),
-        "spearman_entropy_vs_error": _correlation_for_rows(rows, "heatmap_entropy", "spearman"),
-        "spearman_tta_variance_vs_error": _correlation_for_rows(rows, "tta_variance", "spearman"),
+        "landmark_count": len(evaluable_rows),
+        "total_rows": len(rows),
+        "valid_gt_landmark_count": sum(
+            1 for row in rows if bool(row.get("gt_valid_for_error"))
+        ),
+        "invalid_gt_landmark_count": sum(
+            1 for row in rows if not bool(row.get("gt_valid_for_error"))
+        ),
+        "mean_nme": _safe_mean([row["normalized_error"] for row in evaluable_rows]),
+        "mean_nme_percent": _scale_fraction_to_percent(
+            _safe_mean([row["normalized_error"] for row in evaluable_rows])
+        ),
+        "median_nme": _safe_median([row["normalized_error"] for row in evaluable_rows]),
+        "median_nme_percent": _scale_fraction_to_percent(
+            _safe_median([row["normalized_error"] for row in evaluable_rows])
+        ),
+        "mean_heatmap_max": _safe_mean([row["heatmap_max"] for row in evaluable_rows]),
+        "mean_heatmap_entropy": _safe_mean(
+            [row["heatmap_entropy"] for row in evaluable_rows]
+        ),
+        "mean_tta_variance": _safe_mean(
+            [row["tta_variance"] for row in evaluable_rows]
+        ),
+        "spearman_heatmap_max_vs_error": _correlation_for_rows(
+            evaluable_rows, "heatmap_max", "spearman"
+        ),
+        "spearman_entropy_vs_error": _correlation_for_rows(
+            evaluable_rows, "heatmap_entropy", "spearman"
+        ),
+        "spearman_tta_variance_vs_error": _correlation_for_rows(
+            evaluable_rows, "tta_variance", "spearman"
+        ),
     }
 
 
@@ -881,12 +1062,68 @@ def _write_csv(output_path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def build_sanity_checks(
+    per_landmark_rows: list[dict[str, Any]],
+    per_image_rows: list[dict[str, Any]],
+    total_landmarks_seen: int,
+    valid_gt_landmarks_seen: int,
+    invalid_gt_landmarks_seen: int,
+    nan_target_coordinate_rows_seen: int,
+) -> dict[str, Any]:
+    """Build explicit protocol checks for valid-GT-only evaluation."""
+    evaluable_rows = _evaluable_rows(per_landmark_rows)
+    image_valid_counts = [
+        int(row["number_of_valid_landmarks"]) for row in per_image_rows
+    ]
+    all_images_have_72_valid = bool(image_valid_counts) and all(
+        count == 72 for count in image_valid_counts
+    )
+    mean_image_nme = _safe_mean([row["mean_nme"] for row in per_image_rows])
+    return {
+        "evaluation_protocol": (
+            "valid_gt_mask = visibility == 1 AND finite(target_x, target_y); "
+            "predicted_visibility is not used to define the error mask"
+        ),
+        "normalization": (
+            "box normalization from valid GT landmarks for each image, matching "
+            "compute_box_normalization_factor"
+        ),
+        "nme_scale": "fraction; percent fields multiply by 100",
+        "aggregation": (
+            "per-image NME is the mean over valid GT landmarks; mean_nme_fraction "
+            "is the mean of per-image NME values"
+        ),
+        "total_landmark_rows": int(total_landmarks_seen),
+        "valid_gt_landmark_rows": int(valid_gt_landmarks_seen),
+        "invalid_gt_landmark_rows": int(invalid_gt_landmarks_seen),
+        "evaluable_landmark_rows": int(len(evaluable_rows)),
+        "nan_target_coordinate_rows": int(nan_target_coordinate_rows_seen),
+        "invalid_gt_rows_have_nan_error": all(
+            not _is_finite_number(row.get("normalized_error"))
+            for row in per_landmark_rows
+            if not bool(row.get("gt_valid_for_error"))
+        ),
+        "valid_landmark_count_min": min(image_valid_counts)
+        if image_valid_counts
+        else None,
+        "valid_landmark_count_max": max(image_valid_counts)
+        if image_valid_counts
+        else None,
+        "valid_landmark_count_mean": _safe_mean(image_valid_counts),
+        "all_images_have_72_valid_landmarks": all_images_have_72_valid,
+        "mean_nme_fraction": mean_image_nme,
+        "mean_nme_percent": _scale_fraction_to_percent(mean_image_nme),
+    }
+
+
 def _ordered_regions(rows: list[dict[str, Any]]) -> list[str]:
     present = {row["region"] for row in rows}
     return [region for region in FINE_REGION_NAMES if region in present]
 
 
-def _valid_pairs(rows: list[dict[str, Any]], x_key: str, y_key: str) -> list[tuple[float, float]]:
+def _valid_pairs(
+    rows: list[dict[str, Any]], x_key: str, y_key: str
+) -> list[tuple[float, float]]:
     return [
         (float(row[x_key]), float(row[y_key]))
         for row in rows
@@ -894,13 +1131,29 @@ def _valid_pairs(rows: list[dict[str, Any]], x_key: str, y_key: str) -> list[tup
     ]
 
 
-def _correlation_for_rows(rows: list[dict[str, Any]], signal: str, kind: str) -> float | None:
+def _evaluable_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return rows that participate in official error-based summaries."""
+    return [
+        row
+        for row in rows
+        if bool(row.get("evaluable_for_error"))
+        and _is_finite_number(row.get("normalized_error"))
+    ]
+
+
+def _correlation_for_rows(
+    rows: list[dict[str, Any]], signal: str, kind: str
+) -> float | None:
     pairs = _valid_pairs(rows, signal, "normalized_error")
     if len(pairs) < 2:
         return None
     x_values = np.asarray([pair[0] for pair in pairs], dtype=np.float64)
     y_values = np.asarray([pair[1] for pair in pairs], dtype=np.float64)
-    return _spearmanr(x_values, y_values) if kind == "spearman" else _pearsonr(x_values, y_values)
+    return (
+        _spearmanr(x_values, y_values)
+        if kind == "spearman"
+        else _pearsonr(x_values, y_values)
+    )
 
 
 def _pearsonr(x_values: np.ndarray, y_values: np.ndarray) -> float:
@@ -927,13 +1180,17 @@ def _rankdata(values: np.ndarray) -> np.ndarray:
     return ranks
 
 
-def _sorted_by_confidence(rows: list[dict[str, Any]], signal: str) -> list[dict[str, Any]]:
+def _sorted_by_confidence(
+    rows: list[dict[str, Any]], signal: str
+) -> list[dict[str, Any]]:
     valid_rows = [row for row in rows if _is_finite_number(row.get(signal))]
     reverse = signal not in ERROR_HIGH_SIGNALS
     return sorted(valid_rows, key=lambda row: float(row[signal]), reverse=reverse)
 
 
-def _select_fraction(rows: list[dict[str, Any]], fraction: float, from_top: bool) -> list[dict[str, Any]]:
+def _select_fraction(
+    rows: list[dict[str, Any]], fraction: float, from_top: bool
+) -> list[dict[str, Any]]:
     if not rows:
         return []
     count = max(1, int(math.ceil(len(rows) * min(max(float(fraction), 0.0), 1.0))))
@@ -941,10 +1198,16 @@ def _select_fraction(rows: list[dict[str, Any]], fraction: float, from_top: bool
 
 
 def _failure_score(signal: str, confidence_value: float) -> float:
-    return float(confidence_value) if signal in ERROR_HIGH_SIGNALS else -float(confidence_value)
+    return (
+        float(confidence_value)
+        if signal in ERROR_HIGH_SIGNALS
+        else -float(confidence_value)
+    )
 
 
-def _binary_auroc(labels: np.ndarray, scores: np.ndarray) -> tuple[float, list[tuple[float, float]]]:
+def _binary_auroc(
+    labels: np.ndarray, scores: np.ndarray
+) -> tuple[float, list[tuple[float, float]]]:
     order = np.argsort(scores)[::-1]
     labels = labels[order].astype(bool)
     positives = int(labels.sum())
@@ -978,7 +1241,9 @@ def _binary_auprc(labels: np.ndarray, scores: np.ndarray) -> float:
     return _trapezoid_area(np.asarray(precision), np.asarray(recall))
 
 
-def _precision_recall(actual_good: np.ndarray, predicted_good: np.ndarray) -> tuple[float, float]:
+def _precision_recall(
+    actual_good: np.ndarray, predicted_good: np.ndarray
+) -> tuple[float, float]:
     tp = float((actual_good & predicted_good).sum())
     fp = float((~actual_good & predicted_good).sum())
     fn = float((actual_good & ~predicted_good).sum())
@@ -1012,7 +1277,9 @@ def _best_signal_from_rows(rows: list[dict[str, Any]]) -> str | None:
     global_rows = [row for row in correlations if row["scope"] == "global"]
     if not global_rows:
         return None
-    return max(global_rows, key=lambda row: abs(float(row["spearman"])))["confidence_signal"]
+    return max(global_rows, key=lambda row: abs(float(row["spearman"])))[
+        "confidence_signal"
+    ]
 
 
 def _plot_scatter(rows: list[dict[str, Any]], signal: str, figures_dir: Path) -> Path:
@@ -1039,7 +1306,9 @@ def _plot_scatter(rows: list[dict[str, Any]], signal: str, figures_dir: Path) ->
     return output_path
 
 
-def _plot_quantile_boxplot(rows: list[dict[str, Any]], signal: str, figures_dir: Path) -> Path:
+def _plot_quantile_boxplot(
+    rows: list[dict[str, Any]], signal: str, figures_dir: Path
+) -> Path:
     plt = _import_pyplot()
     scored = _sorted_by_confidence(rows, signal)
     groups = [
@@ -1049,7 +1318,11 @@ def _plot_quantile_boxplot(rows: list[dict[str, Any]], signal: str, figures_dir:
         ("bottom 50%", _select_fraction(scored, 0.50, False)),
     ]
     fig, axis = plt.subplots(figsize=(7, 5))
-    axis.boxplot([[row["normalized_error"] for row in group] for _, group in groups], labels=[label for label, _ in groups], showfliers=False)
+    axis.boxplot(
+        [[row["normalized_error"] for row in group] for _, group in groups],
+        labels=[label for label, _ in groups],
+        showfliers=False,
+    )
     axis.set_ylabel("normalized error")
     axis.set_title(f"NME by {signal} quantile")
     output_path = figures_dir / f"boxplot_nme_by_{signal}_quantile.png"
@@ -1059,10 +1332,13 @@ def _plot_quantile_boxplot(rows: list[dict[str, Any]], signal: str, figures_dir:
     return output_path
 
 
-def _plot_region_bars(summary_by_region: list[dict[str, Any]], figures_dir: Path) -> Path:
+def _plot_region_bars(
+    summary_by_region: list[dict[str, Any]], figures_dir: Path
+) -> Path:
     plt = _import_pyplot()
     rows = [
-        row for row in summary_by_region
+        row
+        for row in summary_by_region
         if row["region"] in ["contour", "eyebrows", "eyes", "nose", "mouth"]
     ]
     labels = [row["region"] for row in rows]
@@ -1083,7 +1359,9 @@ def _plot_region_bars(summary_by_region: list[dict[str, Any]], figures_dir: Path
     return output_path
 
 
-def _plot_retention_curves(retention_rows: list[dict[str, Any]], figures_dir: Path) -> Path:
+def _plot_retention_curves(
+    retention_rows: list[dict[str, Any]], figures_dir: Path
+) -> Path:
     plt = _import_pyplot()
     rows = [row for row in retention_rows if row["region"] == "global"]
     fig, axis = plt.subplots(figsize=(7, 5))
@@ -1145,6 +1423,16 @@ def _safe_median(values: Iterable[Any]) -> float | None:
 def _safe_max(values: Iterable[Any]) -> float | None:
     finite = [float(value) for value in values if _is_finite_number(value)]
     return float(np.max(finite)) if finite else None
+
+
+def _scale_fraction_to_percent(value: Any) -> float | None:
+    """Convert a finite NME fraction to percent while preserving missing values."""
+    return float(value) * 100.0 if _is_finite_number(value) else None
+
+
+def _format_optional_float(value: Any, decimals: int = 4) -> str:
+    """Format optional float values for reports."""
+    return f"{float(value):.{decimals}f}" if _is_finite_number(value) else "n/a"
 
 
 def _is_finite_number(value: Any) -> bool:
