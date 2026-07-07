@@ -11,6 +11,10 @@ import torch
 from tqdm import tqdm
 
 from .confidence_metrics import compute_heatmap_confidence_metrics
+from .confidence_error_plots import (
+    figure_markdown_lines,
+    save_confidence_error_figure_set,
+)
 from .metrics import decode_heatmaps_to_image_coords
 from .metrics import compute_box_normalization_factor
 from .pca_shape_prior import compute_pca_projection_loss
@@ -220,6 +224,7 @@ def run_confidence_error_analysis(
 
     evaluable_rows = _evaluable_rows(per_landmark_rows)
     summary_by_region = summarize_by_region(per_landmark_rows)
+    summary_by_pose = summarize_by_pose(per_image_rows, per_landmark_rows)
     correlations = compute_correlations(per_landmark_rows)
     quantile_rows = compute_quantile_error_rows(per_landmark_rows)
     retention_rows = compute_retention_curve_rows(
@@ -236,6 +241,7 @@ def run_confidence_error_analysis(
     _write_csv(output_dir / "per_landmark_confidence_error.csv", per_landmark_rows)
     _write_csv(output_dir / "per_image_confidence_error.csv", per_image_rows)
     _write_csv(output_dir / "summary_by_region.csv", summary_by_region)
+    _write_csv(output_dir / "summary_by_pose.csv", summary_by_pose)
     _write_csv(output_dir / "confidence_error_correlations.csv", correlations)
     _write_csv(output_dir / "confidence_quantile_errors.csv", quantile_rows)
     _write_csv(output_dir / "retention_curves.csv", retention_rows)
@@ -249,16 +255,26 @@ def run_confidence_error_analysis(
         invalid_gt_landmarks_seen=invalid_gt_landmarks_seen,
         nan_target_coordinate_rows_seen=nan_target_coordinate_rows_seen,
     )
+    sanity_checks.update(
+        build_official_metric_warning(
+            eval_mode=eval_mode,
+            mean_nme_percent=sanity_checks.get("mean_nme_percent"),
+        )
+    )
     (output_dir / "sanity_checks.json").write_text(
         json.dumps(sanity_checks, indent=2),
         encoding="utf-8",
     )
 
-    plot_outputs = save_confidence_error_plots(
-        rows=per_landmark_rows,
+    plot_outputs = save_confidence_error_figure_set(
+        per_landmark_rows=per_landmark_rows,
+        per_image_rows=per_image_rows,
         summary_by_region=summary_by_region,
+        pose_summary_rows=summary_by_pose,
+        correlations=correlations,
         retention_rows=retention_rows,
-        roc_curves=roc_curves,
+        failure_rows=failure_rows,
+        viability_rows=viability_rows,
         figures_dir=figures_dir,
     )
     example_outputs = save_example_visualizations(
@@ -273,6 +289,7 @@ def run_confidence_error_analysis(
         per_image_rows=per_image_rows,
         correlations=correlations,
         summary_by_region=summary_by_region,
+        summary_by_pose=summary_by_pose,
         retention_rows=retention_rows,
         viability_rows=viability_rows,
         sanity_checks=sanity_checks,
@@ -306,6 +323,7 @@ def run_confidence_error_analysis(
             [row["normalized_error"] for row in evaluable_rows]
         ),
         "evaluation_protocol": sanity_checks["evaluation_protocol"],
+        "official_metric_warning": sanity_checks.get("official_metric_warning"),
         "outputs": {
             "report": str(report_summary),
             "figures": [str(path) for path in plot_outputs],
@@ -331,14 +349,81 @@ def summarize_by_region(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return output_rows
 
 
+def summarize_by_pose(
+    per_image_rows: list[dict[str, Any]],
+    per_landmark_rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Summarize official NME and failure rates by pose when pose metadata exists."""
+    poses = sorted(
+        {
+            str(row["pose"])
+            for row in per_image_rows
+            if _has_value(row.get("pose"))
+        }
+    )
+    output_rows: list[dict[str, Any]] = []
+    for pose in poses:
+        image_rows = [
+            row
+            for row in per_image_rows
+            if str(row.get("pose")) == pose and _is_finite_number(row.get("mean_nme"))
+        ]
+        landmark_rows = [
+            row
+            for row in _evaluable_rows(per_landmark_rows)
+            if str(row.get("pose")) == pose
+        ]
+        errors = [row["normalized_error"] for row in landmark_rows]
+        output_rows.append(
+            {
+                "pose": pose,
+                "image_count": len(image_rows),
+                "evaluable_landmark_count": len(landmark_rows),
+                "mean_nme": _safe_mean([row["mean_nme"] for row in image_rows]),
+                "mean_nme_percent": _scale_fraction_to_percent(
+                    _safe_mean([row["mean_nme"] for row in image_rows])
+                ),
+                "median_nme": _safe_median([row["median_nme"] for row in image_rows]),
+                "median_nme_percent": _scale_fraction_to_percent(
+                    _safe_median([row["median_nme"] for row in image_rows])
+                ),
+                "landmark_mean_nme": _safe_mean(errors),
+                "landmark_mean_nme_percent": _scale_fraction_to_percent(
+                    _safe_mean(errors)
+                ),
+                "failure_rate_nme_gt_0_05": _failure_rate(errors, 0.05),
+                "valid_gt_landmark_count": sum(
+                    int(row.get("number_of_valid_landmarks", 0) or 0)
+                    for row in image_rows
+                ),
+                "invalid_gt_landmark_count": sum(
+                    int(row.get("number_of_invalid_landmarks", 0) or 0)
+                    for row in image_rows
+                ),
+            }
+        )
+    return output_rows
+
+
 def compute_correlations(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Compute Pearson and Spearman confidence-error correlations."""
     output_rows: list[dict[str, Any]] = []
     rows = _evaluable_rows(rows)
-    for scope_name, scope_rows in [("global", rows)] + [
-        (region, [row for row in rows if row["region"] == region])
-        for region in _ordered_regions(rows)
-    ]:
+    scopes = (
+        [("global", rows)]
+        + [
+            (region, [row for row in rows if row["region"] == region])
+            for region in _ordered_regions(rows)
+        ]
+        + [
+            (
+                region,
+                [row for row in rows if row.get("grouped_region") == region],
+            )
+            for region in ["contour", "eyebrows", "eyes", "nose", "mouth"]
+        ]
+    )
+    for scope_name, scope_rows in scopes:
         for signal in CONFIDENCE_SIGNALS:
             pairs = _valid_pairs(scope_rows, signal, "normalized_error")
             if len(pairs) < 2:
@@ -501,10 +586,13 @@ def compute_region_viability_rows(
         mean_nme = float(best["mean_nme"])
         failure_rate = float(best["failure_rate"])
         if mean_nme <= 0.05 and failure_rate <= 0.10:
-            recommendation = "early"
+            recommendation = "use_early"
             suitable = True
         elif mean_nme <= 0.08 and failure_rate <= 0.25:
-            recommendation = "late"
+            recommendation = "use_with_strict_filtering"
+            suitable = True
+        elif mean_nme <= 0.10 and failure_rate <= 0.40:
+            recommendation = "use_late"
             suitable = True
         else:
             recommendation = "exclude_or_delay"
@@ -640,6 +728,7 @@ def write_markdown_report(
     per_image_rows: list[dict[str, Any]],
     correlations: list[dict[str, Any]],
     summary_by_region: list[dict[str, Any]],
+    summary_by_pose: list[dict[str, Any]],
     retention_rows: list[dict[str, Any]],
     viability_rows: list[dict[str, Any]],
     sanity_checks: dict[str, Any],
@@ -670,11 +759,17 @@ def write_markdown_report(
         and _is_finite_number(row.get("mean_nme"))
     ]
     viability_lines = [
-        f"- {row['region']}: {row['recommendation']} using `{row['best_signal_at_25pct']}` at {float(row['retained_fraction']):.2f} retained, mean NME {float(row['mean_nme']):.4f}"
+        f"- {row['region']}: {row['recommendation']} using `{row['best_signal_at_25pct']}` at {float(row['retained_fraction']):.2f} retained, mean NME {float(row['mean_nme']) * 100.0:.2f}%, failure rate {float(row['failure_rate']) * 100.0:.1f}%"
         for row in viability_rows
     ]
-    plot_lines = [f"- `{path.name}`" for path in plot_outputs]
+    plot_lines = figure_markdown_lines(plot_outputs)
     example_lines = [f"- `{path.name}`" for path in example_outputs[:10]]
+    pose_lines = [
+        f"- {row['pose']}: mean image NME {_format_optional_float(row.get('mean_nme_percent'), 2)}%, images={int(row.get('image_count', 0))}"
+        for row in summary_by_pose
+        if _has_value(row.get("pose"))
+    ]
+    metric_warning = sanity_checks.get("official_metric_warning")
     text = "\n".join(
         [
             "# Confidence-Error Analysis Report",
@@ -695,8 +790,21 @@ def write_markdown_report(
             f"- TTA samples: {tta_samples}",
             f"- PCA shape plausibility: {'enabled' if pca_available else 'not computed'}",
             f"- Evaluation protocol: {sanity_checks['evaluation_protocol']}",
+            f"- BabyLand reference NME: {sanity_checks.get('paper_reference_nme_percent', 10.41):.2f}% when checkpoint, data, decoder, crops, normalization, and postprocessing match the paper setup.",
+            f"- Official metric warning: {metric_warning if metric_warning else 'none'}",
             "",
             "This is an offline diagnostic analysis. BabyLand labels are used only to measure confidence-error behavior and must not be used for training, adaptation, or final model tuning without a proper validation split.",
+            "",
+            "## Confidence Signal Semantics",
+            "",
+            "- `heatmap_max`: higher means more confident.",
+            "- `heatmap_variance`: lower means more confident.",
+            "- `heatmap_entropy`: lower means more confident.",
+            "- `peak_sharpness`: higher should mean more confident, but it may be weak.",
+            "- `tta_variance`: lower means more stable and more confident.",
+            "- `pca_reconstruction_error`: image-level shape plausibility, not landmark-level confidence.",
+            "",
+            "Spearman correlation is the main ranking diagnostic for pseudo-label selection because candidate selection is order-based. Pearson correlation is useful for assessing whether a signal has a roughly linear relationship with error magnitude.",
             "",
             "## Best Confidence Signals",
             "",
@@ -704,6 +812,10 @@ def write_markdown_report(
                 best_lines
                 or ["- No valid confidence-error correlations were available."]
             ),
+            "",
+            "## Pose Reliability",
+            "",
+            *(pose_lines or ["- Pose grouping was unavailable in metadata."]),
             "",
             "## Region Reliability",
             "",
@@ -716,6 +828,10 @@ def write_markdown_report(
                 or ["- No region met the retention-summary requirements."]
             ),
             "",
+            "Do not pseudo-label all 72 landmarks initially. Start with internal regions, prioritize the safest retained subsets, and delay or exclude contour at the beginning.",
+            "",
+            "Recommended UDA sequencing: first run a consistency-only baseline, then add conservative region-specific pseudo-labeling if the consistency-only result is stable. Broad all-landmark pseudo-labeling is not supported by this diagnostic.",
+            "",
             "## Grouping Availability",
             "",
             f"- Pose grouping: {'available' if pose_available else 'not available in metadata; skipped'}",
@@ -726,6 +842,7 @@ def write_markdown_report(
             "- `per_landmark_confidence_error.csv`",
             "- `per_image_confidence_error.csv`",
             "- `summary_by_region.csv`",
+            "- `summary_by_pose.csv`",
             "- `retention_curves.csv`",
             "- `failure_detection.csv`",
             "- `confidence_error_correlations.csv`",
@@ -734,7 +851,7 @@ def write_markdown_report(
             "",
             *(
                 plot_lines
-                or ["- Plot generation was skipped because matplotlib was unavailable."]
+                or ["- No figures were generated."]
             ),
             "",
             "## Examples",
@@ -1113,6 +1230,30 @@ def build_sanity_checks(
         "all_images_have_72_valid_landmarks": all_images_have_72_valid,
         "mean_nme_fraction": mean_image_nme,
         "mean_nme_percent": _scale_fraction_to_percent(mean_image_nme),
+    }
+
+
+def build_official_metric_warning(
+    eval_mode: str,
+    mean_nme_percent: Any,
+    reference_percent: float = 10.41,
+    tolerance_percent: float = 0.50,
+) -> dict[str, Any]:
+    """Build a non-blocking warning when BabyLand natural NME differs materially."""
+    warning: str | None = None
+    if eval_mode == "natural" and _is_finite_number(mean_nme_percent):
+        observed = float(mean_nme_percent)
+        if abs(observed - reference_percent) > tolerance_percent:
+            warning = (
+                f"Observed natural BabyLand mean NME is {observed:.2f}%, which is "
+                f"outside +/-{tolerance_percent:.2f}% of the reference "
+                f"{reference_percent:.2f}%. Check checkpoint, crops, decoder, "
+                "normalization, and postprocessing before drawing conclusions."
+            )
+    return {
+        "paper_reference_nme_percent": reference_percent,
+        "paper_reference_tolerance_percent": tolerance_percent,
+        "official_metric_warning": warning,
     }
 
 

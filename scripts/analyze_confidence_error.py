@@ -329,6 +329,9 @@ def main() -> None:
     print(f"[INFO] Evaluable landmark rows: {summary['num_evaluable_landmark_rows']}")
     print(f"[INFO] Mean image NME fraction: {summary['mean_nme_fraction']:.4f}")
     print(f"[INFO] Mean image NME percent: {summary['mean_nme_percent']:.2f}")
+    if summary.get("official_metric_warning"):
+        print(f"[WARNING] {summary['official_metric_warning']}")
+    print(f"[INFO] Figures: {len(summary['outputs']['figures'])}")
     print(f"[INFO] Report: {summary['outputs']['report']}")
 
 
