@@ -41,7 +41,7 @@ SIGNAL_LABELS = {
 }
 
 FIGURE_DESCRIPTIONS = {
-    "fig01_nme_by_pose": "Mean official image NME by pose, with image counts.",
+    "fig01_nme_by_pose": "Mean image NME by pose, with image counts.",
     "fig02_region_nme_and_validity": "Grouped-region NME beside valid/invalid GT landmark counts.",
     "fig03_spearman_pearson_correlation_ranking": "Global Spearman and Pearson confidence-error correlations.",
     "fig04_region_spearman_correlation_heatmap": "Grouped-region Spearman correlations by landmark confidence signal.",
@@ -99,6 +99,7 @@ def save_confidence_error_figure_set(
         if bool(row.get("evaluable_for_error"))
         and _is_finite_number(row.get("normalized_error"))
     ]
+    _remove_stale_legacy_figures(figures_dir)
     outputs: list[Path] = []
     outputs += _plot_nme_by_pose(per_image_rows, pose_summary_rows, figures_dir)
     outputs += _plot_region_nme_and_validity(summary_by_region, figures_dir)
@@ -283,7 +284,7 @@ def _plot_nme_by_pose(
     rows = sorted(rows, key=lambda row: POSE_ORDER.index(row["pose"]) if row["pose"] in POSE_ORDER else 99)
     values = [_percent(row.get("mean_nme")) for row in rows]
     return _bar_plot(
-        "Official BabyLand-72 NME by Pose",
+        "BabyLand-72 NME by Pose",
         [str(row["pose"]) for row in rows],
         values,
         "fig01_nme_by_pose",
@@ -292,13 +293,13 @@ def _plot_nme_by_pose(
         annotations=[f"{value:.1f}%\nn={int(row.get('image_count', 0))}" for value, row in zip(values, rows)],
         colors=[COLORS["red"] if str(row["pose"]) in {"left", "right"} else COLORS["blue"] for row in rows],
         y_max=max(values) * 1.3 if values else 1.0,
-        subtitle="Official GT-valid landmark mask; predicted visibility is not used for error masking",
+        subtitle="GT-valid landmarks only; predicted visibility is not used for error masking",
     )
 
 
 def _plot_region_nme_and_validity(summary_by_region: list[dict[str, Any]], figures_dir: Path) -> list[Path]:
     image, draw = _canvas(width=2600, height=1500)
-    draw.text((120, 70), "Region-Level NME and Official Evaluation Mask", font=FONT_TITLE, fill=COLORS["text"])
+    draw.text((120, 70), "Region-Level NME and GT Validity", font=FONT_TITLE, fill=COLORS["text"])
     draw.text((120, 130), "Green bars: valid GT landmark rows; gray segments: invalid/excluded GT rows", font=FONT_BODY, fill=COLORS["muted"])
     rows = [row for row in summary_by_region if row.get("region") in GROUPED_REGIONS]
     rows = sorted(rows, key=lambda row: GROUPED_REGIONS.index(row["region"]))
@@ -336,7 +337,7 @@ def _plot_region_nme_and_validity(summary_by_region: list[dict[str, Any]], figur
         draw.rectangle((x0, y_total, x1, y_valid), fill=COLORS["light_gray"])
         _draw_centered(draw, ((x0 + x1) / 2, bottom + 40), str(row["region"]).title(), FONT_SMALL)
         _draw_centered(draw, ((x0 + x1) / 2, y_total - 45), f"valid {int(valid)}\ninvalid {int(invalid)}", FONT_TINY)
-    _draw_centered(draw, ((left2 + right2) / 2, top - 60), "Official Evaluation Mask", FONT_SUBTITLE)
+    _draw_centered(draw, ((left2 + right2) / 2, top - 60), "GT Validity", FONT_SUBTITLE)
     return _save(image, figures_dir, "fig02_region_nme_and_validity")
 
 
@@ -345,13 +346,9 @@ def _plot_correlation_ranking(correlations: list[dict[str, Any]], figures_dir: P
     rows = sorted(rows, key=lambda row: abs(float(row.get("spearman", 0.0) or 0.0)))
     image, draw = _canvas(width=2700, height=1450)
     draw.text((120, 70), "Spearman and Pearson Confidence-Error Correlations", font=FONT_TITLE, fill=COLORS["text"])
-    draw.text((120, 130), "Spearman ranks pseudo-label candidates; Pearson reflects linear error magnitude.", font=FONT_BODY, fill=COLORS["muted"])
+    draw.text((120, 130), "Spearman ranks pseudo-label candidates; Pearson reflects linear error magnitude. Blue: confidence signals; orange: uncertainty signals.", font=FONT_BODY, fill=COLORS["muted"])
     _draw_hbar_panel(draw, rows, "spearman", 650, 260, 1530, 1220, "Spearman", -0.75, 0.75)
     _draw_hbar_panel(draw, rows, "pearson", 1720, 260, 2600, 1220, "Pearson", -0.75, 0.75)
-    draw.rectangle((1220, 1250, 1250, 1280), fill=COLORS["blue"])
-    draw.text((1265, 1248), "Higher = more confidence", font=FONT_SMALL, fill=COLORS["text"])
-    draw.rectangle((1640, 1250, 1670, 1280), fill=COLORS["orange"])
-    draw.text((1685, 1248), "Higher = more uncertainty", font=FONT_SMALL, fill=COLORS["text"])
     return _save(image, figures_dir, "fig03_spearman_pearson_correlation_ranking")
 
 
@@ -466,11 +463,11 @@ def _horizontal_bar(
         if reference_label:
             draw.text((x + 10, top + 10), reference_label, font=FONT_SMALL, fill=COLORS["red"])
     row_h = (bottom - top) / max(len(labels), 1)
+    baseline = left if x_min > 0 else _scale(0, x_min, x_max, left, right)
     for i, (label, value) in enumerate(zip(labels, values)):
         cy = top + row_h * (i + 0.5)
-        x0 = _scale(0, x_min, x_max, left, right)
         x1 = _scale(value, x_min, x_max, left, right)
-        draw.rectangle((min(x0, x1), cy - row_h * 0.28, max(x0, x1), cy + row_h * 0.28), fill=COLORS["teal"])
+        draw.rectangle((min(baseline, x1), cy - row_h * 0.28, max(baseline, x1), cy + row_h * 0.28), fill=COLORS["teal"])
         draw.text((120, cy - 16), label, font=FONT_BODY, fill=COLORS["text"])
         draw.text((x1 + 12, cy - 15), f"{value:.2f}", font=FONT_SMALL, fill=COLORS["text"])
     _draw_centered(draw, ((left + right) / 2, bottom + 95), x_label, FONT_BODY)
@@ -609,7 +606,11 @@ def _plot_density(
         x_label = label
     left, top, right, bottom = 260, 220, 1980, 1180
     x_min, x_max = np.percentile(x, [0.5, 99.5])
-    y_min, y_max = 0.0, float(np.percentile(y, 99.0))
+    y_min = 0.0
+    y_p90 = float(np.percentile(y, 90.0))
+    y_p95 = float(np.percentile(y, 95.0))
+    y_p99 = float(np.percentile(y, 99.0))
+    y_max = min(y_p99, max(20.0, y_p90 * 1.6, y_p95 * 1.15))
     x = np.clip(x, x_min, x_max)
     y = np.clip(y, y_min, y_max)
     hist, x_edges, y_edges = np.histogram2d(x, y, bins=[70, 50], range=[[x_min, x_max], [y_min, y_max]])
@@ -643,9 +644,12 @@ def _plot_density(
         draw.line(trend, fill=COLORS["red"], width=5)
     _draw_centered(draw, ((left + right) / 2, bottom + 95), x_label, FONT_BODY)
     draw.text((left, top - 58), "NME (%)", font=FONT_BODY, fill=COLORS["text"])
-    draw.text((right + 45, top + 10), "Darker = more points", font=FONT_SMALL, fill=COLORS["muted"])
-    draw.line((right + 45, top + 65, right + 105, top + 65), fill=COLORS["red"], width=5)
-    draw.text((right + 125, top + 50), "Binned median", font=FONT_SMALL, fill=COLORS["text"])
+    legend_x = left + 35
+    legend_y = top + 25
+    draw.rounded_rectangle((legend_x - 18, legend_y - 18, legend_x + 460, legend_y + 70), radius=8, fill=(255, 255, 255), outline=COLORS["grid"], width=2)
+    draw.text((legend_x, legend_y - 5), "Darker = more points", font=FONT_SMALL, fill=COLORS["muted"])
+    draw.line((legend_x, legend_y + 45, legend_x + 60, legend_y + 45), fill=COLORS["red"], width=5)
+    draw.text((legend_x + 78, legend_y + 30), "Binned median", font=FONT_SMALL, fill=COLORS["text"])
     return _save(image, figures_dir, name)
 
 
@@ -869,6 +873,24 @@ def _failed_landmark_counts(per_landmark_rows: list[dict[str, Any]]) -> dict[Any
         if bool(row.get("evaluable_for_error")) and _is_finite_number(row.get("normalized_error")) and float(row["normalized_error"]) > 0.05:
             counts[row.get("image_id")] = counts.get(row.get("image_id"), 0) + 1
     return counts
+
+
+def _remove_stale_legacy_figures(figures_dir: Path) -> None:
+    """Remove old pre-integrated figure names from the target figures directory."""
+    stale_names = [
+        "scatter_heatmap_variance_vs_normalized_error.png",
+        "boxplot_nme_by_heatmap_variance_quantile.png",
+        "region_mean_nme_and_confidence.png",
+        "retention_curve_global.png",
+        "failure_detection_roc.png",
+    ]
+    for name in stale_names:
+        path = figures_dir / name
+        try:
+            if path.exists():
+                path.unlink()
+        except OSError:
+            continue
 
 
 def _ordered_viability_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

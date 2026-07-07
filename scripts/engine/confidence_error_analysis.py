@@ -791,7 +791,7 @@ def write_markdown_report(
             f"- PCA shape plausibility: {'enabled' if pca_available else 'not computed'}",
             f"- Evaluation protocol: {sanity_checks['evaluation_protocol']}",
             f"- BabyLand reference NME: {sanity_checks.get('paper_reference_nme_percent', 10.41):.2f}% when checkpoint, data, decoder, crops, normalization, and postprocessing match the paper setup.",
-            f"- Official metric warning: {metric_warning if metric_warning else 'none'}",
+            f"- Reference metric warning: {metric_warning if metric_warning else 'none'}",
             "",
             "This is an offline diagnostic analysis. BabyLand labels are used only to measure confidence-error behavior and must not be used for training, adaptation, or final model tuning without a proper validation split.",
             "",
