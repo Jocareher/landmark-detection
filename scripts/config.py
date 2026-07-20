@@ -90,6 +90,13 @@ NORMALIZER_LAMBDA_L1 = 0.0
 NORMALIZER_LAMBDA_TV = 0.0
 NORMALIZER_VISUAL_EXAMPLES = 32
 NORMALIZER_CHANGED_PIXEL_THRESHOLDS = (1e-4, 1e-3, 1e-2)
+NORMALIZER_MONITORING_ENABLED = True
+NORMALIZER_MONITOR_PROBES = 4
+NORMALIZER_MONITOR_STEPS = (0, 1, 5, 10, 20)
+NORMALIZER_TTA_MONITOR_STEPS = (0, 1, 5, 10, 20)
+NORMALIZER_MONITOR_DIFFERENCE_MAX = 0.15
+NORMALIZER_MONITOR_REGISTRATION_WARNING_PX = 1.0
+NORMALIZER_MONITOR_EDGE_CORRELATION_WARNING = 0.90
 NORMALIZER_SANITY_ATOL = 1e-6
 NORMALIZER_SANITY_RTOL = 1e-5
 SAVE_NORMALIZER_VISUAL_EXAMPLES = True
@@ -250,6 +257,13 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "normalizer_lambda_tv": NORMALIZER_LAMBDA_TV,
     "normalizer_visual_examples": NORMALIZER_VISUAL_EXAMPLES,
     "normalizer_changed_pixel_thresholds": NORMALIZER_CHANGED_PIXEL_THRESHOLDS,
+    "normalizer_monitoring_enabled": NORMALIZER_MONITORING_ENABLED,
+    "normalizer_monitor_probes": NORMALIZER_MONITOR_PROBES,
+    "normalizer_monitor_steps": NORMALIZER_MONITOR_STEPS,
+    "normalizer_tta_monitor_steps": NORMALIZER_TTA_MONITOR_STEPS,
+    "normalizer_monitor_difference_max": NORMALIZER_MONITOR_DIFFERENCE_MAX,
+    "normalizer_monitor_registration_warning_px": NORMALIZER_MONITOR_REGISTRATION_WARNING_PX,
+    "normalizer_monitor_edge_correlation_warning": NORMALIZER_MONITOR_EDGE_CORRELATION_WARNING,
     "normalizer_sanity_atol": NORMALIZER_SANITY_ATOL,
     "normalizer_sanity_rtol": NORMALIZER_SANITY_RTOL,
     "save_normalizer_visual_examples": SAVE_NORMALIZER_VISUAL_EXAMPLES,
@@ -379,6 +393,7 @@ def load_yaml_config(
         "checkpoint": "checkpoint_path",
         "normalizer_normalization": "normalizer_internal_normalization",
         "normalizer_image_regularization": "normalizer_image_regularization_enabled",
+        "normalizer_monitoring": "normalizer_monitoring_enabled",
         "epochs": "num_epochs",
         "lr": "learning_rate",
         "brightness_jitter": "color_jitter_brightness",

@@ -164,6 +164,50 @@ def parse_args() -> argparse.Namespace:
         default=defaults.normalizer_visual_examples,
     )
     parser.add_argument(
+        "--normalizer-monitoring",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.normalizer_monitoring_enabled,
+        help="Monitor a fixed validation probe set while training the normalizer.",
+    )
+    parser.add_argument(
+        "--normalizer-monitor-probes",
+        type=int,
+        default=defaults.normalizer_monitor_probes,
+        help="Number of unchanged validation images used for normalizer monitoring.",
+    )
+    parser.add_argument(
+        "--normalizer-monitor-steps",
+        type=int,
+        nargs="+",
+        default=defaults.normalizer_monitor_steps,
+        help="One-based source-training epochs to capture, plus 0 for initialization.",
+    )
+    parser.add_argument(
+        "--normalizer-tta-monitor-steps",
+        type=int,
+        nargs="+",
+        default=defaults.normalizer_tta_monitor_steps,
+        help="Future TTA steps to capture; the final step is always captured.",
+    )
+    parser.add_argument(
+        "--normalizer-monitor-difference-max",
+        type=float,
+        default=defaults.normalizer_monitor_difference_max,
+        help="Fixed RGB difference represented by white in every difference panel.",
+    )
+    parser.add_argument(
+        "--normalizer-monitor-registration-warning-px",
+        type=float,
+        default=defaults.normalizer_monitor_registration_warning_px,
+        help="Absolute phase-correlation shift that triggers a geometry warning.",
+    )
+    parser.add_argument(
+        "--normalizer-monitor-edge-correlation-warning",
+        type=float,
+        default=defaults.normalizer_monitor_edge_correlation_warning,
+        help="Edge correlation below which a geometry warning is emitted.",
+    )
+    parser.add_argument(
         "--batch-size",
         type=int,
         default=defaults.batch_size,
@@ -517,6 +561,17 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.normalizer_lambda_l1 = args.normalizer_lambda_l1
     config.normalizer_lambda_tv = args.normalizer_lambda_tv
     config.normalizer_visual_examples = args.normalizer_visual_examples
+    config.normalizer_monitoring_enabled = args.normalizer_monitoring
+    config.normalizer_monitor_probes = args.normalizer_monitor_probes
+    config.normalizer_monitor_steps = tuple(args.normalizer_monitor_steps)
+    config.normalizer_tta_monitor_steps = tuple(args.normalizer_tta_monitor_steps)
+    config.normalizer_monitor_difference_max = args.normalizer_monitor_difference_max
+    config.normalizer_monitor_registration_warning_px = (
+        args.normalizer_monitor_registration_warning_px
+    )
+    config.normalizer_monitor_edge_correlation_warning = (
+        args.normalizer_monitor_edge_correlation_warning
+    )
     config.dataset_root = args.dataset_root
     config.runs_dir = args.output_dir
     config.cache_dir = args.cache_dir
@@ -655,6 +710,14 @@ def validate_experiment_config(config: ExperimentConfig) -> None:
         raise ValueError(
             "Wasserstein normalizer experiments require barycenter decoding."
         )
+    if config.normalizer_monitor_probes <= 0:
+        raise ValueError("normalizer_monitor_probes must be positive.")
+    if config.normalizer_monitor_difference_max <= 0:
+        raise ValueError("normalizer_monitor_difference_max must be positive.")
+    if any(step < 0 for step in config.normalizer_monitor_steps):
+        raise ValueError("normalizer_monitor_steps cannot contain negative values.")
+    if any(step < 0 for step in config.normalizer_tta_monitor_steps):
+        raise ValueError("normalizer_tta_monitor_steps cannot contain negative values.")
     if config.experiment_mode == "normalizer_sanity":
         config.num_epochs = 0
         config.train_normalizer = False
@@ -1100,6 +1163,18 @@ def main() -> None:
             wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
             visualize_every_n_epochs=config.visualize_every_n_epochs,
             num_visualization_images=config.num_visualization_images,
+            normalizer_monitoring_enabled=config.normalizer_monitoring_enabled,
+            normalizer_monitor_probes=config.normalizer_monitor_probes,
+            normalizer_monitor_steps=tuple(config.normalizer_monitor_steps),
+            normalizer_monitor_difference_max=config.normalizer_monitor_difference_max,
+            normalizer_monitor_registration_warning_px=(
+                config.normalizer_monitor_registration_warning_px
+            ),
+            normalizer_monitor_edge_correlation_warning=(
+                config.normalizer_monitor_edge_correlation_warning
+            ),
+            normalization_mean=tuple(config.normalization_mean),
+            normalization_std=tuple(config.normalization_std),
         )
         print("[INFO] Training finished.")
         print(f"[INFO] Best epoch: {summary['best_epoch']}")

@@ -91,6 +91,53 @@ When `use_wandb: true` (or `--use-wandb`) is selected, epoch-level training and
 validation losses, NME, PCA loss, image L1/TV diagnostics, final official
 evaluation scalars, and per-dataset normalizer diagnostics are logged to W&B.
 
+## Fixed-probe normalizer monitoring
+
+Trainable-normalizer modes snapshot a fixed set of validation tensors once and
+reuse those exact tensors throughout the run. By default, four probes are
+captured at initialization and after epochs 1, 5, 10, and 20, plus the final
+epoch. This schedule gives substantially more evidence than logging a fresh
+batch every epoch while adding only a few extra forward passes to an entire
+training run. It can be changed with:
+
+```yaml
+normalizer_monitoring: true
+normalizer_monitor_probes: 4
+normalizer_monitor_steps: [0, 1, 5, 10, 20]
+normalizer_tta_monitor_steps: [0, 1, 5, 10, 20]
+normalizer_monitor_difference_max: 0.15
+```
+
+Each raw panel contains the unchanged input, normalized image, absolute RGB
+difference with a fixed scale, landmarks from the detector without the
+normalizer, landmarks after normalization, and source ground truth. Ground
+truth appears only for synthetic validation probes and is never passed to the
+normalizer or used as an adaptation objective.
+
+The monitor records per-channel mean and standard deviation, luminance
+contrast, robust dynamic range, high-frequency energy, pixel residuals,
+heatmap peak confidence, decoded landmark displacement, and source-only
+localization error. Phase-correlation registration and edge correlation are
+used to flag possible geometry changes. These checks can reveal translations
+or altered edge structure, but visual review remains necessary to identify
+color collapse, excessive smoothing, hallucinated texture, or
+identity-dependent effects.
+
+Raw outputs are saved under
+`normalizer_monitoring/source_validation/`, including per-checkpoint panels,
+CSV metrics, checkpoint grids, and GIF animations. The same panels and numeric
+summaries are sent to W&B when enabled. Logging more than approximately four
+probes or capturing every epoch is discouraged unless a short diagnostic run
+is being performed, because image encoding and W&B uploads can otherwise
+become a noticeable cost.
+
+`NormalizerProbeMonitor.capture(...)` is also ready for a future test-time
+adaptation loop. That loop should call it for the same target image at steps 0,
+1, 5, 10, 20, and the final step, pass both adaptation and structural-prior
+losses, and omit ground truth from the real-image probe batch. The monitor then
+saves `adaptation_losses.csv` and `adaptation_losses.png`. No executable TTA
+optimization is introduced by the current experiments.
+
 Optional residual regularization is enabled in the shared YAML with
 `normalizer_image_regularization`, `normalizer_lambda_l1`, and
 `normalizer_lambda_tv`, or with the corresponding CLI options. It is disabled
@@ -108,6 +155,8 @@ Each run keeps the existing evaluation outputs and adds:
 - per-dataset image-change and prediction-drift CSV/JSON files in `metrics/`;
 - input, normalized, absolute-residual, and side-by-side examples in
   `visualizations/<dataset>/`;
+- fixed-probe checkpoint panels, grids, GIFs, and raw statistics in
+  `normalizer_monitoring/source_validation/`;
 - `reports/report.md`.
 
 The diagnostic report includes mean L1/L2 and maximum image difference,

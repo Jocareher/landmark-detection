@@ -15,7 +15,12 @@ from .metrics import (
     decode_heatmaps_to_image_coords,
 )
 from .normalizer_experiments import compute_image_regularization
+from .normalizer_monitoring import (
+    NormalizerProbeMonitor,
+    should_capture_source_step,
+)
 from .pca_shape_prior import load_pca_shape_prior
+from ..models import NormalizedLandmarker
 from ..utils.visualization import visualize_predicted_heatmaps_on_train_batch
 
 
@@ -386,6 +391,14 @@ def train_model(
     wasserstein_softmax_temperature: float = 1.0,
     visualize_every_n_epochs: int = 5,
     num_visualization_images: int = 4,
+    normalizer_monitoring_enabled: bool = False,
+    normalizer_monitor_probes: int = 4,
+    normalizer_monitor_steps: tuple[int, ...] = (0, 1, 5, 10, 20),
+    normalizer_monitor_difference_max: float = 0.15,
+    normalizer_monitor_registration_warning_px: float = 1.0,
+    normalizer_monitor_edge_correlation_warning: float = 0.90,
+    normalization_mean: tuple[float, ...] = (0.485, 0.456, 0.406),
+    normalization_std: tuple[float, ...] = (0.229, 0.224, 0.225),
 ) -> dict[str, Any]:
     """Execute the full training pipeline, including validation and checkpointing."""
     wandb = None
@@ -414,6 +427,26 @@ def train_model(
             config=wandb_config,
             reinit=True,
         )
+
+    normalizer_monitor = None
+    if normalizer_monitoring_enabled and isinstance(model, NormalizedLandmarker):
+        normalizer_monitor = NormalizerProbeMonitor.from_dataloader(
+            model=model,
+            dataloader=val_loader,
+            device=device,
+            output_dir=output_dir / "normalizer_monitoring" / "source_validation",
+            mean=normalization_mean,
+            std=normalization_std,
+            coordinate_decoder=coordinate_decoder,
+            softmax_temperature=wasserstein_softmax_temperature,
+            max_images=normalizer_monitor_probes,
+            difference_display_max=normalizer_monitor_difference_max,
+            registration_warning_px=normalizer_monitor_registration_warning_px,
+            edge_correlation_warning=normalizer_monitor_edge_correlation_warning,
+            wandb_module=wandb if use_wandb else None,
+        )
+        if should_capture_source_step(0, normalizer_monitor_steps):
+            normalizer_monitor.capture(stage="source_validation", step=0)
 
     pca_shape_prior = None
     if pca_prior_path is not None:
@@ -565,10 +598,24 @@ def train_model(
             )
             print(f"Saved predicted heatmap visualizations for epoch {epoch + 1}.")
 
+        epoch_number = epoch + 1
+        if normalizer_monitor is not None and should_capture_source_step(
+            epoch_number, normalizer_monitor_steps
+        ):
+            normalizer_monitor.capture(stage="source_validation", step=epoch_number)
+
         scheduler.step()
         if patience_counter >= patience:
             print(f"Early stopping triggered at epoch {epoch + 1}.")
             break
+
+    final_epoch = len(history["train"])
+    if normalizer_monitor is not None:
+        normalizer_monitor.capture(
+            stage="source_validation",
+            step=final_epoch,
+            is_final=True,
+        )
 
     if use_wandb and wandb is not None and finish_wandb:
         wandb.finish()

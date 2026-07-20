@@ -9,6 +9,7 @@ from torch import nn
 
 from scripts.config import load_yaml_config
 from scripts.engine.normalizer_experiments import run_normalizer_diagnostics
+from scripts.engine.normalizer_monitoring import NormalizerProbeMonitor
 from scripts.models import (
     NormalizedLandmarker,
     ResidualImageNormalizer,
@@ -153,3 +154,51 @@ def test_shared_yaml_lists_every_argparser_destination() -> None:
         Path("configs/normalizer_experiments.yaml").read_text(encoding="utf-8")
     )
     assert set(yaml_payload["arguments"]) == parser_destinations
+
+
+def test_fixed_probe_monitor_saves_panels_metrics_and_tta_losses(
+    tmp_path: Path,
+) -> None:
+    wrapper = NormalizedLandmarker(
+        landmarker=DummyLandmarker(),
+        normalizer=ResidualImageNormalizer(initialize_identity=True),
+    )
+    probe_batch = {
+        "image": torch.zeros(1, 3, 8, 8),
+        "landmarks": torch.tensor([[[2.0, 2.0], [4.0, 4.0], [6.0, 6.0]]]),
+        "visibility": torch.ones(1, 3),
+        "metadata": {"sample_id": ["fixed-probe"]},
+    }
+    monitor = NormalizerProbeMonitor(
+        model=wrapper,
+        probe_batch=probe_batch,
+        device=torch.device("cpu"),
+        output_dir=tmp_path,
+        mean=(0.485, 0.456, 0.406),
+        std=(0.229, 0.224, 0.225),
+        coordinate_decoder="barycenter",
+        softmax_temperature=1.0,
+        max_images=1,
+    )
+    summary = monitor.capture(
+        stage="tta",
+        step=0,
+        adaptation_loss=1.0,
+        structural_prior_loss=0.5,
+    )
+    monitor.capture(
+        stage="tta",
+        step=1,
+        adaptation_loss=0.8,
+        structural_prior_loss=0.4,
+        is_final=True,
+    )
+
+    assert summary["mean_mean_absolute_pixel_difference"] == 0.0
+    assert summary["geometry_warning_count"] == 0.0
+    assert (tmp_path / "panels/tta/step_000000/fixed-probe.png").exists()
+    assert (tmp_path / "checkpoint_grids/fixed-probe.png").exists()
+    assert (tmp_path / "animations/fixed-probe.gif").exists()
+    assert (tmp_path / "probe_metrics.csv").exists()
+    assert (tmp_path / "adaptation_losses.csv").exists()
+    assert (tmp_path / "adaptation_losses.png").exists()

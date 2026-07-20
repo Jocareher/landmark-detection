@@ -22,6 +22,13 @@ arguments:
   normalizer_lambda_l1: 0.0
   normalizer_lambda_tv: 0.0
   normalizer_visual_examples: 32
+  normalizer_monitoring: true
+  normalizer_monitor_probes: 4
+  normalizer_monitor_steps: [0, 1, 5, 10, 20]
+  normalizer_tta_monitor_steps: [0, 1, 5, 10, 20]
+  normalizer_monitor_difference_max: 0.15
+  normalizer_monitor_registration_warning_px: 1.0
+  normalizer_monitor_edge_correlation_warning: 0.90
 
   batch_size: 16
   eval_batch_size: 32
