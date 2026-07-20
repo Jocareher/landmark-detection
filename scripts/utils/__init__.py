@@ -10,10 +10,12 @@ from .synthetic_labels import (
     format_synthetic_yaw_group,
     parse_synthetic_landmark_label,
 )
+from .training_progress import TrainingProgressReporter
 
 __all__ = [
     "SYNTHETIC_YAW_ANGLES",
     "UNKNOWN_SYNTHETIC_YAW_GROUP",
+    "TrainingProgressReporter",
     "format_synthetic_yaw_group",
     "get_default_device",
     "parse_synthetic_landmark_label",

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import csv
+import math
 import time
 from pathlib import Path
 from typing import Any
 
 import torch
-from tqdm import tqdm
 
 from .losses import compute_multitask_loss
 from .metrics import (
@@ -21,7 +21,7 @@ from .normalizer_monitoring import (
 )
 from .pca_shape_prior import load_pca_shape_prior
 from ..models import NormalizedLandmarker
-from ..utils.visualization import visualize_predicted_heatmaps_on_train_batch
+from ..utils.training_progress import TrainingProgressReporter
 
 
 def _forward_with_normalized_images(
@@ -54,6 +54,41 @@ def _add_image_regularization(
     )
 
 
+def _compute_visible_box_normalized_nme(
+    predictions: torch.Tensor,
+    targets: torch.Tensor,
+    visibility: torch.Tensor,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Compute per-image box-normalized NME over visible landmarks only.
+
+    The normalization box is computed from the complete target shape, matching
+    ``compute_box_normalized_nme``. Only the final point-error average is masked
+    by target visibility. Images without a valid visible landmark return NaN
+    and are excluded from the running diagnostic average.
+    """
+    if predictions.shape != targets.shape or predictions.ndim != 3:
+        raise ValueError("Predictions and targets must have shape (B, K, 2).")
+    if visibility.shape != targets.shape[:2]:
+        raise ValueError("Visibility must have shape (B, K).")
+    finite_targets = torch.isfinite(targets).all(dim=-1)
+    finite_predictions = torch.isfinite(predictions).all(dim=-1)
+    valid = (visibility > 0) & finite_targets & finite_predictions
+    minimum = targets.amin(dim=1)
+    maximum = targets.amax(dim=1)
+    box_size = maximum - minimum
+    normalization = torch.sqrt((box_size[:, 0] * box_size[:, 1]).clamp_min(float(eps)))
+    point_errors = torch.linalg.vector_norm(predictions - targets, dim=-1)
+    counts = valid.sum(dim=1)
+    visible_error = (point_errors * valid).sum(dim=1) / counts.clamp_min(1)
+    values = visible_error / normalization
+    return torch.where(
+        counts > 0,
+        values,
+        torch.full_like(values, float("nan")),
+    )
+
+
 def run_epoch(
     model: torch.nn.Module,
     dataloader: torch.utils.data.DataLoader,
@@ -75,6 +110,8 @@ def run_epoch(
     coordinate_decoder: str = "argmax_subpixel",
     wasserstein_softmax_temperature: float = 1.0,
     progress_desc: str | None = None,
+    progress_reporter: TrainingProgressReporter | None = None,
+    learning_rate: float = 0.0,
 ) -> dict[str, float]:
     """Run one full training or validation epoch and aggregate split metrics."""
     if training and optimizer is None:
@@ -89,18 +126,12 @@ def run_epoch(
     image_l1_loss_meter = AverageMeter()
     image_tv_loss_meter = AverageMeter()
     nme_meter = AverageMeter()
+    visible_nme_meter = AverageMeter()
     batch_time_meter = AverageMeter()
     autocast_device = device.type
     epoch_start_time = time.time()
-    progress_bar = tqdm(
-        dataloader,
-        desc=progress_desc or ("Train" if training else "Val"),
-        dynamic_ncols=True,
-        leave=False,
-        ascii=False,
-    )
 
-    for batch in progress_bar:
+    for batch in dataloader:
         batch_start_time = time.time()
         images = batch["image"].to(device, non_blocking=True)
         heatmaps = batch["heatmaps"].to(device, non_blocking=True)
@@ -180,6 +211,10 @@ def run_epoch(
                     )
             total_loss = loss_dict["total_loss"]
 
+        if not bool(torch.isfinite(total_loss)) and progress_reporter is not None:
+            phase = progress_desc or ("TRAIN" if training else "VALIDATION")
+            progress_reporter.error(f"Non-finite total loss detected during {phase}.")
+
         batch_size = images.size(0)
         total_loss_meter.update(total_loss.item(), batch_size)
         full_landmark_loss_meter.update(
@@ -206,19 +241,33 @@ def run_epoch(
                 preds=pred_landmarks, targets=batch_on_device["landmarks"]
             )
             nme_meter.update(float(nme_values.mean()), batch_size)
+            visible_nme_values = _compute_visible_box_normalized_nme(
+                predictions=pred_landmarks,
+                targets=batch_on_device["landmarks"],
+                visibility=visibility,
+            )
+            finite_visible_nme = visible_nme_values[torch.isfinite(visible_nme_values)]
+            if finite_visible_nme.numel() > 0:
+                visible_nme_meter.update(
+                    float(finite_visible_nme.mean()),
+                    int(finite_visible_nme.numel()),
+                )
 
         batch_time_meter.update(time.time() - batch_start_time)
-        progress_bar.set_postfix(
-            total=f"{total_loss_meter.avg:.4f}",
-            full=f"{full_landmark_loss_meter.avg:.4f}",
-            visible=f"{visible_landmark_loss_meter.avg:.4f}",
-            vis=f"{visibility_loss_meter.avg:.4f}",
-            pca=f"{pca_projection_loss_meter.avg:.4f}",
-            img=f"{image_l1_loss_meter.avg + image_tv_loss_meter.avg:.4f}",
-            nme=f"{nme_meter.avg:.4f}",
-        )
-
-    progress_bar.close()
+        if progress_reporter is not None:
+            update = (
+                progress_reporter.update_train_batch
+                if training
+                else progress_reporter.update_validation_batch
+            )
+            update(
+                total_loss=total_loss_meter.avg,
+                nme=nme_meter.avg if nme_meter.count else None,
+                visible_nme=(
+                    visible_nme_meter.avg if visible_nme_meter.count else None
+                ),
+                learning_rate=learning_rate,
+            )
 
     return {
         "total_loss": total_loss_meter.avg,
@@ -228,7 +277,10 @@ def run_epoch(
         "pca_loss": pca_projection_loss_meter.avg,
         "image_l1_loss": image_l1_loss_meter.avg,
         "image_tv_loss": image_tv_loss_meter.avg,
-        "nme": nme_meter.avg,
+        "nme": nme_meter.avg if nme_meter.count else float("nan"),
+        "visible_nme": (
+            visible_nme_meter.avg if visible_nme_meter.count else float("nan")
+        ),
         "batch_time": batch_time_meter.avg,
         "epoch_time": time.time() - epoch_start_time,
     }
@@ -256,50 +308,6 @@ def save_checkpoint(
     )
 
 
-def print_epoch_summary(
-    epoch: int,
-    num_epochs: int,
-    train_metrics: dict[str, float],
-    val_metrics: dict[str, float],
-    best_val_loss: float,
-    patience_counter: int,
-    patience: int,
-) -> None:
-    """Print a compact terminal summary for the current epoch."""
-    print("=" * 120)
-    print(f"Epoch {epoch + 1:03d}/{num_epochs:03d}")
-    print("-" * 120)
-    print(
-        f"Train | total: {train_metrics['total_loss']:.6f} | "
-        f"full: {train_metrics['full_landmark_loss']:.6f} | "
-        f"visible: {train_metrics['visible_landmark_loss']:.6f} | "
-        f"vis: {train_metrics['visibility_loss']:.6f} | "
-        f"pca: {train_metrics['pca_loss']:.6f} | "
-        f"image L1/TV: {train_metrics['image_l1_loss']:.6f}/"
-        f"{train_metrics['image_tv_loss']:.6f} | "
-        f"NME: {train_metrics['nme']:.6f}"
-    )
-    print(
-        f"Val   | total: {val_metrics['total_loss']:.6f} | "
-        f"full: {val_metrics['full_landmark_loss']:.6f} | "
-        f"visible: {val_metrics['visible_landmark_loss']:.6f} | "
-        f"vis: {val_metrics['visibility_loss']:.6f} | "
-        f"pca: {val_metrics['pca_loss']:.6f} | "
-        f"image L1/TV: {val_metrics['image_l1_loss']:.6f}/"
-        f"{val_metrics['image_tv_loss']:.6f} | "
-        f"NME: {val_metrics['nme']:.6f}"
-    )
-    print(
-        f"Time  | train: {train_metrics['epoch_time']:.2f}s | "
-        f"val: {val_metrics['epoch_time']:.2f}s | "
-        f"epoch: {train_metrics['epoch_time'] + val_metrics['epoch_time']:.2f}s"
-    )
-    print(
-        f"Best val total loss: {best_val_loss:.6f} | Early stopping: {patience_counter}/{patience}"
-    )
-    print("=" * 120)
-
-
 def initialize_results_csv(csv_path: str | Path) -> None:
     """Create the metrics CSV file and header if it does not exist yet."""
     csv_path = Path(csv_path)
@@ -320,6 +328,7 @@ def initialize_results_csv(csv_path: str | Path) -> None:
                 "image_l1_loss",
                 "image_tv_loss",
                 "nme",
+                "visible_nme",
                 "lr",
                 "landmark_loss",
                 "coordinate_decoder",
@@ -353,12 +362,33 @@ def append_results_row(
                 metrics["image_l1_loss"],
                 metrics["image_tv_loss"],
                 metrics["nme"],
+                metrics.get("visible_nme", float("nan")),
                 lr,
                 landmark_loss,
                 coordinate_decoder,
                 metrics["epoch_time"],
             ]
         )
+
+
+def _device_display_name(device: torch.device) -> str:
+    """Return a human-readable accelerator name without changing the device."""
+    if device.type == "cuda" and torch.cuda.is_available():
+        index = (
+            device.index if device.index is not None else torch.cuda.current_device()
+        )
+        return torch.cuda.get_device_name(index)
+    if device.type == "mps":
+        return "Apple Metal Performance Shaders"
+    return "CPU"
+
+
+def _quiet_wandb_settings(wandb_module: Any) -> Any | None:
+    """Build W&B settings that suppress startup chatter but retain warnings."""
+    try:
+        return wandb_module.Settings(console="off", quiet=True)
+    except (AttributeError, TypeError):
+        return None
 
 
 def train_model(
@@ -399,6 +429,7 @@ def train_model(
     normalizer_monitor_edge_correlation_warning: float = 0.90,
     normalization_mean: tuple[float, ...] = (0.485, 0.456, 0.406),
     normalization_std: tuple[float, ...] = (0.229, 0.224, 0.225),
+    progress_reporter: TrainingProgressReporter | None = None,
 ) -> dict[str, Any]:
     """Execute the full training pipeline, including validation and checkpointing."""
     wandb = None
@@ -420,13 +451,37 @@ def train_model(
         else None
     )
 
+    wandb_run = None
     if use_wandb and wandb is not None:
-        wandb.init(
-            project=project_name,
-            name=run_name,
-            config=wandb_config,
-            reinit=True,
+        init_kwargs: dict[str, Any] = {
+            "project": project_name,
+            "name": run_name,
+            "config": wandb_config,
+            "reinit": True,
+        }
+        quiet_settings = _quiet_wandb_settings(wandb)
+        if quiet_settings is not None:
+            init_kwargs["settings"] = quiet_settings
+        wandb_run = wandb.init(
+            **init_kwargs,
         )
+
+    reporter = progress_reporter or TrainingProgressReporter()
+    wandb_url = getattr(wandb_run, "url", None) if wandb_run is not None else None
+    reporter.start_run(
+        run_name=run_name,
+        device=str(device),
+        device_name=_device_display_name(device),
+        train_samples=len(train_loader.dataset),
+        validation_samples=len(val_loader.dataset),
+        batch_size=train_loader.batch_size,
+        epochs=num_epochs,
+        optimizer_name=optimizer.__class__.__name__,
+        learning_rate=float(optimizer.param_groups[0]["lr"]),
+        wandb_project=project_name if use_wandb else None,
+        wandb_url=wandb_url,
+        checkpoint_dir=output_dir,
+    )
 
     normalizer_monitor = None
     if normalizer_monitoring_enabled and isinstance(model, NormalizedLandmarker):
@@ -458,6 +513,8 @@ def train_model(
         raise ValueError("lambda_pca_projection > 0 requires a valid pca_prior_path.")
 
     best_val_loss = float("inf")
+    best_val_nme = float("inf")
+    best_nme_epoch = -1
     best_epoch = -1
     patience_counter = 0
     history = {"train": [], "val": []}
@@ -465,6 +522,8 @@ def train_model(
     for epoch in range(num_epochs):
         # One loop iteration corresponds to one complete train/validation cycle.
         current_lr = optimizer.param_groups[0]["lr"]
+        reporter.start_epoch(epoch + 1, num_epochs, current_lr)
+        reporter.start_train(len(train_loader))
         train_metrics = run_epoch(
             model=model,
             dataloader=train_loader,
@@ -486,7 +545,11 @@ def train_model(
             coordinate_decoder=coordinate_decoder,
             wasserstein_softmax_temperature=wasserstein_softmax_temperature,
             progress_desc=f"Train {epoch + 1:03d}",
+            progress_reporter=reporter,
+            learning_rate=current_lr,
         )
+        reporter.finish_train(train_metrics)
+        reporter.start_validation(len(val_loader))
         val_metrics = run_epoch(
             model=model,
             dataloader=val_loader,
@@ -508,7 +571,10 @@ def train_model(
             coordinate_decoder=coordinate_decoder,
             wasserstein_softmax_temperature=wasserstein_softmax_temperature,
             progress_desc=f"Val   {epoch + 1:03d}",
+            progress_reporter=reporter,
+            learning_rate=current_lr,
         )
+        reporter.finish_validation(val_metrics)
 
         history["train"].append(train_metrics)
         history["val"].append(val_metrics)
@@ -535,25 +601,34 @@ def train_model(
         save_checkpoint(
             output_dir / "last_model.pth", epoch, model, optimizer, metrics_payload
         )
+        reporter.report_checkpoint(output_dir / "last_model.pth", is_best=False)
 
-        if val_metrics["total_loss"] < best_val_loss:
+        checkpoint_improved = val_metrics["total_loss"] < best_val_loss
+        if checkpoint_improved:
             best_val_loss = val_metrics["total_loss"]
             best_epoch = epoch
             patience_counter = 0
             save_checkpoint(
                 output_dir / "best_model.pth", epoch, model, optimizer, metrics_payload
             )
+            reporter.report_checkpoint(output_dir / "best_model.pth", is_best=True)
         else:
             patience_counter += 1
 
-        print_epoch_summary(
-            epoch,
-            num_epochs,
-            train_metrics,
-            val_metrics,
-            best_val_loss,
-            patience_counter,
-            patience,
+        current_val_nme = float(val_metrics.get("nme", float("nan")))
+        if math.isfinite(current_val_nme) and current_val_nme < best_val_nme:
+            best_val_nme = current_val_nme
+            best_nme_epoch = epoch + 1
+
+        reporter.finish_epoch(
+            train_metrics=train_metrics,
+            validation_metrics=val_metrics,
+            learning_rate=current_lr,
+            best_validation_nme=best_val_nme,
+            best_nme_epoch=best_nme_epoch,
+            checkpoint_improved=checkpoint_improved,
+            early_stopping_counter=patience_counter,
+            patience=patience,
         )
 
         if use_wandb and wandb is not None:
@@ -571,6 +646,7 @@ def train_model(
                     "train/image_l1_loss": train_metrics["image_l1_loss"],
                     "train/image_tv_loss": train_metrics["image_tv_loss"],
                     "train/nme": train_metrics["nme"],
+                    "train/visible_nme": train_metrics["visible_nme"],
                     "val/total_loss": val_metrics["total_loss"],
                     "val/full_landmark_loss": val_metrics["full_landmark_loss"],
                     "val/visible_landmark_loss": val_metrics["visible_landmark_loss"],
@@ -579,11 +655,17 @@ def train_model(
                     "val/image_l1_loss": val_metrics["image_l1_loss"],
                     "val/image_tv_loss": val_metrics["image_tv_loss"],
                     "val/nme": val_metrics["nme"],
+                    "val/visible_nme": val_metrics["visible_nme"],
                     "best/val_total_loss": best_val_loss,
+                    "best/val_nme": best_val_nme,
                 }
             )
 
         if visualize_every_n_epochs > 0 and (epoch + 1) % visualize_every_n_epochs == 0:
+            from ..utils.visualization import (
+                visualize_predicted_heatmaps_on_train_batch,
+            )
+
             visualize_predicted_heatmaps_on_train_batch(
                 model=model,
                 dataloader=val_loader,
@@ -596,7 +678,9 @@ def train_model(
                 coordinate_decoder=coordinate_decoder,
                 wasserstein_softmax_temperature=wasserstein_softmax_temperature,
             )
-            print(f"Saved predicted heatmap visualizations for epoch {epoch + 1}.")
+            reporter.info(
+                f"Saved predicted heatmap visualizations for epoch {epoch + 1}."
+            )
 
         epoch_number = epoch + 1
         if normalizer_monitor is not None and should_capture_source_step(
@@ -605,8 +689,10 @@ def train_model(
             normalizer_monitor.capture(stage="source_validation", step=epoch_number)
 
         scheduler.step()
+        next_lr = float(optimizer.param_groups[0]["lr"])
+        reporter.report_learning_rate_change(current_lr, next_lr)
         if patience_counter >= patience:
-            print(f"Early stopping triggered at epoch {epoch + 1}.")
+            reporter.warning(f"Early stopping triggered at epoch {epoch + 1}.")
             break
 
     final_epoch = len(history["train"])
@@ -617,14 +703,28 @@ def train_model(
             is_final=True,
         )
 
+    final_train_nme = history["train"][-1]["nme"] if history["train"] else None
+    final_val_nme = history["val"][-1]["nme"] if history["val"] else None
+    reporter.finish_run(
+        best_epoch=best_epoch + 1 if best_epoch >= 0 else -1,
+        best_validation_nme=best_val_nme,
+        final_train_nme=final_train_nme,
+        final_validation_nme=final_val_nme,
+        best_checkpoint_path=output_dir / "best_model.pth",
+        wandb_url=wandb_url,
+    )
+
     if use_wandb and wandb is not None and finish_wandb:
         wandb.finish()
 
     return {
         "best_val_loss": best_val_loss,
+        "best_val_nme": best_val_nme,
+        "best_nme_epoch": best_nme_epoch,
         "best_epoch": best_epoch,
         "history": history,
         "results_csv": str(results_csv_path),
+        "wandb_url": wandb_url,
     }
 
 
