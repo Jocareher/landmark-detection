@@ -12,6 +12,7 @@ if __package__ is None or __package__ == "":
 
 from scripts.config import (
     ExperimentConfig,
+    apply_argparse_arguments,
     build_config,
     config_to_serializable_dict,
     load_yaml_config,
@@ -311,13 +312,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--unfreeze-stem",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=defaults.unfreeze_stem,
         help="Unfreeze the HRNet stem layers as part of transfer learning.",
     )
     parser.add_argument(
         "--use-wandb",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=defaults.use_wandb,
         help="Enable Weights & Biases experiment tracking.",
     )
@@ -333,37 +334,37 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--disable-amp",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=not defaults.use_amp,
         help="Disable automatic mixed precision training.",
     )
     parser.add_argument(
         "--disable-cache",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=not defaults.use_cache,
         help="Disable dataset cache loading and writing.",
     )
     parser.add_argument(
         "--smoke-test",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=defaults.run_smoke_test,
         help="Run a single optimization step before full training.",
     )
     parser.add_argument(
         "--save-config",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=defaults.save_config,
         help="Save resolved config JSON into output dir.",
     )
     parser.add_argument(
         "--enable-photometric-augmentations",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=defaults.enable_photometric_augmentations,
         help="Enable photometric training augmentations.",
     )
     parser.add_argument(
         "--enable-geometric-augmentations",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=defaults.enable_geometric_augmentations,
         help="Enable geometric training augmentations that also transform landmarks.",
     )
@@ -539,99 +540,15 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
-    """Merge CLI overrides into the default experiment configuration."""
+    """Resolve YAML defaults and explicit CLI overrides without omissions."""
     config = (
         load_yaml_config(args.config) if args.config is not None else build_config()
     )
-    config.experiment_mode = args.experiment_mode
-    config.checkpoint_path = args.checkpoint
-    config.checkpoint_strict = args.checkpoint_strict
+    apply_argparse_arguments(config, args)
     config.normalizer_enabled = args.experiment_mode != "none"
-    config.normalizer_hidden_channels = args.normalizer_hidden_channels
-    config.normalizer_num_layers = args.normalizer_num_layers
-    config.normalizer_kernel_size = args.normalizer_kernel_size
-    config.normalizer_activation = args.normalizer_activation
-    config.normalizer_internal_normalization = args.normalizer_normalization
-    config.normalizer_residual_scale = args.normalizer_residual_scale
-    config.normalizer_initialize_identity = args.normalizer_initialize_identity
-    config.normalizer_clamp_output = args.normalizer_clamp_output
-    config.normalizer_image_regularization_enabled = (
-        args.normalizer_image_regularization
-    )
-    config.normalizer_lambda_l1 = args.normalizer_lambda_l1
-    config.normalizer_lambda_tv = args.normalizer_lambda_tv
-    config.normalizer_visual_examples = args.normalizer_visual_examples
-    config.normalizer_monitoring_enabled = args.normalizer_monitoring
-    config.normalizer_monitor_probes = args.normalizer_monitor_probes
     config.normalizer_monitor_steps = tuple(args.normalizer_monitor_steps)
     config.normalizer_tta_monitor_steps = tuple(args.normalizer_tta_monitor_steps)
-    config.normalizer_monitor_difference_max = args.normalizer_monitor_difference_max
-    config.normalizer_monitor_registration_warning_px = (
-        args.normalizer_monitor_registration_warning_px
-    )
-    config.normalizer_monitor_edge_correlation_warning = (
-        args.normalizer_monitor_edge_correlation_warning
-    )
-    config.dataset_root = args.dataset_root
-    config.runs_dir = args.output_dir
-    config.cache_dir = args.cache_dir
-    config.pretrained_weights = args.pretrained_weights
-    config.batch_size = args.batch_size
-    config.eval_batch_size = args.eval_batch_size
-    config.num_epochs = args.epochs
-    config.learning_rate = args.lr
-    config.landmark_loss = args.landmark_loss
     config.coordinate_decoder = decoder_from_landmark_loss(args.landmark_loss)
-    config.adaptive_wing_omega = args.adaptive_wing_omega
-    config.adaptive_wing_theta = args.adaptive_wing_theta
-    config.adaptive_wing_epsilon = args.adaptive_wing_epsilon
-    config.adaptive_wing_alpha = args.adaptive_wing_alpha
-    config.wasserstein_softmax_temperature = args.wasserstein_softmax_temperature
-    config.wasserstein_epsilon = args.wasserstein_epsilon
-    config.pca_prior_path = args.pca_prior_path
-    config.lambda_pca_projection = args.lambda_pca_projection
-    config.seed = args.seed
-    config.device = args.device
-    config.transfer_mode = args.transfer_mode
-    config.num_unfrozen_stages = args.num_unfrozen_stages
-    config.unfreeze_stem = args.unfreeze_stem
-    config.use_wandb = args.use_wandb
-    config.wandb_project = args.wandb_project
-    config.wandb_run_name = args.wandb_run_name
-    config.use_amp = not args.disable_amp
-    config.use_cache = not args.disable_cache
-    config.run_smoke_test = args.smoke_test
-    config.save_config = args.save_config
-    config.enable_photometric_augmentations = args.enable_photometric_augmentations
-    config.enable_geometric_augmentations = args.enable_geometric_augmentations
-    config.color_jitter_brightness = args.brightness_jitter
-    config.color_jitter_contrast = args.contrast_jitter
-    config.color_jitter_saturation = args.saturation_jitter
-    config.color_jitter_probability = args.color_jitter_probability
-    config.blur_probability = args.blur_probability
-    config.blur_radius_min = args.blur_radius_min
-    config.blur_radius_max = args.blur_radius_max
-    config.noise_probability = args.noise_probability
-    config.noise_std = args.noise_std
-    config.jpeg_probability = args.jpeg_probability
-    config.jpeg_quality_min = args.jpeg_quality_min
-    config.jpeg_quality_max = args.jpeg_quality_max
-    config.rgb_shift_probability = args.rgb_shift_probability
-    config.rgb_shift_limit = args.rgb_shift_limit
-    config.geometric_probability = args.geometric_probability
-    config.geometric_max_translation = args.geometric_max_translation
-    config.geometric_scale_min = args.geometric_scale_min
-    config.geometric_scale_max = args.geometric_scale_max
-    config.geometric_max_rotation_deg = args.geometric_max_rotation_deg
-    config.evaluate_synbaby = args.evaluate_synbaby
-    config.evaluate_babyland = args.evaluate_babyland
-    config.evaluate_infanface = args.evaluate_infanface
-    config.babyland_crop_root = args.babyland_crop_root
-    config.babyland_gt_root = args.babyland_gt_root
-    config.babyland_source_root = args.babyland_source_root
-    config.infanface_crop_root = args.infanface_crop_root
-    config.infanface_gt_root = args.infanface_gt_root
-    config.infanface_source_root = args.infanface_source_root
     return config
 
 
@@ -732,6 +649,14 @@ def validate_experiment_config(config: ExperimentConfig) -> None:
         config.finetune_last_backbone_stage = False
         config.train_heads = False
     elif config.experiment_mode == "normalizer_joint_finetune":
+        if config.transfer_mode != "fine_tuning":
+            raise ValueError(
+                "normalizer_joint_finetune requires transfer_mode: fine_tuning."
+            )
+        if config.num_unfrozen_stages <= 0:
+            raise ValueError(
+                "normalizer_joint_finetune requires num_unfrozen_stages > 0."
+            )
         config.train_normalizer = True
         config.freeze_landmarker = False
         config.finetune_last_backbone_stage = True
@@ -779,7 +704,10 @@ def build_model(config: ExperimentConfig) -> torch.nn.Module:
     elif config.experiment_mode == "normalizer_train_frozen_landmarker":
         model.configure_normalizer_only()
     elif config.experiment_mode == "normalizer_joint_finetune":
-        model.configure_joint_finetune(num_unfrozen_stages=1, unfreeze_stem=False)
+        model.configure_joint_finetune(
+            num_unfrozen_stages=config.num_unfrozen_stages,
+            unfreeze_stem=config.unfreeze_stem,
+        )
     else:
         raise ValueError(f"Unsupported experiment mode: {config.experiment_mode}")
     return model

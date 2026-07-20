@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import ast
+from argparse import Namespace
 from pathlib import Path
 
 import torch
 import yaml
 from torch import nn
 
-from scripts.config import load_yaml_config
+from scripts.config import apply_argparse_arguments, build_config, load_yaml_config
 from scripts.engine.normalizer_experiments import run_normalizer_diagnostics
 from scripts.engine.normalizer_monitoring import NormalizerProbeMonitor
 from scripts.models import (
@@ -118,14 +119,23 @@ def test_legacy_checkpoint_loads_into_wrapped_landmarker() -> None:
 
 def test_shared_yaml_supports_argparser_names_and_inverse_flags() -> None:
     config = load_yaml_config("configs/normalizer_experiments.yaml")
-    assert config.runs_dir == Path("runs")
+    assert config.runs_dir == Path("/home/jocareher/Downloads/landmark-detection/runs")
     assert config.checkpoint_path is None
+    assert config.batch_size == 32
     assert config.num_epochs == 60
     assert config.learning_rate == 1.0e-4
     assert config.landmark_loss == "wasserstein"
+    assert config.pca_prior_path == Path(
+        "/home/jocareher/Downloads/landmark-detection/weights/pca_prior_13y_k32.pt"
+    )
+    assert config.lambda_pca_projection == 1.0
+    assert config.transfer_mode == "fine_tuning"
+    assert config.num_unfrozen_stages == 1
+    assert config.use_wandb is True
     assert config.use_amp is True
     assert config.use_cache is True
-    assert config.save_config is True
+    assert config.save_config is False
+    assert config.enable_photometric_augmentations is True
 
 
 def test_shared_yaml_lists_every_argparser_destination() -> None:
@@ -154,6 +164,21 @@ def test_shared_yaml_lists_every_argparser_destination() -> None:
         Path("configs/normalizer_experiments.yaml").read_text(encoding="utf-8")
     )
     assert set(yaml_payload["arguments"]) == parser_destinations
+
+
+def test_every_yaml_argument_reaches_resolved_config() -> None:
+    yaml_payload = yaml.safe_load(
+        Path("configs/normalizer_experiments.yaml").read_text(encoding="utf-8")
+    )["arguments"]
+    config = apply_argparse_arguments(build_config(), Namespace(**yaml_payload))
+
+    assert config.transfer_mode == "fine_tuning"
+    assert config.num_unfrozen_stages == 1
+    assert config.unfreeze_stem is False
+    assert config.use_amp is True
+    assert config.use_cache is True
+    assert config.normalizer_monitoring_enabled is True
+    assert config.normalizer_monitor_steps == [0, 1, 5, 10, 20]
 
 
 def test_fixed_probe_monitor_saves_panels_metrics_and_tta_losses(

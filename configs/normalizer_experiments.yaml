@@ -1,12 +1,13 @@
 # Every entry under `arguments` corresponds to an argparse destination in
 # scripts/main.py. CLI options override the values defined here.
 arguments:
-  experiment_mode: none  # Select the actual mode on the command line.
+  # Change this value in this same file; no per-experiment YAML is required.
+  experiment_mode: none
 
-  dataset_root: data/synthetic_lmks_vis_dataset
-  output_dir: runs
-  cache_dir: dataset_cache
-  pretrained_weights: weights/HR18-300W.pth
+  dataset_root: /home/jocareher/Downloads/landmark-detection/data/synbaby72
+  output_dir: /home/jocareher/Downloads/landmark-detection/runs
+  cache_dir: /home/jocareher/Downloads/landmark-detection/dataset_cache
+  pretrained_weights: /home/jocareher/Downloads/landmark-detection/weights/HR18-300W.pth
   checkpoint: null  # Required for every normalizer experiment.
   checkpoint_strict: true
 
@@ -30,7 +31,7 @@ arguments:
   normalizer_monitor_registration_warning_px: 1.0
   normalizer_monitor_edge_correlation_warning: 0.90
 
-  batch_size: 16
+  batch_size: 32
   eval_batch_size: 32
   epochs: 60
   lr: 0.0001
@@ -41,24 +42,24 @@ arguments:
   adaptive_wing_alpha: 2.1
   wasserstein_softmax_temperature: 1.0
   wasserstein_epsilon: 1.0e-8
-  pca_prior_path: null
-  lambda_pca_projection: 0.0
+  pca_prior_path: /home/jocareher/Downloads/landmark-detection/weights/pca_prior_13y_k32.pt
+  lambda_pca_projection: 1.0
 
   seed: 42
   device: auto
-  transfer_mode: feature_extractor
-  num_unfrozen_stages: 0
+  transfer_mode: fine_tuning
+  num_unfrozen_stages: 1
   unfreeze_stem: false
 
-  use_wandb: false
+  use_wandb: true
   wandb_project: BabyLMKS
-  wandb_run_name: null
+  wandb_run_name: exp10_wasserstein_pca
   disable_amp: false
   disable_cache: false
   smoke_test: false
-  save_config: true
+  save_config: false
 
-  enable_photometric_augmentations: false
+  enable_photometric_augmentations: true
   enable_geometric_augmentations: false
   brightness_jitter: 0.15
   contrast_jitter: 0.15
@@ -85,9 +86,9 @@ arguments:
   evaluate_synbaby: true
   evaluate_babyland: true
   evaluate_infanface: true
-  babyland_crop_root: null
-  babyland_gt_root: null
+  babyland_crop_root: /home/jocareher/Downloads/babyland72_622_inference/crops/all_detections
+  babyland_gt_root: /home/jocareher/Downloads/landmark-detection/data/babyland72/labels
   babyland_source_root: null
-  infanface_crop_root: null
-  infanface_gt_root: null
+  infanface_crop_root: /home/jocareher/Downloads/infanface_inference/crops/all_detections
+  infanface_gt_root: /home/jocareher/Downloads/infanface_prepared/all/labels
   infanface_source_root: null

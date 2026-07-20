@@ -13,6 +13,25 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ExperimentConfig = SimpleNamespace
 
 
+ARGPARSE_ARGUMENT_ALIASES = {
+    "output_dir": "runs_dir",
+    "checkpoint": "checkpoint_path",
+    "normalizer_normalization": "normalizer_internal_normalization",
+    "normalizer_image_regularization": "normalizer_image_regularization_enabled",
+    "normalizer_monitoring": "normalizer_monitoring_enabled",
+    "epochs": "num_epochs",
+    "lr": "learning_rate",
+    "brightness_jitter": "color_jitter_brightness",
+    "contrast_jitter": "color_jitter_contrast",
+    "saturation_jitter": "color_jitter_saturation",
+    "smoke_test": "run_smoke_test",
+}
+ARGPARSE_INVERTED_ARGUMENT_ALIASES = {
+    "disable_amp": "use_amp",
+    "disable_cache": "use_cache",
+}
+
+
 # ---------------------------------------------------------------------------
 # Data
 # ---------------------------------------------------------------------------
@@ -388,23 +407,6 @@ def load_yaml_config(
         "evaluation.datasets.babyland": "evaluate_babyland",
         "evaluation.datasets.infanface": "evaluate_infanface",
     }
-    argument_aliases = {
-        "output_dir": "runs_dir",
-        "checkpoint": "checkpoint_path",
-        "normalizer_normalization": "normalizer_internal_normalization",
-        "normalizer_image_regularization": "normalizer_image_regularization_enabled",
-        "normalizer_monitoring": "normalizer_monitoring_enabled",
-        "epochs": "num_epochs",
-        "lr": "learning_rate",
-        "brightness_jitter": "color_jitter_brightness",
-        "contrast_jitter": "color_jitter_contrast",
-        "saturation_jitter": "color_jitter_saturation",
-        "smoke_test": "run_smoke_test",
-    }
-    inverted_argument_aliases = {
-        "disable_amp": "use_amp",
-        "disable_cache": "use_cache",
-    }
     direct_prefixes = {
         "arguments": "",
         "data": "",
@@ -422,11 +424,11 @@ def load_yaml_config(
             argument_name = yaml_key.removeprefix("arguments.")
             if argument_name == "config":
                 continue
-            if argument_name in inverted_argument_aliases:
-                target_key = inverted_argument_aliases[argument_name]
+            if argument_name in ARGPARSE_INVERTED_ARGUMENT_ALIASES:
+                target_key = ARGPARSE_INVERTED_ARGUMENT_ALIASES[argument_name]
                 value = not bool(value)
             else:
-                target_key = argument_aliases.get(argument_name, argument_name)
+                target_key = ARGPARSE_ARGUMENT_ALIASES.get(argument_name, argument_name)
                 if not hasattr(config, target_key):
                     target_key = None
         if target_key is None:
@@ -461,6 +463,40 @@ def load_yaml_config(
     if unknown_keys:
         raise ValueError(f"Unsupported YAML configuration keys: {sorted(unknown_keys)}")
     config.config_path = config_path
+    return config
+
+
+def apply_argparse_arguments(
+    config: ExperimentConfig,
+    arguments: Any,
+) -> ExperimentConfig:
+    """Apply every parsed CLI destination to its canonical config field.
+
+    The parsed namespace already contains YAML-backed defaults and explicit CLI
+    overrides. Keeping this conversion generic prevents a newly added argparse
+    option from being accepted and then silently omitted from the resolved
+    configuration.
+    """
+    parsed = vars(arguments)
+    unsupported: list[str] = []
+    for argument_name, value in parsed.items():
+        if argument_name == "config":
+            config.config_path = value
+            continue
+        if argument_name in ARGPARSE_INVERTED_ARGUMENT_ALIASES:
+            target_key = ARGPARSE_INVERTED_ARGUMENT_ALIASES[argument_name]
+            value = not bool(value)
+        else:
+            target_key = ARGPARSE_ARGUMENT_ALIASES.get(argument_name, argument_name)
+        if not hasattr(config, target_key):
+            unsupported.append(argument_name)
+            continue
+        setattr(config, target_key, value)
+    if unsupported:
+        raise ValueError(
+            "Parsed arguments have no ExperimentConfig destination: "
+            f"{sorted(unsupported)}"
+        )
     return config
 
 
