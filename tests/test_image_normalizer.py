@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 import torch
+import yaml
 from torch import nn
 
 from scripts.config import load_yaml_config
@@ -111,3 +113,43 @@ def test_legacy_checkpoint_loads_into_wrapped_landmarker() -> None:
     )
     for expected, actual in zip(source.parameters(), wrapper.landmarker.parameters()):
         torch.testing.assert_close(expected, actual)
+
+
+def test_shared_yaml_supports_argparser_names_and_inverse_flags() -> None:
+    config = load_yaml_config("configs/normalizer_experiments.yaml")
+    assert config.runs_dir == Path("runs")
+    assert config.checkpoint_path is None
+    assert config.num_epochs == 60
+    assert config.learning_rate == 1.0e-4
+    assert config.landmark_loss == "wasserstein"
+    assert config.use_amp is True
+    assert config.use_cache is True
+    assert config.save_config is True
+
+
+def test_shared_yaml_lists_every_argparser_destination() -> None:
+    syntax_tree = ast.parse(Path("scripts/main.py").read_text(encoding="utf-8"))
+    parser_destinations: set[str] = set()
+    for node in ast.walk(syntax_tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "add_argument"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+        ):
+            continue
+        option = node.args[0].value
+        if not isinstance(option, str) or not option.startswith("--"):
+            continue
+        destination = option.removeprefix("--").replace("-", "_")
+        for keyword in node.keywords:
+            if keyword.arg == "dest" and isinstance(keyword.value, ast.Constant):
+                destination = str(keyword.value.value)
+        if destination != "config":
+            parser_destinations.add(destination)
+
+    yaml_payload = yaml.safe_load(
+        Path("configs/normalizer_experiments.yaml").read_text(encoding="utf-8")
+    )
+    assert set(yaml_payload["arguments"]) == parser_destinations

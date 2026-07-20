@@ -39,16 +39,19 @@ uses SynBaby labels only. BabyLand-72 and InfAnFace remain evaluation-only.
 ## Configuration and precedence
 
 Configuration precedence is repository defaults, then YAML, then explicit CLI
-arguments. Example files are provided in [configs](../configs). The experiment
-mode resolves the trainable modules; contradictory low-level train/freeze YAML
-flags are recorded in the resolved config but do not override the mode.
+arguments. A single comprehensive file is provided at
+`configs/normalizer_experiments.yaml`. Every entry under its `arguments` key
+matches an argparse destination (except `--config`, which selects the YAML
+itself). The experiment mode resolves the trainable modules, so separate YAML
+files are unnecessary and cannot silently diverge.
 
 Set `checkpoint.path` and the existing natural-dataset paths before running.
 For example:
 
 ```bash
 python -m scripts.main \
-  --config configs/normalizer_sanity.yaml \
+  --config configs/normalizer_experiments.yaml \
+  --experiment-mode normalizer_sanity \
   --checkpoint /absolute/path/to/best_model.pth \
   --babyland-crop-root /absolute/path/to/babyland/crops \
   --babyland-gt-root /absolute/path/to/babyland/labels \
@@ -58,19 +61,40 @@ python -m scripts.main \
 
 ```bash
 python -m scripts.main \
-  --config configs/normalizer_train_frozen_landmarker.yaml \
+  --config configs/normalizer_experiments.yaml \
+  --experiment-mode normalizer_train_frozen_landmarker \
   --checkpoint /absolute/path/to/best_model.pth
 ```
 
 ```bash
 python -m scripts.main \
-  --config configs/normalizer_joint_finetune.yaml \
+  --config configs/normalizer_experiments.yaml \
+  --experiment-mode normalizer_joint_finetune \
   --checkpoint /absolute/path/to/best_model.pth
 ```
 
-Optional residual regularization is enabled with
-`training.image_regularization.enabled`, `lambda_l1`, and `lambda_tv`, or the
-corresponding CLI options. It is disabled by default.
+The same command-line options can override YAML values, for example:
+
+```bash
+python -m scripts.main \
+  --config configs/normalizer_experiments.yaml \
+  --experiment-mode normalizer_train_frozen_landmarker \
+  --checkpoint /absolute/path/to/best_model.pth \
+  --epochs 30 --lr 5e-5 --use-wandb
+```
+
+Runs retain the repository's historical structure:
+`runs/<wandb_run_name-or-run_YYYYmmdd_HHMMSS>/`. The experiment mode is stored
+in the resolved config and reports; it does not add another directory level.
+
+When `use_wandb: true` (or `--use-wandb`) is selected, epoch-level training and
+validation losses, NME, PCA loss, image L1/TV diagnostics, final official
+evaluation scalars, and per-dataset normalizer diagnostics are logged to W&B.
+
+Optional residual regularization is enabled in the shared YAML with
+`normalizer_image_regularization`, `normalizer_lambda_l1`, and
+`normalizer_lambda_tv`, or with the corresponding CLI options. It is disabled
+by default.
 
 ## Outputs
 

@@ -378,6 +378,8 @@ def train_model(
     project_name: str | None = None,
     run_name: str | None = None,
     use_wandb: bool = True,
+    wandb_config: dict[str, Any] | None = None,
+    finish_wandb: bool = True,
     use_amp: bool = True,
     landmark_loss: str = "mse",
     coordinate_decoder: str = "argmax_subpixel",
@@ -406,7 +408,12 @@ def train_model(
     )
 
     if use_wandb and wandb is not None:
-        wandb.init(project=project_name, name=run_name, reinit=True)
+        wandb.init(
+            project=project_name,
+            name=run_name,
+            config=wandb_config,
+            reinit=True,
+        )
 
     pca_shape_prior = None
     if pca_prior_path is not None:
@@ -563,7 +570,7 @@ def train_model(
             print(f"Early stopping triggered at epoch {epoch + 1}.")
             break
 
-    if use_wandb and wandb is not None:
+    if use_wandb and wandb is not None and finish_wandb:
         wandb.finish()
 
     return {

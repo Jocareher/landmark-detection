@@ -1,0 +1,86 @@
+# Every entry under `arguments` corresponds to an argparse destination in
+# scripts/main.py. CLI options override the values defined here.
+arguments:
+  experiment_mode: none  # Select the actual mode on the command line.
+
+  dataset_root: data/synthetic_lmks_vis_dataset
+  output_dir: runs
+  cache_dir: dataset_cache
+  pretrained_weights: weights/HR18-300W.pth
+  checkpoint: null  # Required for every normalizer experiment.
+  checkpoint_strict: true
+
+  normalizer_hidden_channels: 16
+  normalizer_num_layers: 3
+  normalizer_kernel_size: 3
+  normalizer_activation: relu
+  normalizer_normalization: none
+  normalizer_residual_scale: 0.05
+  normalizer_initialize_identity: true
+  normalizer_clamp_output: false
+  normalizer_image_regularization: false
+  normalizer_lambda_l1: 0.0
+  normalizer_lambda_tv: 0.0
+  normalizer_visual_examples: 32
+
+  batch_size: 16
+  eval_batch_size: 32
+  epochs: 60
+  lr: 0.0001
+  landmark_loss: wasserstein
+  adaptive_wing_omega: 14.0
+  adaptive_wing_theta: 0.5
+  adaptive_wing_epsilon: 1.0
+  adaptive_wing_alpha: 2.1
+  wasserstein_softmax_temperature: 1.0
+  wasserstein_epsilon: 1.0e-8
+  pca_prior_path: null
+  lambda_pca_projection: 0.0
+
+  seed: 42
+  device: auto
+  transfer_mode: feature_extractor
+  num_unfrozen_stages: 0
+  unfreeze_stem: false
+
+  use_wandb: false
+  wandb_project: BabyLMKS
+  wandb_run_name: null
+  disable_amp: false
+  disable_cache: false
+  smoke_test: false
+  save_config: true
+
+  enable_photometric_augmentations: false
+  enable_geometric_augmentations: false
+  brightness_jitter: 0.15
+  contrast_jitter: 0.15
+  saturation_jitter: 0.10
+  color_jitter_probability: 0.5
+  blur_probability: 0.50
+  blur_radius_min: 0.1
+  blur_radius_max: 1.2
+  noise_probability: 0.50
+  noise_std: 0.02
+  jpeg_probability: 0.15
+  jpeg_quality_min: 60
+  jpeg_quality_max: 95
+  rgb_shift_probability: 0.15
+  rgb_shift_limit: 0.04
+  geometric_probability: 0.50
+  geometric_max_translation: 0.05
+  geometric_scale_min: 0.95
+  geometric_scale_max: 1.05
+  geometric_max_rotation_deg: 8.0
+
+  # Sanity mode automatically disables SynBaby unless --evaluate-synbaby is
+  # explicitly supplied. Training modes keep this value.
+  evaluate_synbaby: true
+  evaluate_babyland: true
+  evaluate_infanface: true
+  babyland_crop_root: null
+  babyland_gt_root: null
+  babyland_source_root: null
+  infanface_crop_root: null
+  infanface_gt_root: null
+  infanface_source_root: null

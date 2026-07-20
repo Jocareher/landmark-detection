@@ -12,9 +12,7 @@ last-HRNet-stage/head fine-tuning. Test-time adaptation was not implemented.
 - `scripts/models/image_normalizer.py`
 - `scripts/models/normalized_landmarker.py`
 - `scripts/engine/normalizer_experiments.py`
-- `configs/normalizer_sanity.yaml`
-- `configs/normalizer_train_frozen_landmarker.yaml`
-- `configs/normalizer_joint_finetune.yaml`
+- `configs/normalizer_experiments.yaml`
 - `tests/test_image_normalizer.py`
 - `docs/normalizer_experiments.md`
 
@@ -44,7 +42,7 @@ preserved.
 
 Lightweight tests cover shape preservation, exact identity initialization,
 wrapper output compatibility, freezing behavior, and nested YAML overrides.
-The complete lightweight suite passes: `24 passed`. The system Python emits a
+The complete lightweight suite passes: `26 passed`. The system Python emits a
 pre-existing NumPy 2.x binary-compatibility warning from the installed PyTorch
 build; it does not fail the tests, and the new image writer avoids relying on
 the optional PyTorch-to-NumPy bridge.
@@ -57,4 +55,5 @@ the optional PyTorch-to-NumPy bridge.
 
 ## Reproduction
 
-See `docs/normalizer_experiments.md` and the three YAML files in `configs/`.
+See `docs/normalizer_experiments.md` and the single comprehensive YAML file in
+`configs/`. Select the experiment with `--experiment-mode`.

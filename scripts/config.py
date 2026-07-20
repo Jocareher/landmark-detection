@@ -128,6 +128,7 @@ LAMBDA_PCA_PROJECTION = 0.0
 PATIENCE = 15
 USE_AMP = True
 RUN_SMOKE_TEST = False
+SAVE_CONFIG = False
 SAVE_PREVIEW_BATCHES = True
 PREVIEW_SEED = 12345
 
@@ -282,6 +283,7 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "patience": PATIENCE,
     "use_amp": USE_AMP,
     "run_smoke_test": RUN_SMOKE_TEST,
+    "save_config": SAVE_CONFIG,
     "save_preview_batches": SAVE_PREVIEW_BATCHES,
     "preview_seed": PREVIEW_SEED,
     "seed": SEED,
@@ -372,16 +374,46 @@ def load_yaml_config(
         "evaluation.datasets.babyland": "evaluate_babyland",
         "evaluation.datasets.infanface": "evaluate_infanface",
     }
+    argument_aliases = {
+        "output_dir": "runs_dir",
+        "checkpoint": "checkpoint_path",
+        "normalizer_normalization": "normalizer_internal_normalization",
+        "normalizer_image_regularization": "normalizer_image_regularization_enabled",
+        "epochs": "num_epochs",
+        "lr": "learning_rate",
+        "brightness_jitter": "color_jitter_brightness",
+        "contrast_jitter": "color_jitter_contrast",
+        "saturation_jitter": "color_jitter_saturation",
+        "smoke_test": "run_smoke_test",
+    }
+    inverted_argument_aliases = {
+        "disable_amp": "use_amp",
+        "disable_cache": "use_cache",
+    }
     direct_prefixes = {
+        "arguments": "",
         "data": "",
         "model": "",
+        "runtime": "",
         "training": "",
         "evaluation": "",
         "reporting": "",
+        "tracking": "",
     }
     unknown_keys: list[str] = []
     for yaml_key, value in flat_overrides.items():
         target_key = aliases.get(yaml_key)
+        if yaml_key.startswith("arguments."):
+            argument_name = yaml_key.removeprefix("arguments.")
+            if argument_name == "config":
+                continue
+            if argument_name in inverted_argument_aliases:
+                target_key = inverted_argument_aliases[argument_name]
+                value = not bool(value)
+            else:
+                target_key = argument_aliases.get(argument_name, argument_name)
+                if not hasattr(config, target_key):
+                    target_key = None
         if target_key is None:
             root, _, leaf = yaml_key.partition(".")
             if root in direct_prefixes and leaf:

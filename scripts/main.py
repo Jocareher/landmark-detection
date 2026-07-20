@@ -308,7 +308,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--save-config",
         action="store_true",
-        default=False,
+        default=defaults.save_config,
         help="Save resolved config JSON into output dir.",
     )
     parser.add_argument(
@@ -546,6 +546,7 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.use_amp = not args.disable_amp
     config.use_cache = not args.disable_cache
     config.run_smoke_test = args.smoke_test
+    config.save_config = args.save_config
     config.enable_photometric_augmentations = args.enable_photometric_augmentations
     config.enable_geometric_augmentations = args.enable_geometric_augmentations
     config.color_jitter_brightness = args.brightness_jitter
@@ -637,8 +638,6 @@ def validate_experiment_config(config: ExperimentConfig) -> None:
     """Validate and resolve invariants of the normalizer experiment modes."""
     if config.experiment_mode == "none":
         return
-    if Path(config.runs_dir).name != config.experiment_mode:
-        config.runs_dir = Path(config.runs_dir) / config.experiment_mode
     if config.checkpoint_path is None:
         raise ValueError(
             f"{config.experiment_mode} requires checkpoint.path/--checkpoint."
@@ -832,7 +831,36 @@ def finalize_normalizer_experiment(
         run_commit_report.write_text(
             commit_report_source.read_text(encoding="utf-8"), encoding="utf-8"
         )
+    if config.use_wandb:
+        import wandb
+
+        wandb_payload: dict[str, float] = {}
+        for dataset_name, summary in diagnostics.items():
+            for metric_name, value in summary.items():
+                if isinstance(value, (int, float)) and not isinstance(value, bool):
+                    wandb_payload[f"normalizer/{dataset_name}/{metric_name}"] = float(
+                        value
+                    )
+        _add_numeric_wandb_metrics(
+            wandb_payload,
+            evaluation_summary.get("summaries", {}),
+            prefix="evaluation",
+        )
+        if wandb_payload:
+            wandb.log(wandb_payload)
+        wandb.finish()
     print(f"[INFO] Normalizer experiment report: {report_path}")
+
+
+def _add_numeric_wandb_metrics(
+    output: dict[str, float], value: object, prefix: str
+) -> None:
+    """Flatten numeric evaluation values into W&B metric names."""
+    if isinstance(value, dict):
+        for key, nested_value in value.items():
+            _add_numeric_wandb_metrics(output, nested_value, prefix=f"{prefix}/{key}")
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        output[prefix] = float(value)
 
 
 def main() -> None:
@@ -928,7 +956,7 @@ def main() -> None:
                 )
             print(f"Loaded checkpoint: {config.checkpoint_path}")
 
-        if args.save_config or config.experiment_mode != "none":
+        if config.save_config or config.experiment_mode != "none":
             print("[INFO] Saving resolved config files...")
             maybe_save_config(config)
             save_resolved_config_files(config, config.output_dir)
@@ -952,6 +980,15 @@ def main() -> None:
             print(
                 "[INFO] Running identity-normalizer sanity evaluation; no optimization."
             )
+            if config.use_wandb:
+                import wandb
+
+                wandb.init(
+                    project=config.wandb_project,
+                    name=config.wandb_run_name,
+                    config=config_to_serializable_dict(config),
+                    reinit=True,
+                )
             model.to(device)
             full_evaluation_summary = run_full_evaluation(
                 model=model,
@@ -1055,6 +1092,8 @@ def main() -> None:
             project_name=config.wandb_project,
             run_name=config.wandb_run_name,
             use_wandb=config.use_wandb,
+            wandb_config=config_to_serializable_dict(config),
+            finish_wandb=config.experiment_mode == "none",
             use_amp=config.use_amp,
             landmark_loss=config.landmark_loss,
             coordinate_decoder=config.coordinate_decoder,
