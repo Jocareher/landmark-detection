@@ -14,12 +14,26 @@ from scripts.config import (
     ExperimentConfig,
     build_config,
     config_to_serializable_dict,
+    load_yaml_config,
     resolve_output_dir,
+    save_resolved_config_files,
 )
-from scripts.dataset import build_dataloaders
+from scripts.dataset import build_dataloaders, build_natural_evaluation_dataloader
+from scripts.inference import build_inference_dataloader
+from scripts.engine.normalizer_experiments import (
+    run_normalizer_diagnostics,
+    save_modular_checkpoints,
+    write_combined_normalizer_diagnostics,
+    write_experiment_report,
+)
 from scripts.engine.landmark_losses import build_landmark_heatmap_loss
 from scripts.engine.metrics import decoder_from_landmark_loss
-from scripts.models import HRNetLandmarkVisibility
+from scripts.models import (
+    HRNetLandmarkVisibility,
+    NormalizedLandmarker,
+    ResidualImageNormalizer,
+    load_normalized_checkpoint,
+)
 from scripts.utils import (
     get_default_device,
     save_model_summary,
@@ -32,10 +46,34 @@ from scripts.utils.visualization import save_dataset_preview_grid
 
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments for the end-to-end training pipeline."""
-    defaults = build_config()
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument("--config", type=Path, default=None)
+    config_args, _ = config_parser.parse_known_args()
+    defaults = (
+        load_yaml_config(config_args.config)
+        if config_args.config is not None
+        else build_config()
+    )
     parser = argparse.ArgumentParser(
         description="Train the model on train/val and then evaluate the best checkpoint on test.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=config_args.config,
+        help="Optional YAML configuration. CLI values take precedence.",
+    )
+    parser.add_argument(
+        "--experiment-mode",
+        choices=[
+            "none",
+            "normalizer_sanity",
+            "normalizer_train_frozen_landmarker",
+            "normalizer_joint_finetune",
+        ],
+        default=defaults.experiment_mode,
+        help="Residual image normalizer experiment mode.",
     )
     parser.add_argument(
         "--dataset-root",
@@ -64,8 +102,66 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        default=None,
+        default=defaults.checkpoint_path,
         help="Optional checkpoint to load before continuing training.",
+    )
+    parser.add_argument(
+        "--checkpoint-strict",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.checkpoint_strict,
+        help="Require an exact checkpoint key match.",
+    )
+    parser.add_argument(
+        "--normalizer-hidden-channels",
+        type=int,
+        default=defaults.normalizer_hidden_channels,
+    )
+    parser.add_argument(
+        "--normalizer-num-layers", type=int, default=defaults.normalizer_num_layers
+    )
+    parser.add_argument(
+        "--normalizer-kernel-size", type=int, default=defaults.normalizer_kernel_size
+    )
+    parser.add_argument(
+        "--normalizer-activation",
+        choices=["relu", "gelu"],
+        default=defaults.normalizer_activation,
+    )
+    parser.add_argument(
+        "--normalizer-normalization",
+        choices=["none", "group", "instance"],
+        default=defaults.normalizer_internal_normalization,
+    )
+    parser.add_argument(
+        "--normalizer-residual-scale",
+        type=float,
+        default=defaults.normalizer_residual_scale,
+    )
+    parser.add_argument(
+        "--normalizer-initialize-identity",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.normalizer_initialize_identity,
+    )
+    parser.add_argument(
+        "--normalizer-clamp-output",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.normalizer_clamp_output,
+    )
+    parser.add_argument(
+        "--normalizer-image-regularization",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.normalizer_image_regularization_enabled,
+    )
+    parser.add_argument(
+        "--normalizer-lambda-l1", type=float, default=defaults.normalizer_lambda_l1
+    )
+    parser.add_argument(
+        "--normalizer-lambda-tv", type=float, default=defaults.normalizer_lambda_tv
+    )
+    parser.add_argument(
+        "--normalizer-visual-examples",
+        type=int,
+        default=defaults.normalizer_visual_examples,
     )
     parser.add_argument(
         "--batch-size",
@@ -400,7 +496,27 @@ def parse_args() -> argparse.Namespace:
 
 def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     """Merge CLI overrides into the default experiment configuration."""
-    config = build_config()
+    config = (
+        load_yaml_config(args.config) if args.config is not None else build_config()
+    )
+    config.experiment_mode = args.experiment_mode
+    config.checkpoint_path = args.checkpoint
+    config.checkpoint_strict = args.checkpoint_strict
+    config.normalizer_enabled = args.experiment_mode != "none"
+    config.normalizer_hidden_channels = args.normalizer_hidden_channels
+    config.normalizer_num_layers = args.normalizer_num_layers
+    config.normalizer_kernel_size = args.normalizer_kernel_size
+    config.normalizer_activation = args.normalizer_activation
+    config.normalizer_internal_normalization = args.normalizer_normalization
+    config.normalizer_residual_scale = args.normalizer_residual_scale
+    config.normalizer_initialize_identity = args.normalizer_initialize_identity
+    config.normalizer_clamp_output = args.normalizer_clamp_output
+    config.normalizer_image_regularization_enabled = (
+        args.normalizer_image_regularization
+    )
+    config.normalizer_lambda_l1 = args.normalizer_lambda_l1
+    config.normalizer_lambda_tv = args.normalizer_lambda_tv
+    config.normalizer_visual_examples = args.normalizer_visual_examples
     config.dataset_root = args.dataset_root
     config.runs_dir = args.output_dir
     config.cache_dir = args.cache_dir
@@ -517,22 +633,206 @@ def validate_full_evaluation_paths(config: ExperimentConfig) -> None:
             raise FileNotFoundError(f"{description} not found: {value}")
 
 
-def build_model(config: ExperimentConfig) -> HRNetLandmarkVisibility:
+def validate_experiment_config(config: ExperimentConfig) -> None:
+    """Validate and resolve invariants of the normalizer experiment modes."""
+    if config.experiment_mode == "none":
+        return
+    if Path(config.runs_dir).name != config.experiment_mode:
+        config.runs_dir = Path(config.runs_dir) / config.experiment_mode
+    if config.checkpoint_path is None:
+        raise ValueError(
+            f"{config.experiment_mode} requires checkpoint.path/--checkpoint."
+        )
+    if not Path(config.checkpoint_path).exists():
+        raise FileNotFoundError(
+            f"Landmarker checkpoint not found: {config.checkpoint_path}"
+        )
+    if config.landmark_loss != "wasserstein":
+        raise ValueError(
+            "Normalizer experiments must use the existing Wasserstein landmark loss "
+            "and barycenter decoder; set landmark_loss: wasserstein."
+        )
+    if config.coordinate_decoder != "barycenter":
+        raise ValueError(
+            "Wasserstein normalizer experiments require barycenter decoding."
+        )
+    if config.experiment_mode == "normalizer_sanity":
+        config.num_epochs = 0
+        config.train_normalizer = False
+        config.freeze_landmarker = True
+        config.finetune_last_backbone_stage = False
+        config.train_heads = False
+        if "--evaluate-synbaby" not in sys.argv:
+            config.evaluate_synbaby = False
+    elif config.experiment_mode == "normalizer_train_frozen_landmarker":
+        config.train_normalizer = True
+        config.freeze_landmarker = True
+        config.finetune_last_backbone_stage = False
+        config.train_heads = False
+    elif config.experiment_mode == "normalizer_joint_finetune":
+        config.train_normalizer = True
+        config.freeze_landmarker = False
+        config.finetune_last_backbone_stage = True
+        config.train_heads = True
+    if not config.normalizer_image_regularization_enabled:
+        config.normalizer_lambda_l1 = 0.0
+        config.normalizer_lambda_tv = 0.0
+
+
+def build_model(config: ExperimentConfig) -> torch.nn.Module:
     """Instantiate the model, load pretrained weights, and configure trainable layers."""
-    model = HRNetLandmarkVisibility(num_landmarks=config.num_landmarks)
+    landmarker = HRNetLandmarkVisibility(num_landmarks=config.num_landmarks)
     if (
         config.pretrained_weights is not None
         and Path(config.pretrained_weights).exists()
     ):
-        model.load_official_hrnet_pretrained(
+        landmarker.load_official_hrnet_pretrained(
             str(config.pretrained_weights), verbose=True
         )
-    model.set_transfer_learning_mode(
-        mode=config.transfer_mode,
-        num_unfrozen_stages=config.num_unfrozen_stages,
-        unfreeze_stem=config.unfreeze_stem,
+    if not config.normalizer_enabled:
+        landmarker.set_transfer_learning_mode(
+            mode=config.transfer_mode,
+            num_unfrozen_stages=config.num_unfrozen_stages,
+            unfreeze_stem=config.unfreeze_stem,
+        )
+        return landmarker
+
+    normalizer = ResidualImageNormalizer(
+        input_channels=config.normalizer_input_channels,
+        hidden_channels=config.normalizer_hidden_channels,
+        num_layers=config.normalizer_num_layers,
+        kernel_size=config.normalizer_kernel_size,
+        activation=config.normalizer_activation,
+        normalization=config.normalizer_internal_normalization,
+        residual_scale=config.normalizer_residual_scale,
+        initialize_identity=config.normalizer_initialize_identity,
+        clamp_output=config.normalizer_clamp_output,
+        clamp_min=config.normalizer_clamp_min,
+        clamp_max=config.normalizer_clamp_max,
     )
+    model = NormalizedLandmarker(landmarker=landmarker, normalizer=normalizer)
+    if config.experiment_mode == "normalizer_sanity":
+        model.freeze_landmarker()
+        model.freeze_normalizer()
+    elif config.experiment_mode == "normalizer_train_frozen_landmarker":
+        model.configure_normalizer_only()
+    elif config.experiment_mode == "normalizer_joint_finetune":
+        model.configure_joint_finetune(num_unfrozen_stages=1, unfreeze_stem=False)
+    else:
+        raise ValueError(f"Unsupported experiment mode: {config.experiment_mode}")
     return model
+
+
+def build_normalizer_diagnostic_loaders(
+    config: ExperimentConfig,
+    synbaby_dataloader: torch.utils.data.DataLoader | None,
+) -> dict[str, torch.utils.data.DataLoader]:
+    """Build diagnostic loaders without changing any official evaluation path."""
+    loaders: dict[str, torch.utils.data.DataLoader] = {}
+    if config.evaluate_synbaby and synbaby_dataloader is not None:
+        loaders["synbaby"] = synbaby_dataloader
+    if config.evaluate_babyland:
+        loaders["babyland"] = build_natural_evaluation_dataloader(
+            export_root=config.babyland_crop_root,
+            gt_root=config.babyland_gt_root,
+            source_root=config.babyland_source_root,
+            config=config,
+        )
+    if config.evaluate_infanface:
+        inference_config = type(config)(**vars(config).copy())
+        inference_config.project_to_original = True
+        inference_config.source_root = config.infanface_source_root
+        loaders["infanface"] = build_inference_dataloader(
+            config.infanface_crop_root, inference_config
+        )
+    return loaders
+
+
+def finalize_normalizer_experiment(
+    model: NormalizedLandmarker,
+    config: ExperimentConfig,
+    device: torch.device,
+    synbaby_dataloader: torch.utils.data.DataLoader | None,
+    evaluation_summary: dict[str, object],
+) -> None:
+    """Generate diagnostics, modular checkpoints, and the experiment report."""
+    diagnostic_loaders = build_normalizer_diagnostic_loaders(config, synbaby_dataloader)
+    diagnostics = {
+        dataset_name: run_normalizer_diagnostics(
+            model=model,
+            dataloader=dataloader,
+            device=device,
+            output_dir=config.output_dir,
+            dataset_name=dataset_name,
+            coordinate_decoder=config.coordinate_decoder,
+            softmax_temperature=config.wasserstein_softmax_temperature,
+            visibility_threshold=config.visibility_threshold,
+            mean=config.normalization_mean,
+            std=config.normalization_std,
+            changed_pixel_thresholds=config.normalizer_changed_pixel_thresholds,
+            num_visual_examples=config.normalizer_visual_examples,
+            save_visual_examples=config.save_normalizer_visual_examples,
+        )
+        for dataset_name, dataloader in diagnostic_loaders.items()
+    }
+    write_combined_normalizer_diagnostics(config.output_dir, diagnostics)
+    checkpoint_paths = save_modular_checkpoints(
+        model=model,
+        output_dir=config.output_dir,
+        base_checkpoint_path=config.checkpoint_path,
+        experiment_mode=config.experiment_mode,
+        resolved_config_path=config.output_dir / "configs" / "resolved_config.yaml",
+        landmarker_updated=config.experiment_mode == "normalizer_joint_finetune",
+        normalizer_updated=config.experiment_mode != "normalizer_sanity",
+        decoder_name=config.coordinate_decoder,
+        loss_pipeline_name=config.landmark_loss,
+        evaluation_protocol="Existing SynBaby/BabyLand/InfAnFace evaluation pipeline",
+    )
+    warnings: list[str] = []
+    if config.experiment_mode == "normalizer_sanity":
+        for dataset_name, summary in diagnostics.items():
+            if summary["max_absolute_difference"] > config.normalizer_sanity_atol:
+                warnings.append(
+                    f"{dataset_name}: identity image difference exceeded the "
+                    f"absolute tolerance ({config.normalizer_sanity_atol:g})."
+                )
+            if summary["mean_landmark_displacement_px"] > config.normalizer_sanity_atol:
+                warnings.append(
+                    f"{dataset_name}: decoded landmark drift exceeded the identity "
+                    f"tolerance ({config.normalizer_sanity_atol:g} px)."
+                )
+    report_path = write_experiment_report(
+        output_dir=config.output_dir,
+        experiment_mode=config.experiment_mode,
+        objective="Evaluate a shallow residual appearance adapter before BabyLand-72.",
+        checkpoint_path=config.checkpoint_path,
+        parameter_counts=model.parameter_counts(),
+        evaluation_summaries=evaluation_summary.get("summaries", {}),
+        diagnostics=diagnostics,
+        checkpoint_paths=checkpoint_paths,
+        normalizer_architecture=model.normalizer.architecture_config()
+        if model.normalizer is not None
+        else None,
+        training_protocol=(
+            "Inference only; normalizer and landmarker frozen."
+            if config.experiment_mode == "normalizer_sanity"
+            else (
+                "SynBaby-supervised normalizer training; landmarker frozen."
+                if config.experiment_mode == "normalizer_train_frozen_landmarker"
+                else "SynBaby-supervised normalizer plus HRNet stage 4 and head fine-tuning."
+            )
+        ),
+        warnings=warnings,
+    )
+    commit_report_source = (
+        Path(__file__).resolve().parent.parent / "reports" / "commit_report.md"
+    )
+    if commit_report_source.exists():
+        run_commit_report = config.output_dir / "reports" / "commit_report.md"
+        run_commit_report.write_text(
+            commit_report_source.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    print(f"[INFO] Normalizer experiment report: {report_path}")
 
 
 def main() -> None:
@@ -541,6 +841,7 @@ def main() -> None:
     from scripts.engine import run_full_evaluation, smoke_test_single_batch, train_model
 
     config = build_config_from_args(args)
+    validate_experiment_config(config)
     resolve_output_dir(config)
     validate_full_evaluation_paths(config)
     config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -609,17 +910,28 @@ def main() -> None:
             f"trainable_params={trainable_parameter_count}"
         )
 
-        if args.checkpoint is not None:
-            print(f"[INFO] Loading checkpoint from {args.checkpoint}...")
+        if config.checkpoint_path is not None:
+            print(f"[INFO] Loading checkpoint from {config.checkpoint_path}...")
             checkpoint = torch.load(
-                args.checkpoint, map_location="cpu", weights_only=False
+                config.checkpoint_path, map_location="cpu", weights_only=False
             )
-            model.load_state_dict(checkpoint["model_state_dict"])
-            print(f"Loaded checkpoint: {args.checkpoint}")
+            if isinstance(model, NormalizedLandmarker):
+                load_normalized_checkpoint(
+                    model,
+                    checkpoint,
+                    strict=config.checkpoint_strict,
+                    load_normalizer=config.experiment_mode != "normalizer_sanity",
+                )
+            else:
+                model.load_state_dict(
+                    checkpoint["model_state_dict"], strict=config.checkpoint_strict
+                )
+            print(f"Loaded checkpoint: {config.checkpoint_path}")
 
-        if args.save_config:
-            print("[INFO] Saving resolved config JSON...")
+        if args.save_config or config.experiment_mode != "none":
+            print("[INFO] Saving resolved config files...")
             maybe_save_config(config)
+            save_resolved_config_files(config, config.output_dir)
 
         print("[INFO] Writing reproducibility metadata...")
         save_reproducibility_metadata(
@@ -635,6 +947,30 @@ def main() -> None:
             output_dir=config.output_dir,
             input_size=(1, 3, config.image_size[0], config.image_size[1]),
         )
+
+        if config.experiment_mode == "normalizer_sanity":
+            print(
+                "[INFO] Running identity-normalizer sanity evaluation; no optimization."
+            )
+            model.to(device)
+            full_evaluation_summary = run_full_evaluation(
+                model=model,
+                synbaby_dataloader=dataloaders["test"]
+                if config.evaluate_synbaby
+                else None,
+                device=device,
+                config=config,
+            )
+            finalize_normalizer_experiment(
+                model=model,
+                config=config,
+                device=device,
+                synbaby_dataloader=dataloaders["test"]
+                if config.evaluate_synbaby
+                else None,
+                evaluation_summary=full_evaluation_summary,
+            )
+            return
 
         print("[INFO] Building optimizer, scheduler, and losses...")
         optimizer = torch.optim.Adam(
@@ -712,6 +1048,8 @@ def main() -> None:
             lambda_lmk_vis=config.lambda_lmk_vis,
             lambda_lmk_full=config.lambda_lmk_full,
             lambda_pca_projection=config.lambda_pca_projection,
+            lambda_image_l1=config.normalizer_lambda_l1,
+            lambda_image_tv=config.normalizer_lambda_tv,
             pca_prior_path=config.pca_prior_path,
             patience=config.patience,
             project_name=config.wandb_project,
@@ -749,6 +1087,16 @@ def main() -> None:
             "[INFO] Full evaluation summary available for datasets: "
             f"{', '.join(full_evaluation_summary['summaries'])}"
         )
+        if isinstance(model, NormalizedLandmarker):
+            finalize_normalizer_experiment(
+                model=model,
+                config=config,
+                device=device,
+                synbaby_dataloader=dataloaders["test"]
+                if config.evaluate_synbaby
+                else None,
+                evaluation_summary=full_evaluation_summary,
+            )
 
 
 if __name__ == "__main__":

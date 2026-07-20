@@ -6,6 +6,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import yaml
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 ExperimentConfig = SimpleNamespace
@@ -62,6 +64,43 @@ NORMALIZATION_STD = (0.229, 0.224, 0.225)
 TRANSFER_MODE = "feature_extractor"
 NUM_UNFROZEN_STAGES = 0
 UNFREEZE_STEM = False
+
+
+# ---------------------------------------------------------------------------
+# Residual image normalizer experiments
+# ---------------------------------------------------------------------------
+EXPERIMENT_MODE = "none"
+CHECKPOINT_PATH = None
+CHECKPOINT_STRICT = True
+NORMALIZER_ENABLED = False
+NORMALIZER_TYPE = "residual"
+NORMALIZER_INPUT_CHANNELS = 3
+NORMALIZER_HIDDEN_CHANNELS = 16
+NORMALIZER_NUM_LAYERS = 3
+NORMALIZER_KERNEL_SIZE = 3
+NORMALIZER_ACTIVATION = "relu"
+NORMALIZER_INTERNAL_NORMALIZATION = "none"
+NORMALIZER_RESIDUAL_SCALE = 0.05
+NORMALIZER_INITIALIZE_IDENTITY = True
+NORMALIZER_CLAMP_OUTPUT = False
+NORMALIZER_CLAMP_MIN = 0.0
+NORMALIZER_CLAMP_MAX = 1.0
+NORMALIZER_IMAGE_REGULARIZATION_ENABLED = False
+NORMALIZER_LAMBDA_L1 = 0.0
+NORMALIZER_LAMBDA_TV = 0.0
+NORMALIZER_VISUAL_EXAMPLES = 32
+NORMALIZER_CHANGED_PIXEL_THRESHOLDS = (1e-4, 1e-3, 1e-2)
+NORMALIZER_SANITY_ATOL = 1e-6
+NORMALIZER_SANITY_RTOL = 1e-5
+SAVE_NORMALIZER_VISUAL_EXAMPLES = True
+SAVE_MARKDOWN_REPORT = True
+SAVE_CSV_REPORTS = True
+SAVE_JSON_REPORTS = True
+SAVE_PLOTS = True
+TRAIN_NORMALIZER = False
+FREEZE_LANDMARKER = False
+FINETUNE_LAST_BACKBONE_STAGE = False
+TRAIN_HEADS = False
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +228,38 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "transfer_mode": TRANSFER_MODE,
     "num_unfrozen_stages": NUM_UNFROZEN_STAGES,
     "unfreeze_stem": UNFREEZE_STEM,
+    "experiment_mode": EXPERIMENT_MODE,
+    "checkpoint_path": CHECKPOINT_PATH,
+    "checkpoint_strict": CHECKPOINT_STRICT,
+    "normalizer_enabled": NORMALIZER_ENABLED,
+    "normalizer_type": NORMALIZER_TYPE,
+    "normalizer_input_channels": NORMALIZER_INPUT_CHANNELS,
+    "normalizer_hidden_channels": NORMALIZER_HIDDEN_CHANNELS,
+    "normalizer_num_layers": NORMALIZER_NUM_LAYERS,
+    "normalizer_kernel_size": NORMALIZER_KERNEL_SIZE,
+    "normalizer_activation": NORMALIZER_ACTIVATION,
+    "normalizer_internal_normalization": NORMALIZER_INTERNAL_NORMALIZATION,
+    "normalizer_residual_scale": NORMALIZER_RESIDUAL_SCALE,
+    "normalizer_initialize_identity": NORMALIZER_INITIALIZE_IDENTITY,
+    "normalizer_clamp_output": NORMALIZER_CLAMP_OUTPUT,
+    "normalizer_clamp_min": NORMALIZER_CLAMP_MIN,
+    "normalizer_clamp_max": NORMALIZER_CLAMP_MAX,
+    "normalizer_image_regularization_enabled": NORMALIZER_IMAGE_REGULARIZATION_ENABLED,
+    "normalizer_lambda_l1": NORMALIZER_LAMBDA_L1,
+    "normalizer_lambda_tv": NORMALIZER_LAMBDA_TV,
+    "normalizer_visual_examples": NORMALIZER_VISUAL_EXAMPLES,
+    "normalizer_changed_pixel_thresholds": NORMALIZER_CHANGED_PIXEL_THRESHOLDS,
+    "normalizer_sanity_atol": NORMALIZER_SANITY_ATOL,
+    "normalizer_sanity_rtol": NORMALIZER_SANITY_RTOL,
+    "save_normalizer_visual_examples": SAVE_NORMALIZER_VISUAL_EXAMPLES,
+    "save_markdown_report": SAVE_MARKDOWN_REPORT,
+    "save_csv_reports": SAVE_CSV_REPORTS,
+    "save_json_reports": SAVE_JSON_REPORTS,
+    "save_plots": SAVE_PLOTS,
+    "train_normalizer": TRAIN_NORMALIZER,
+    "freeze_landmarker": FREEZE_LANDMARKER,
+    "finetune_last_backbone_stage": FINETUNE_LAST_BACKBONE_STAGE,
+    "train_heads": TRAIN_HEADS,
     "num_epochs": NUM_EPOCHS,
     "learning_rate": LEARNING_RATE,
     "weight_decay": WEIGHT_DECAY,
@@ -251,6 +322,135 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
 def build_config() -> ExperimentConfig:
     """Return a mutable config object populated with the module defaults."""
     return ExperimentConfig(**deepcopy(DEFAULT_CONFIG_VALUES))
+
+
+def load_yaml_config(
+    config_path: str | Path,
+    base_config: ExperimentConfig | None = None,
+) -> ExperimentConfig:
+    """Apply supported YAML overrides on top of the repository defaults."""
+    config = build_config() if base_config is None else base_config
+    config_path = Path(config_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ValueError("The YAML root must be a mapping.")
+
+    flat_overrides = _flatten_yaml_mapping(payload)
+    aliases = {
+        "experiment.name": "experiment_mode",
+        "experiment.output_root": "runs_dir",
+        "experiment.seed": "seed",
+        "checkpoint.path": "checkpoint_path",
+        "checkpoint.strict": "checkpoint_strict",
+        "normalizer.enabled": "normalizer_enabled",
+        "normalizer.type": "normalizer_type",
+        "normalizer.input_channels": "normalizer_input_channels",
+        "normalizer.hidden_channels": "normalizer_hidden_channels",
+        "normalizer.num_layers": "normalizer_num_layers",
+        "normalizer.kernel_size": "normalizer_kernel_size",
+        "normalizer.activation": "normalizer_activation",
+        "normalizer.normalization": "normalizer_internal_normalization",
+        "normalizer.residual_scale": "normalizer_residual_scale",
+        "normalizer.initialize_identity": "normalizer_initialize_identity",
+        "normalizer.clamp_output": "normalizer_clamp_output",
+        "normalizer.clamp_min": "normalizer_clamp_min",
+        "normalizer.clamp_max": "normalizer_clamp_max",
+        "training.max_epochs": "num_epochs",
+        "training.learning_rate": "learning_rate",
+        "training.weight_decay": "weight_decay",
+        "training.train_normalizer": "train_normalizer",
+        "training.freeze_landmarker": "freeze_landmarker",
+        "training.finetune_last_backbone_stage": "finetune_last_backbone_stage",
+        "training.train_heads": "train_heads",
+        "training.image_regularization.enabled": "normalizer_image_regularization_enabled",
+        "training.image_regularization.lambda_l1": "normalizer_lambda_l1",
+        "training.image_regularization.lambda_tv": "normalizer_lambda_tv",
+        "evaluation.batch_size": "eval_batch_size",
+        "evaluation.save_visual_examples": "save_normalizer_visual_examples",
+        "evaluation.num_visual_examples": "normalizer_visual_examples",
+        "evaluation.datasets.synbaby": "evaluate_synbaby",
+        "evaluation.datasets.babyland": "evaluate_babyland",
+        "evaluation.datasets.infanface": "evaluate_infanface",
+    }
+    direct_prefixes = {
+        "data": "",
+        "model": "",
+        "training": "",
+        "evaluation": "",
+        "reporting": "",
+    }
+    unknown_keys: list[str] = []
+    for yaml_key, value in flat_overrides.items():
+        target_key = aliases.get(yaml_key)
+        if target_key is None:
+            root, _, leaf = yaml_key.partition(".")
+            if root in direct_prefixes and leaf:
+                normalized_leaf = {
+                    "save_markdown_report": "save_markdown_report",
+                    "save_csv": "save_csv_reports",
+                    "save_json": "save_json_reports",
+                    "save_plots": "save_plots",
+                }.get(leaf, leaf)
+                if hasattr(config, normalized_leaf):
+                    target_key = normalized_leaf
+            elif hasattr(config, yaml_key):
+                target_key = yaml_key
+        if target_key is None:
+            unknown_keys.append(yaml_key)
+            continue
+        if (
+            target_key.endswith("_root")
+            or target_key.endswith("_path")
+            or target_key
+            in {
+                "runs_dir",
+                "dataset_root",
+                "cache_dir",
+                "pretrained_weights",
+            }
+        ):
+            value = None if value is None else Path(value)
+        setattr(config, target_key, value)
+    if unknown_keys:
+        raise ValueError(f"Unsupported YAML configuration keys: {sorted(unknown_keys)}")
+    config.config_path = config_path
+    return config
+
+
+def save_resolved_config_files(
+    config: ExperimentConfig, output_dir: str | Path
+) -> None:
+    """Save the resolved configuration as JSON and YAML."""
+    output_dir = Path(output_dir)
+    configs_dir = output_dir / "configs"
+    configs_dir.mkdir(parents=True, exist_ok=True)
+    serialized = config_to_serializable_dict(config)
+    import json
+
+    (configs_dir / "resolved_config.json").write_text(
+        json.dumps(serialized, indent=2), encoding="utf-8"
+    )
+    (configs_dir / "resolved_config.yaml").write_text(
+        yaml.safe_dump(serialized, sort_keys=True), encoding="utf-8"
+    )
+    (output_dir / "resolved_config.json").write_text(
+        json.dumps(serialized, indent=2), encoding="utf-8"
+    )
+    (output_dir / "resolved_config.yaml").write_text(
+        yaml.safe_dump(serialized, sort_keys=True), encoding="utf-8"
+    )
+
+
+def _flatten_yaml_mapping(payload: dict[str, Any], prefix: str = "") -> dict[str, Any]:
+    """Flatten a nested YAML mapping into dotted keys."""
+    flattened: dict[str, Any] = {}
+    for key, value in payload.items():
+        dotted_key = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(value, dict):
+            flattened.update(_flatten_yaml_mapping(value, dotted_key))
+        else:
+            flattened[dotted_key] = value
+    return flattened
 
 
 def resolve_output_dir(config: ExperimentConfig) -> Path:

@@ -14,8 +14,39 @@ from .metrics import (
     compute_box_normalized_nme,
     decode_heatmaps_to_image_coords,
 )
+from .normalizer_experiments import compute_image_regularization
 from .pca_shape_prior import load_pca_shape_prior
 from ..utils.visualization import visualize_predicted_heatmaps_on_train_batch
+
+
+def _forward_with_normalized_images(
+    model: torch.nn.Module, images: torch.Tensor
+) -> tuple[dict[str, torch.Tensor], torch.Tensor]:
+    """Run either a plain landmarker or a normalizer-wrapped landmarker."""
+    if hasattr(model, "normalize_images") and hasattr(model, "forward_normalized"):
+        normalized_images = model.normalize_images(images)
+        return model.forward_normalized(normalized_images), normalized_images
+    return model(images), images
+
+
+def _add_image_regularization(
+    loss_dict: dict[str, torch.Tensor],
+    images: torch.Tensor,
+    normalized_images: torch.Tensor,
+    lambda_image_l1: float,
+    lambda_image_tv: float,
+) -> None:
+    """Add residual-image regularization without changing the landmark losses."""
+    image_losses = compute_image_regularization(
+        images,
+        normalized_images,
+        lambda_l1=lambda_image_l1,
+        lambda_tv=lambda_image_tv,
+    )
+    loss_dict.update(image_losses)
+    loss_dict["total_loss"] = (
+        loss_dict["total_loss"] + image_losses["image_regularization_loss"]
+    )
 
 
 def run_epoch(
@@ -30,6 +61,8 @@ def run_epoch(
     lambda_lmk_vis: float = 1.0,
     lambda_lmk_full: float = 1.0,
     lambda_pca_projection: float = 0.0,
+    lambda_image_l1: float = 0.0,
+    lambda_image_tv: float = 0.0,
     pca_shape_prior: dict[str, Any] | None = None,
     training: bool = True,
     use_subpixel_decode: bool = False,
@@ -48,6 +81,8 @@ def run_epoch(
     visible_landmark_loss_meter = AverageMeter()
     visibility_loss_meter = AverageMeter()
     pca_projection_loss_meter = AverageMeter()
+    image_l1_loss_meter = AverageMeter()
+    image_tv_loss_meter = AverageMeter()
     nme_meter = AverageMeter()
     batch_time_meter = AverageMeter()
     autocast_device = device.type
@@ -77,7 +112,9 @@ def run_epoch(
         if training:
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type=autocast_device, enabled=use_amp):
-                outputs = model(images)
+                outputs, normalized_images = _forward_with_normalized_images(
+                    model, images
+                )
                 loss_dict = compute_multitask_loss(
                     outputs=outputs,
                     batch=batch_on_device,
@@ -90,6 +127,13 @@ def run_epoch(
                     pca_shape_prior=pca_shape_prior,
                     image_height=images.shape[2],
                     image_width=images.shape[3],
+                )
+                _add_image_regularization(
+                    loss_dict,
+                    images,
+                    normalized_images,
+                    lambda_image_l1,
+                    lambda_image_tv,
                 )
             total_loss = loss_dict["total_loss"]
             if use_amp:
@@ -106,7 +150,9 @@ def run_epoch(
         else:
             with torch.inference_mode():
                 with torch.autocast(device_type=autocast_device, enabled=use_amp):
-                    outputs = model(images)
+                    outputs, normalized_images = _forward_with_normalized_images(
+                        model, images
+                    )
                     loss_dict = compute_multitask_loss(
                         outputs=outputs,
                         batch=batch_on_device,
@@ -120,6 +166,13 @@ def run_epoch(
                         image_height=images.shape[2],
                         image_width=images.shape[3],
                     )
+                    _add_image_regularization(
+                        loss_dict,
+                        images,
+                        normalized_images,
+                        lambda_image_l1,
+                        lambda_image_tv,
+                    )
             total_loss = loss_dict["total_loss"]
 
         batch_size = images.size(0)
@@ -132,6 +185,8 @@ def run_epoch(
         )
         visibility_loss_meter.update(loss_dict["visibility_loss"].item(), batch_size)
         pca_projection_loss_meter.update(loss_dict["pca_loss"].item(), batch_size)
+        image_l1_loss_meter.update(loss_dict["image_l1_loss"].item(), batch_size)
+        image_tv_loss_meter.update(loss_dict["image_tv_loss"].item(), batch_size)
 
         if "landmarks" in batch_on_device:
             pred_landmarks = decode_heatmaps_to_image_coords(
@@ -154,6 +209,7 @@ def run_epoch(
             visible=f"{visible_landmark_loss_meter.avg:.4f}",
             vis=f"{visibility_loss_meter.avg:.4f}",
             pca=f"{pca_projection_loss_meter.avg:.4f}",
+            img=f"{image_l1_loss_meter.avg + image_tv_loss_meter.avg:.4f}",
             nme=f"{nme_meter.avg:.4f}",
         )
 
@@ -165,6 +221,8 @@ def run_epoch(
         "visible_landmark_loss": visible_landmark_loss_meter.avg,
         "visibility_loss": visibility_loss_meter.avg,
         "pca_loss": pca_projection_loss_meter.avg,
+        "image_l1_loss": image_l1_loss_meter.avg,
+        "image_tv_loss": image_tv_loss_meter.avg,
         "nme": nme_meter.avg,
         "batch_time": batch_time_meter.avg,
         "epoch_time": time.time() - epoch_start_time,
@@ -212,6 +270,8 @@ def print_epoch_summary(
         f"visible: {train_metrics['visible_landmark_loss']:.6f} | "
         f"vis: {train_metrics['visibility_loss']:.6f} | "
         f"pca: {train_metrics['pca_loss']:.6f} | "
+        f"image L1/TV: {train_metrics['image_l1_loss']:.6f}/"
+        f"{train_metrics['image_tv_loss']:.6f} | "
         f"NME: {train_metrics['nme']:.6f}"
     )
     print(
@@ -220,6 +280,8 @@ def print_epoch_summary(
         f"visible: {val_metrics['visible_landmark_loss']:.6f} | "
         f"vis: {val_metrics['visibility_loss']:.6f} | "
         f"pca: {val_metrics['pca_loss']:.6f} | "
+        f"image L1/TV: {val_metrics['image_l1_loss']:.6f}/"
+        f"{val_metrics['image_tv_loss']:.6f} | "
         f"NME: {val_metrics['nme']:.6f}"
     )
     print(
@@ -250,6 +312,8 @@ def initialize_results_csv(csv_path: str | Path) -> None:
                 "visible_landmark_loss",
                 "visibility_loss",
                 "pca_loss",
+                "image_l1_loss",
+                "image_tv_loss",
                 "nme",
                 "lr",
                 "landmark_loss",
@@ -281,6 +345,8 @@ def append_results_row(
                 metrics["visible_landmark_loss"],
                 metrics["visibility_loss"],
                 metrics["pca_loss"],
+                metrics["image_l1_loss"],
+                metrics["image_tv_loss"],
                 metrics["nme"],
                 lr,
                 landmark_loss,
@@ -305,6 +371,8 @@ def train_model(
     lambda_lmk_vis: float = 1.0,
     lambda_lmk_full: float = 1.0,
     lambda_pca_projection: float = 0.0,
+    lambda_image_l1: float = 0.0,
+    lambda_image_tv: float = 0.0,
     pca_prior_path: str | Path | None = None,
     patience: int = 15,
     project_name: str | None = None,
@@ -369,6 +437,8 @@ def train_model(
             lambda_lmk_vis=lambda_lmk_vis,
             lambda_lmk_full=lambda_lmk_full,
             lambda_pca_projection=lambda_pca_projection,
+            lambda_image_l1=lambda_image_l1,
+            lambda_image_tv=lambda_image_tv,
             pca_shape_prior=pca_shape_prior,
             training=True,
             use_subpixel_decode=True,
@@ -389,6 +459,8 @@ def train_model(
             lambda_lmk_vis=lambda_lmk_vis,
             lambda_lmk_full=lambda_lmk_full,
             lambda_pca_projection=lambda_pca_projection,
+            lambda_image_l1=lambda_image_l1,
+            lambda_image_tv=lambda_image_tv,
             pca_shape_prior=pca_shape_prior,
             training=False,
             use_subpixel_decode=True,
@@ -456,12 +528,16 @@ def train_model(
                     ],
                     "train/visibility_loss": train_metrics["visibility_loss"],
                     "train/pca_loss": train_metrics["pca_loss"],
+                    "train/image_l1_loss": train_metrics["image_l1_loss"],
+                    "train/image_tv_loss": train_metrics["image_tv_loss"],
                     "train/nme": train_metrics["nme"],
                     "val/total_loss": val_metrics["total_loss"],
                     "val/full_landmark_loss": val_metrics["full_landmark_loss"],
                     "val/visible_landmark_loss": val_metrics["visible_landmark_loss"],
                     "val/visibility_loss": val_metrics["visibility_loss"],
                     "val/pca_loss": val_metrics["pca_loss"],
+                    "val/image_l1_loss": val_metrics["image_l1_loss"],
+                    "val/image_tv_loss": val_metrics["image_tv_loss"],
                     "val/nme": val_metrics["nme"],
                     "best/val_total_loss": best_val_loss,
                 }

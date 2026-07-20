@@ -1,0 +1,49 @@
+experiment:
+  name: normalizer_train_frozen_landmarker
+  output_root: runs
+  seed: 42
+
+checkpoint:
+  path: null
+  strict: true
+
+normalizer:
+  enabled: true
+  type: residual
+  input_channels: 3
+  hidden_channels: 16
+  num_layers: 3
+  kernel_size: 3
+  activation: relu
+  normalization: none
+  residual_scale: 0.05
+  initialize_identity: true
+  clamp_output: false
+
+training:
+  max_epochs: 60
+  learning_rate: 0.0001
+  weight_decay: 0.0
+  train_normalizer: true
+  freeze_landmarker: true
+  finetune_last_backbone_stage: false
+  train_heads: false
+  landmark_loss: wasserstein
+  image_regularization:
+    enabled: false
+    lambda_l1: 0.0
+    lambda_tv: 0.0
+
+evaluation:
+  datasets:
+    synbaby: true
+    babyland: true
+    infanface: true
+  save_visual_examples: true
+  num_visual_examples: 32
+
+reporting:
+  save_markdown_report: true
+  save_csv: true
+  save_json: true
+  save_plots: true
