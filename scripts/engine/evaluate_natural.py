@@ -315,6 +315,7 @@ def evaluate_natural_checkpoint(
                                     predicted_visibility[landmark_index]
                                 ),
                                 "landmark_count": int(len(target_visibility)),
+                                "number_of_valid_landmarks": int(len(gt_valid_errors)),
                             }
                         )
                     for landmark_index, error_value in visible_errors.items():
@@ -346,6 +347,7 @@ def evaluate_natural_checkpoint(
                                 predicted_visibility[landmark_index]
                             ),
                             "landmark_count": int(len(target_visibility)),
+                            "number_of_valid_landmarks": int(len(gt_valid_errors)),
                         }
                     )
 
@@ -353,6 +355,7 @@ def evaluate_natural_checkpoint(
                     {
                         "sample_id": sample_id,
                         "orientation": orientation,
+                        "number_of_valid_landmarks": int(len(gt_valid_errors)),
                         "mean_nme_box": mean_box_nme,
                         "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
                         "mean_nme_box_gt_valid": mean_box_nme_gt_valid,
@@ -612,7 +615,7 @@ def evaluate_natural_checkpoint(
         ),
         "evaluation_modes": {
             "visible_intersection": "gt_visibility == 1 and pred_visibility == 1",
-            "gt_valid": "finite GT coordinates, regardless of predicted visibility",
+            "gt_valid": "GT visibility > 0 and finite GT coordinates, regardless of predicted visibility",
         },
         "mean_nme_interocular": None,
         "visibility_metrics": visibility_metrics,

@@ -757,6 +757,7 @@ def save_per_image_nme_csv(
                 "orientation",
                 "yaw_angle",
                 "yaw_group",
+                "number_of_valid_landmarks",
                 "mean_nme_box",
                 "mean_nme_box_point_to_line",
                 "hausdorff_pixel",
@@ -781,6 +782,7 @@ def save_per_image_nme_csv(
                     row.get("orientation"),
                     row.get("yaw_angle"),
                     row.get("yaw_group"),
+                    row.get("number_of_valid_landmarks"),
                     (
                         format_metric_value(
                             round_metric_value(float(row["mean_nme_box"]))
@@ -931,6 +933,7 @@ def save_per_image_per_landmark_nme_csv(
         "gt_visibility",
         "pred_visibility",
         "landmark_count",
+        "number_of_valid_landmarks",
     ]
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", newline="", encoding="utf-8") as file:
@@ -1283,6 +1286,7 @@ def evaluate_checkpoint(
                                 predicted_visibility[landmark_index]
                             ),
                             "landmark_count": int(len(current_errors)),
+                            "number_of_valid_landmarks": int(len(current_errors)),
                         }
                     )
 
@@ -1299,6 +1303,7 @@ def evaluate_checkpoint(
                         "yaw_angle": yaw_angle,
                         "yaw_group": yaw_group,
                         "mean_nme_box": current_mean_box_nme,
+                        "number_of_valid_landmarks": int(len(current_errors)),
                         "mean_nme_box_point_to_line": current_mean_box_nme_point_to_line,
                         "mean_nme_box_gt_valid": current_mean_box_nme,
                         "mean_nme_box_point_to_line_gt_valid": current_mean_box_nme_point_to_line,

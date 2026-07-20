@@ -24,6 +24,7 @@ from .geometry_metrics import compute_per_landmark_point_to_line_distances
 from ..utils.natural_labels import (
     NATURAL_ORIENTATION_NAMES,
     UNKNOWN_ORIENTATION,
+    compute_natural_valid_landmark_mask,
     orientation_from_class_idx,
     parse_natural_landmark_label,
 )
@@ -663,12 +664,19 @@ def benchmark_prediction_directory(
         orientation_sample_counts[gt_orientation] += 1
 
         candidate_prediction_paths = prediction_paths_by_gt_stem.get(sample_id, [])
+        full_gt_valid_count = int(
+            compute_natural_valid_landmark_mask(
+                landmarks=gt_landmarks_all,
+                visibility=gt_visibility_all,
+            ).sum()
+        )
         if not candidate_prediction_paths:
             images_without_prediction += 1
             per_image_nme.append(
                 {
                     "sample_id": sample_id,
                     "orientation": gt_orientation,
+                    "number_of_valid_landmarks": full_gt_valid_count,
                     "mean_nme_box": None,
                     "mean_nme_box_point_to_line": None,
                     "hausdorff_pixel_visible_intersection": None,
@@ -709,8 +717,9 @@ def benchmark_prediction_directory(
             else:
                 pred_visibility = None
                 valid_mask = gt_visible_mask
-            gt_valid_mask = np.isfinite(gt_landmarks[:, 0]) & np.isfinite(
-                gt_landmarks[:, 1]
+            gt_valid_mask = compute_natural_valid_landmark_mask(
+                landmarks=gt_landmarks,
+                visibility=gt_visibility,
             )
             gt_landmarks_visible_mode = gt_landmarks.astype(np.float32, copy=True)
             gt_landmarks_visible_mode[~gt_visible_mask] = 0.0
@@ -811,6 +820,7 @@ def benchmark_prediction_directory(
                         "gt_visibility": int(gt_visibility[landmark_index]),
                         "pred_visibility": pred_visibility_value,
                         "landmark_count": int(landmark_count),
+                        "number_of_valid_landmarks": int(len(gt_valid_errors)),
                     }
                 )
             for landmark_index, error_value in gt_valid_errors.items():
@@ -836,6 +846,7 @@ def benchmark_prediction_directory(
                         "gt_visibility": int(gt_visibility[landmark_index]),
                         "pred_visibility": pred_visibility_value,
                         "landmark_count": int(landmark_count),
+                        "number_of_valid_landmarks": int(len(gt_valid_errors)),
                     }
                 )
             for landmark_index, error_value in visible_errors.items():
@@ -861,6 +872,7 @@ def benchmark_prediction_directory(
                 {
                     "sample_id": prediction_path.stem,
                     "orientation": gt_orientation,
+                    "number_of_valid_landmarks": int(len(gt_valid_errors)),
                     "mean_nme_box": mean_box_nme,
                     "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
                     "hausdorff_pixel_visible_intersection": hausdorff_pixel_visible,
@@ -881,6 +893,7 @@ def benchmark_prediction_directory(
                 {
                     "sample_id": sample_id,
                     "orientation": gt_orientation,
+                    "number_of_valid_landmarks": full_gt_valid_count,
                     "mean_nme_box": None,
                     "mean_nme_box_point_to_line": None,
                     "hausdorff_pixel_visible_intersection": None,
@@ -1198,7 +1211,7 @@ def benchmark_prediction_directory(
         "gt_valid_landmarks_used": int(gt_valid_landmarks_used),
         "evaluation_modes": {
             "visible_intersection": "gt_visibility == 1 and pred_visibility == 1 when prediction visibility is available; otherwise GT-visible landmarks",
-            "gt_valid": "finite GT coordinates, regardless of predicted visibility",
+            "gt_valid": "GT visibility > 0 and finite GT coordinates, regardless of predicted visibility",
         },
         "invalid_prediction_files": invalid_prediction_files,
         "unmatched_prediction_files": unmatched_prediction_files,

@@ -22,6 +22,7 @@ from scripts.analysis.benchmark_landmark_models import (
 from scripts.engine.evaluate import (
     compute_normalized_hausdorff_distance,
     compute_symmetric_hausdorff_distance,
+    save_per_image_nme_csv,
 )
 from scripts.engine.evaluation_modes import compute_masked_natural_per_landmark_nme
 from scripts.utils.visualization import save_landmark_overlay_image
@@ -44,12 +45,18 @@ def test_orientation_class_labels_are_normalized() -> None:
     assert normalize_orientation_label("yaw_plus_4deg") == "right"
 
 
-def test_gt_valid_includes_predicted_invisible_and_excludes_nan_gt() -> None:
-    """The gt_valid mode ignores predicted visibility but excludes missing GT."""
-    predicted = np.asarray([[0.0, 0.0], [1.0, 1.0], [3.0, 3.0]], dtype=np.float32)
-    target = np.asarray([[0.0, 0.0], [2.0, 1.0], [np.nan, np.nan]], dtype=np.float32)
-    target_visibility = np.asarray([1, 1, 0], dtype=np.int64)
-    predicted_visibility = np.asarray([1, 0, 1], dtype=np.int64)
+def test_gt_valid_uses_gt_visibility_and_ignores_predicted_visibility() -> None:
+    """GT-valid excludes invisible finite placeholders but not hidden predictions."""
+    predicted = np.asarray(
+        [[0.0, 0.0], [1.0, 1.0], [30.0, 30.0], [3.0, 3.0]],
+        dtype=np.float32,
+    )
+    target = np.asarray(
+        [[0.0, 0.0], [2.0, 1.0], [0.0, 0.0], [np.nan, np.nan]],
+        dtype=np.float32,
+    )
+    target_visibility = np.asarray([1, 1, 0, 0], dtype=np.int64)
+    predicted_visibility = np.asarray([1, 0, 1, 1], dtype=np.int64)
 
     visible_errors, _, _, _ = compute_masked_natural_per_landmark_nme(
         predicted,
@@ -70,6 +77,47 @@ def test_gt_valid_includes_predicted_invisible_and_excludes_nan_gt() -> None:
 
     assert set(visible_errors) == {0}
     assert set(gt_valid_errors) == {0, 1}
+
+
+def test_gt_valid_normalization_uses_only_actual_valid_gt_landmarks() -> None:
+    """Invisible (0, 0) placeholders cannot alter the NME or its denominator."""
+    predicted = np.asarray([[1.0, 0.0], [10.0, 11.0], [100.0, 100.0]], dtype=np.float32)
+    target = np.asarray([[0.0, 0.0], [10.0, 10.0], [0.0, 0.0]], dtype=np.float32)
+    target_visibility = np.asarray([1, 1, 0], dtype=np.int64)
+    predicted_visibility = np.asarray([1, 1, 1], dtype=np.int64)
+
+    errors, _, mean_nme, _ = compute_masked_natural_per_landmark_nme(
+        predicted,
+        target,
+        target_visibility,
+        predicted_visibility,
+        normalization_fn=simple_box_normalization,
+        inclusion_mode="gt_valid",
+    )
+
+    assert set(errors) == {0, 1}
+    assert np.isclose(mean_nme, 0.1)
+
+
+def test_per_image_csv_records_actual_valid_landmark_count(tmp_path) -> None:
+    """Per-image exports must not report the fixed 72-point output size as valid."""
+    output_path = tmp_path / "per_image_nme.csv"
+    save_per_image_nme_csv(
+        [
+            {
+                "sample_id": "profile",
+                "orientation": "right",
+                "number_of_valid_landmarks": 41,
+                "mean_nme_box": 0.1041,
+                "mean_nme_box_gt_valid": 0.1041,
+                "mean_nme_interocular": None,
+            }
+        ],
+        output_path,
+    )
+
+    exported = pd.read_csv(output_path)
+    assert exported.loc[0, "number_of_valid_landmarks"] == 41
 
 
 def test_symmetric_hausdorff_distance_handles_basic_cases() -> None:
