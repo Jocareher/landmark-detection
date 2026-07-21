@@ -10,6 +10,12 @@ import numpy as np
 import torch
 from PIL import Image
 
+from .evaluation_reporting import (
+    REPORT_CATEGORIES,
+    collect_official_metric_rows,
+    format_report_value,
+    write_official_metric_exports,
+)
 from .metrics import decode_heatmaps_to_image_coords
 from ..models import NormalizedLandmarker
 
@@ -440,6 +446,8 @@ def write_experiment_report(
     reports_dir = output_dir / "reports"
     reports_dir.mkdir(parents=True, exist_ok=True)
     report_path = reports_dir / "report.md"
+    official_metric_rows = collect_official_metric_rows(evaluation_summaries)
+    write_official_metric_exports(reports_dir, official_metric_rows)
     lines = [
         f"# {experiment_mode}",
         "",
@@ -466,13 +474,33 @@ def write_experiment_report(
         )
     lines.extend(["", "## Official evaluation summaries", ""])
     for dataset_name, evaluation_summary in evaluation_summaries.items():
-        lines.extend([f"### {dataset_name}", "", "| Metric | Value |", "|---|---:|"])
-        metric_rows = _collect_scalar_metrics(evaluation_summary)
-        if metric_rows:
-            lines.extend(f"| {key} | {value} |" for key, value in metric_rows)
-        else:
-            lines.append("| summary | See the existing evaluation output directory |")
-        lines.append("")
+        dataset_rows = [
+            row for row in official_metric_rows if row["dataset"] == dataset_name
+        ]
+        lines.extend([f"### {dataset_name}", ""])
+        if not dataset_rows:
+            lines.extend(["See the existing evaluation output directory.", ""])
+            continue
+        for category in REPORT_CATEGORIES:
+            category_rows = [row for row in dataset_rows if row["category"] == category]
+            if not category_rows:
+                continue
+            lines.extend([f"#### {category}", "", "| Metric | Value |", "|---|---:|"])
+            lines.extend(
+                f"| {row['metric']} | {format_report_value(row['value'])} |"
+                for row in category_rows
+            )
+            lines.append("")
+    lines.extend(
+        [
+            "Excel-ready exports:",
+            "",
+            "- `official_metrics_long.csv`: one row per dataset and metric.",
+            "- `official_metrics_wide.csv`: one dataset per row.",
+            "- `official_metrics_copy_paste.tsv`: tab-separated wide table for direct copy/paste.",
+            "",
+        ]
+    )
     lines.extend(["", "## Normalizer and prediction-drift diagnostics", ""])
     for dataset_name, summary in diagnostics.items():
         lines.extend(
@@ -529,22 +557,6 @@ def write_experiment_report(
     )
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path
-
-
-def _collect_scalar_metrics(
-    value: Any, prefix: str = "", limit: int = 40
-) -> list[tuple[str, Any]]:
-    """Collect a compact set of scalar values from a nested evaluation summary."""
-    rows: list[tuple[str, Any]] = []
-    if isinstance(value, dict):
-        for key, nested_value in value.items():
-            nested_prefix = f"{prefix}.{key}" if prefix else str(key)
-            rows.extend(_collect_scalar_metrics(nested_value, nested_prefix, limit))
-            if len(rows) >= limit:
-                break
-    elif isinstance(value, (str, int, float, bool)) or value is None:
-        rows.append((prefix, value))
-    return rows[:limit]
 
 
 def _save_visual_example(

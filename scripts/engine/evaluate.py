@@ -181,6 +181,30 @@ def compute_normalized_hausdorff_distance(
     return pixel_distance, float(pixel_distance / normalization)
 
 
+def summarize_metric_distribution(
+    metric_name: str,
+    values: list[float],
+) -> dict[str, float | None]:
+    """Summarize finite image-level metric values for final reports."""
+    finite_values = np.asarray(values, dtype=np.float64)
+    finite_values = finite_values[np.isfinite(finite_values)]
+    if finite_values.size == 0:
+        return {
+            f"mean_{metric_name}": None,
+            f"median_{metric_name}": None,
+            f"p90_{metric_name}": None,
+            f"p95_{metric_name}": None,
+            f"p99_{metric_name}": None,
+        }
+    return {
+        f"mean_{metric_name}": float(np.mean(finite_values)),
+        f"median_{metric_name}": float(np.median(finite_values)),
+        f"p90_{metric_name}": float(np.percentile(finite_values, 90)),
+        f"p95_{metric_name}": float(np.percentile(finite_values, 95)),
+        f"p99_{metric_name}": float(np.percentile(finite_values, 99)),
+    }
+
+
 def compute_interocular_normalization_factor(
     target_landmarks: np.ndarray,
     left_eye_corner_index: int = 36,
@@ -1127,6 +1151,7 @@ def evaluate_checkpoint(
     yaw_display_labels: dict[str, str] = {}
     yaw_sort_values: dict[str, float] = {}
     global_interocular_nme_values: list[float] = []
+    image_hausdorff_values: list[float] = []
 
     yaw_sample_counts: dict[str, int] = {}
 
@@ -1240,6 +1265,13 @@ def evaluate_checkpoint(
                 current_mean_box_nme_point_to_line = float(
                     current_point_to_line_errors.mean()
                 )
+                hausdorff_pixel, hausdorff_box = compute_normalized_hausdorff_distance(
+                    predicted_landmarks=predicted_landmarks_original,
+                    target_landmarks=target_landmarks_original,
+                    valid_mask=np.ones(len(target_landmarks_original), dtype=bool),
+                )
+                if np.isfinite(hausdorff_box):
+                    image_hausdorff_values.append(hausdorff_box)
 
                 current_mean_interocular_nme: float | None = None
                 if abs(yaw_angle) < 55.0:
@@ -1305,8 +1337,12 @@ def evaluate_checkpoint(
                         "mean_nme_box": current_mean_box_nme,
                         "number_of_valid_landmarks": int(len(current_errors)),
                         "mean_nme_box_point_to_line": current_mean_box_nme_point_to_line,
+                        "hausdorff_pixel": hausdorff_pixel,
+                        "hausdorff_box": hausdorff_box,
                         "mean_nme_box_gt_valid": current_mean_box_nme,
                         "mean_nme_box_point_to_line_gt_valid": current_mean_box_nme_point_to_line,
+                        "hausdorff_pixel_gt_valid": hausdorff_pixel,
+                        "hausdorff_box_gt_valid": hausdorff_box,
                         "mean_nme_interocular": current_mean_interocular_nme,
                     }
                 )
@@ -1484,6 +1520,7 @@ def evaluate_checkpoint(
         "median_nme_box_point_to_line": float(
             np.median([row["mean_nme_box_point_to_line"] for row in per_image_nme])
         ),
+        **summarize_metric_distribution("hausdorff_box", image_hausdorff_values),
         "mean_nme_interocular": (
             float(np.mean(global_interocular_nme_values))
             if global_interocular_nme_values
@@ -1504,6 +1541,9 @@ def evaluate_checkpoint(
             np.median(
                 [row["mean_nme_box_point_to_line_gt_valid"] for row in per_image_nme]
             )
+        ),
+        **summarize_metric_distribution(
+            "hausdorff_box_gt_valid", image_hausdorff_values
         ),
         "evaluation_modes": {
             "visible_intersection": "not applicable for synthetic final evaluation unless visibility masks are used",

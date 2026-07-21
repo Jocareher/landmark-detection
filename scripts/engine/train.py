@@ -705,11 +705,17 @@ def train_model(
 
     final_train_nme = history["train"][-1]["nme"] if history["train"] else None
     final_val_nme = history["val"][-1]["nme"] if history["val"] else None
+    final_train_pca_loss = (
+        history["train"][-1]["pca_loss"] if history["train"] else None
+    )
+    final_val_pca_loss = history["val"][-1]["pca_loss"] if history["val"] else None
     reporter.finish_run(
         best_epoch=best_epoch + 1 if best_epoch >= 0 else -1,
         best_validation_nme=best_val_nme,
         final_train_nme=final_train_nme,
         final_validation_nme=final_val_nme,
+        final_train_pca_loss=final_train_pca_loss,
+        final_validation_pca_loss=final_val_pca_loss,
         best_checkpoint_path=output_dir / "best_model.pth",
         wandb_url=wandb_url,
     )

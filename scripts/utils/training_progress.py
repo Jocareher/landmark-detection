@@ -318,6 +318,8 @@ class TrainingProgressReporter:
         best_validation_nme: float,
         final_train_nme: float | None,
         final_validation_nme: float | None,
+        final_train_pca_loss: float | None,
+        final_validation_pca_loss: float | None,
         best_checkpoint_path: str | Path,
         wandb_url: str | None,
     ) -> None:
@@ -332,6 +334,11 @@ class TrainingProgressReporter:
             ("Best validation NME", format_metric(best_validation_nme)),
             ("Final training NME", format_metric(final_train_nme)),
             ("Final validation NME", format_metric(final_validation_nme)),
+            ("Final training PCA loss", format_metric(final_train_pca_loss)),
+            (
+                "Final validation PCA loss",
+                format_metric(final_validation_pca_loss),
+            ),
             ("Total training time", format_duration(total_time)),
             ("Best checkpoint", str(best_checkpoint_path)),
             ("W&B URL", wandb_url or "unavailable"),

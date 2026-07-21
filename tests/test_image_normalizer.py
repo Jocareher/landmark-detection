@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import csv
 from argparse import Namespace
 from pathlib import Path
 
@@ -9,6 +10,11 @@ import yaml
 from torch import nn
 
 from scripts.config import apply_argparse_arguments, build_config, load_yaml_config
+from scripts.engine.evaluation_reporting import (
+    collect_official_metric_rows,
+    write_evaluation_report,
+    write_official_metric_exports,
+)
 from scripts.engine.normalizer_experiments import run_normalizer_diagnostics
 from scripts.engine.normalizer_monitoring import NormalizerProbeMonitor
 from scripts.models import (
@@ -30,6 +36,59 @@ class DummyLandmarker(nn.Module):
             "visible_heatmaps": features,
             "visibility_logits": features.mean(dim=(-2, -1)),
         }
+
+
+def test_official_metric_exports_unwrap_metrics_and_keep_hausdorff(
+    tmp_path: Path,
+) -> None:
+    summaries = {
+        "babyland": {
+            "mean_nme_box_gt_valid": 0.1041,
+            "mean_hausdorff_box_gt_valid": 0.201,
+        },
+        "infanface": {
+            "inference": {"total_images": 20},
+            "metrics": {
+                "mean_nme_box": 0.09,
+                "mean_hausdorff_box": 0.18,
+            },
+        },
+    }
+
+    rows = collect_official_metric_rows(summaries)
+    write_official_metric_exports(tmp_path, rows)
+
+    row_keys = {(row["dataset"], row["metric"]) for row in rows}
+    assert ("babyland", "mean_hausdorff_box_gt_valid") in row_keys
+    assert ("infanface", "mean_hausdorff_box") in row_keys
+    with (tmp_path / "official_metrics_wide.csv").open(
+        newline="", encoding="utf-8"
+    ) as handle:
+        wide_rows = list(csv.DictReader(handle))
+    assert wide_rows[0]["mean_nme_box_gt_valid"] == "0.1041"
+    assert wide_rows[1]["mean_hausdorff_box"] == "0.18"
+    assert (tmp_path / "official_metrics_long.csv").exists()
+    assert (tmp_path / "official_metrics_copy_paste.tsv").exists()
+
+
+def test_repository_wide_evaluation_report_is_experiment_agnostic(
+    tmp_path: Path,
+) -> None:
+    paths = write_evaluation_report(
+        reports_dir=tmp_path,
+        evaluation_summaries={
+            "synbaby": {
+                "mean_nme_box": 0.05,
+                "mean_hausdorff_box": 0.12,
+            }
+        },
+    )
+
+    report = Path(paths["markdown"]).read_text(encoding="utf-8")
+    assert "independently of the experiment mode" in report
+    assert "mean_nme_box" in report
+    assert "mean_hausdorff_box" in report
+    assert Path(paths["wide_csv"]).exists()
 
 
 def test_residual_normalizer_preserves_shape_and_identity() -> None:

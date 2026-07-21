@@ -108,6 +108,34 @@ def test_non_tty_mode_is_plain_and_handles_missing_metrics() -> None:
     assert "Early stopping: 1/15" in output
 
 
+def test_final_summary_includes_split_nme_and_pca_loss() -> None:
+    stream = io.StringIO()
+    reporter = TrainingProgressReporter(
+        stream=stream,
+        force_interactive=False,
+    )
+    reporter.finish_run(
+        best_epoch=3,
+        best_validation_nme=0.1041,
+        final_train_nme=0.051,
+        final_validation_nme=0.106,
+        final_train_pca_loss=0.012,
+        final_validation_pca_loss=0.018,
+        best_checkpoint_path="runs/test/best_model.pth",
+        wandb_url=None,
+    )
+
+    output = stream.getvalue()
+    assert "Final training NME" in output
+    assert "0.051000" in output
+    assert "Final validation NME" in output
+    assert "0.106000" in output
+    assert "Final training PCA loss" in output
+    assert "0.012000" in output
+    assert "Final validation PCA loss" in output
+    assert "0.018000" in output
+
+
 def test_tty_mode_and_best_checkpoint_highlighting() -> None:
     stream = io.StringIO()
     reporter = TrainingProgressReporter(

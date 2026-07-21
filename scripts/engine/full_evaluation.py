@@ -11,6 +11,7 @@ from ..inference import build_inference_dataloader
 from .benchmark import benchmark_infantface_prediction_directory
 from .evaluate import evaluate_checkpoint
 from .evaluate_natural import evaluate_natural_checkpoint
+from .evaluation_reporting import write_evaluation_report
 from .inference import export_inference_outputs
 
 
@@ -96,10 +97,20 @@ def print_evaluation_summary(
             "median_nme_box_point_to_line_visible_intersection",
             "median NME box point-to-line visible-intersection",
         ),
+        (
+            "mean_hausdorff_box_visible_intersection",
+            "mean Hausdorff box visible-intersection",
+        ),
+        (
+            "median_hausdorff_box_visible_intersection",
+            "median Hausdorff box visible-intersection",
+        ),
         ("mean_nme_box", "mean NME box"),
         ("median_nme_box", "median NME box"),
         ("mean_nme_box_point_to_line", "mean NME box point-to-line"),
         ("median_nme_box_point_to_line", "median NME box point-to-line"),
+        ("mean_hausdorff_box", "mean Hausdorff box"),
+        ("median_hausdorff_box", "median Hausdorff box"),
         ("mean_nme_box_gt_valid", "mean NME box GT-valid"),
         ("median_nme_box_gt_valid", "median NME box GT-valid"),
         (
@@ -110,6 +121,8 @@ def print_evaluation_summary(
             "median_nme_box_point_to_line_gt_valid",
             "median NME box point-to-line GT-valid",
         ),
+        ("mean_hausdorff_box_gt_valid", "mean Hausdorff box GT-valid"),
+        ("median_hausdorff_box_gt_valid", "median Hausdorff box GT-valid"),
         ("mean_nme_box_non_contour", "mean NME box without contour"),
         ("median_nme_box_non_contour", "median NME box without contour"),
         (
@@ -119,6 +132,14 @@ def print_evaluation_summary(
         (
             "median_nme_box_point_to_line_non_contour",
             "median NME box point-to-line without contour",
+        ),
+        (
+            "mean_hausdorff_box_non_contour",
+            "mean Hausdorff box without contour",
+        ),
+        (
+            "median_hausdorff_box_non_contour",
+            "median Hausdorff box without contour",
         ),
         ("mean_nme_interocular", "mean NME interocular"),
     )
@@ -384,14 +405,22 @@ def run_full_evaluation(
     else:
         print("[INFO] InfAnFace evaluation disabled by config.")
 
+    report_paths = write_evaluation_report(
+        reports_dir=evaluation_root / "reports",
+        evaluation_summaries=summaries,
+    )
     print("[INFO] Full evaluation completed.")
     print("[INFO] Evaluation outputs:")
     for dataset_name, dataset_output_dir in output_dirs.items():
         if getattr(config, f"evaluate_{dataset_name}"):
             print(f"[INFO]   {dataset_name}: {dataset_output_dir}")
+    print(f"[INFO]   consolidated report: {report_paths['markdown']}")
+    print(f"[INFO]   Excel-ready CSV: {report_paths['wide_csv']}")
+    print(f"[INFO]   copy/paste TSV: {report_paths['copy_paste_tsv']}")
 
     return {
         "evaluation_root": str(evaluation_root),
         "output_dirs": {key: str(value) for key, value in output_dirs.items()},
+        "report_paths": report_paths,
         "summaries": summaries,
     }
