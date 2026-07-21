@@ -3,12 +3,13 @@ from __future__ import annotations
 import csv
 import json
 import subprocess
+import textwrap
 from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from .evaluation_reporting import (
     REPORT_CATEGORIES,
@@ -59,12 +60,24 @@ def run_normalizer_diagnostics(
     changed_pixel_thresholds: Sequence[float] = (1e-4, 1e-3, 1e-2),
     num_visual_examples: int = 32,
     save_visual_examples: bool = True,
+    residual_display_scale: float = 0.02,
+    residual_amplification: float = 25.0,
 ) -> dict[str, Any]:
     """Measure image changes and prediction drift introduced by the normalizer."""
+    if residual_display_scale <= 0:
+        raise ValueError("residual_display_scale must be positive.")
+    if residual_amplification <= 0:
+        raise ValueError("residual_amplification must be positive.")
     output_dir = Path(output_dir)
     metrics_dir = output_dir / "metrics"
     visual_root = output_dir / "visualizations" / dataset_name
     metrics_dir.mkdir(parents=True, exist_ok=True)
+    if save_visual_examples and num_visual_examples > 0:
+        _write_visualization_readme(
+            output_dir / "visualizations",
+            residual_display_scale=residual_display_scale,
+            residual_amplification=residual_amplification,
+        )
     model.to(device)
     model.eval()
 
@@ -191,6 +204,8 @@ def run_normalizer_diagnostics(
                         sample_id=sample_id,
                         mean=mean,
                         std=std,
+                        residual_display_scale=residual_display_scale,
+                        residual_amplification=residual_amplification,
                     )
                     visuals_saved += 1
 
@@ -574,45 +589,171 @@ def _save_visual_example(
     sample_id: str,
     mean: Sequence[float],
     std: Sequence[float],
+    residual_display_scale: float = 0.02,
+    residual_amplification: float = 25.0,
 ) -> None:
-    """Save input, normalized, residual, and side-by-side RGB previews."""
+    """Save input, normalized, and consistently scaled residual previews.
+
+    The legacy ``residual_abs`` artifact is auto-scaled independently for each
+    image and is retained for backward compatibility. The fixed-scale and
+    signed artifacts use the same scale for every image, so their intensity is
+    directly comparable across samples and datasets.
+    """
+    if residual_display_scale <= 0:
+        raise ValueError("residual_display_scale must be positive.")
+    if residual_amplification <= 0:
+        raise ValueError("residual_amplification must be positive.")
     safe_id = sample_id.replace("/", "_").replace("\\", "_")
-    input_rgb = _to_display_image(input_image, mean, std)
-    normalized_rgb = _to_display_image(normalized_image, mean, std)
-    residual = np.abs(normalized_rgb.astype(np.float32) - input_rgb.astype(np.float32))
-    residual_max = float(residual.max())
-    residual_rgb = (
-        np.zeros_like(input_rgb)
+    input_float = _to_display_float(input_image, mean, std)
+    normalized_float = _to_display_float(normalized_image, mean, std)
+    signed_residual = normalized_float - input_float
+    absolute_residual = np.abs(signed_residual)
+    residual_max = float(absolute_residual.max())
+
+    input_rgb = _float_rgb_to_uint8(input_float)
+    normalized_rgb = _float_rgb_to_uint8(normalized_float)
+    residual_abs_auto = _float_rgb_to_uint8(
+        np.zeros_like(absolute_residual)
         if residual_max <= 0
-        else np.clip(residual / residual_max * 255.0, 0, 255).astype(np.uint8)
+        else absolute_residual / residual_max
+    )
+    residual_abs_fixed = _float_rgb_to_uint8(
+        np.clip(absolute_residual / residual_display_scale, 0.0, 1.0)
+    )
+    residual_signed = _float_rgb_to_uint8(
+        np.clip(
+            0.5 + signed_residual / (2.0 * residual_display_scale),
+            0.0,
+            1.0,
+        )
+    )
+    normalized_amplified = _float_rgb_to_uint8(
+        np.clip(
+            input_float + residual_amplification * signed_residual,
+            0.0,
+            1.0,
+        )
     )
     for subdirectory, array in (
         ("input", input_rgb),
         ("normalized", normalized_rgb),
-        ("residual_abs", residual_rgb),
+        ("residual_abs", residual_abs_auto),
+        ("residual_abs_fixed", residual_abs_fixed),
+        ("residual_signed", residual_signed),
+        ("normalized_change_amplified", normalized_amplified),
     ):
         directory = output_root / subdirectory
         directory.mkdir(parents=True, exist_ok=True)
         Image.fromarray(array).save(directory / f"{safe_id}.png")
-    side_by_side = np.concatenate([input_rgb, normalized_rgb, residual_rgb], axis=1)
+
+    mean_absolute = float(absolute_residual.mean())
+    mean_signed_channels = signed_residual.mean(axis=(0, 1))
+    side_by_side = _build_residual_comparison_panel(
+        tiles=(
+            input_rgb,
+            normalized_rgb,
+            residual_signed,
+            residual_abs_fixed,
+            normalized_amplified,
+        ),
+        labels=(
+            "Input",
+            "Normalized",
+            f"Signed residual (gray=0, scale=+/-{residual_display_scale:g})",
+            f"Absolute residual (fixed scale={residual_display_scale:g})",
+            f"Input + {residual_amplification:g}x residual",
+        ),
+        statistics=(
+            f"mean |delta|={mean_absolute:.6f}   max |delta|={residual_max:.6f}   "
+            f"mean delta RGB=({mean_signed_channels[0]:+.6f}, "
+            f"{mean_signed_channels[1]:+.6f}, {mean_signed_channels[2]:+.6f})"
+        ),
+    )
     side_directory = output_root / "side_by_side"
     side_directory.mkdir(parents=True, exist_ok=True)
-    Image.fromarray(side_by_side).save(side_directory / f"{safe_id}.png")
+    side_by_side.save(side_directory / f"{safe_id}.png")
 
 
-def _to_display_image(
+def _build_residual_comparison_panel(
+    tiles: Sequence[np.ndarray],
+    labels: Sequence[str],
+    statistics: str,
+) -> Image.Image:
+    """Build a labeled comparison panel with one shared statistics header."""
+    if not tiles or len(tiles) != len(labels):
+        raise ValueError("tiles and labels must be non-empty and have equal length.")
+    tile_images = [Image.fromarray(tile) for tile in tiles]
+    width, height = tile_images[0].size
+    if any(image.size != (width, height) for image in tile_images):
+        raise ValueError("All comparison tiles must have the same dimensions.")
+    statistics_height = 28
+    label_height = 50
+    canvas = Image.new(
+        "RGB",
+        (width * len(tile_images), statistics_height + label_height + height),
+        "white",
+    )
+    draw = ImageDraw.Draw(canvas)
+    draw.text((6, 7), statistics, fill="black")
+    for index, (image, label) in enumerate(zip(tile_images, labels)):
+        x = index * width
+        wrapped_label = textwrap.wrap(label, width=max(12, width // 7))
+        for line_index, line in enumerate(wrapped_label[:3]):
+            draw.text(
+                (x + 5, statistics_height + 3 + 13 * line_index),
+                line,
+                fill="black",
+            )
+        canvas.paste(image, (x, statistics_height + label_height))
+    return canvas
+
+
+def _write_visualization_readme(
+    visualizations_root: Path,
+    residual_display_scale: float,
+    residual_amplification: float,
+) -> None:
+    """Write an interpretation guide next to normalizer visual artifacts."""
+    visualizations_root.mkdir(parents=True, exist_ok=True)
+    content = f"""# Normalizer visualization guide
+
+All RGB differences are computed after reversing the model's channel
+normalization and clipping both images to the display range `[0, 1]`.
+
+- `input`: original image passed to the normalizer.
+- `normalized`: actual normalizer output passed to the landmarker.
+- `residual_abs`: legacy absolute residual, independently auto-scaled by each
+  image's maximum. It shows spatial support but cannot compare magnitudes.
+- `residual_abs_fixed`: absolute residual using a shared scale. A channel value
+  of `{residual_display_scale:g}` maps to full intensity in every image.
+- `residual_signed`: signed residual using the same shared scale. Middle gray
+  means zero; values above/below gray mean positive/negative channel changes.
+- `normalized_change_amplified`: input plus `{residual_amplification:g}` times
+  the signed residual. This is diagnostic only and is not passed to the model.
+- `side_by_side`: labeled panel containing input, actual normalized output,
+  signed residual, fixed-scale absolute residual, and amplified preview.
+
+The panel header reports mean absolute RGB residual, maximum absolute RGB
+residual, and mean signed change for red, green, and blue. These values use the
+`[0, 1]` RGB range. The signed and absolute fixed-scale images are comparable
+across samples only when generated with the same residual display scale.
+"""
+    (visualizations_root / "README.md").write_text(content, encoding="utf-8")
+
+
+def _to_display_float(
     image: torch.Tensor, mean: Sequence[float], std: Sequence[float]
 ) -> np.ndarray:
-    """Convert a channel-normalized tensor into a displayable RGB array."""
+    """Convert a channel-normalized tensor to uncluttered RGB floats in [0, 1]."""
     mean_tensor = torch.as_tensor(mean, dtype=image.dtype).view(-1, 1, 1)
     std_tensor = torch.as_tensor(std, dtype=image.dtype).view(-1, 1, 1)
-    denormalized = image * std_tensor + mean_tensor
-    display_tensor = (
-        denormalized.permute(1, 2, 0).clamp(0, 1).mul(255).round().byte().cpu()
-    )
-    # ``tolist`` keeps visualization available in environments where the
-    # optional PyTorch-to-NumPy binary bridge is version-incompatible.
-    return np.asarray(display_tensor.tolist(), dtype=np.uint8)
+    rgb = (image * std_tensor + mean_tensor).permute(1, 2, 0).clamp(0, 1)
+    return np.asarray(rgb.tolist(), dtype=np.float32)
+
+
+def _float_rgb_to_uint8(array: np.ndarray) -> np.ndarray:
+    """Convert RGB floats in [0, 1] into a displayable uint8 image."""
+    return np.clip(array * 255.0, 0, 255).round().astype(np.uint8)
 
 
 def _extract_sample_id(

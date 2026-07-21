@@ -16,6 +16,7 @@ from scripts.engine.evaluation_reporting import (
     write_official_metric_exports,
 )
 from scripts.engine.normalizer_experiments import (
+    _save_visual_example,
     run_normalizer_diagnostics,
     save_modular_checkpoints,
 )
@@ -201,7 +202,52 @@ def test_diagnostics_save_visual_example_with_tiny_batch(tmp_path: Path) -> None
     )
     assert summary["max_absolute_difference"] == 0.0
     assert (tmp_path / "visualizations/tiny/side_by_side/tiny.png").exists()
+    assert (tmp_path / "visualizations/tiny/residual_abs_fixed/tiny.png").exists()
+    assert (tmp_path / "visualizations/tiny/residual_signed/tiny.png").exists()
+    assert (
+        tmp_path / "visualizations/tiny/normalized_change_amplified/tiny.png"
+    ).exists()
+    assert (tmp_path / "visualizations/README.md").exists()
     assert (tmp_path / "metrics/tiny_normalizer_diagnostics.json").exists()
+
+
+def test_residual_visualizations_use_fixed_scale_and_preserve_sign(
+    tmp_path: Path,
+) -> None:
+    input_image = torch.zeros(3, 4, 4)
+    normalized_image = input_image.clone()
+    normalized_image[0] += 0.01
+    normalized_image[2] -= 0.01
+
+    _save_visual_example(
+        input_image=input_image,
+        normalized_image=normalized_image,
+        output_root=tmp_path,
+        sample_id="signed",
+        mean=(0.5, 0.5, 0.5),
+        std=(1.0, 1.0, 1.0),
+        residual_display_scale=0.02,
+        residual_amplification=10.0,
+    )
+
+    from PIL import Image
+
+    signed_image = Image.open(tmp_path / "residual_signed/signed.png")
+    fixed_absolute_image = Image.open(tmp_path / "residual_abs_fixed/signed.png")
+    signed = torch.tensor(bytearray(signed_image.tobytes())).reshape(4, 4, 3)
+    fixed_absolute = torch.tensor(bytearray(fixed_absolute_image.tobytes())).reshape(
+        4, 4, 3
+    )
+    panel = Image.open(tmp_path / "side_by_side/signed.png")
+
+    assert int(signed[0, 0, 0]) > 128
+    assert abs(int(signed[0, 0, 1]) - 128) <= 1
+    assert int(signed[0, 0, 2]) < 128
+    assert 120 <= int(fixed_absolute[0, 0, 0]) <= 135
+    assert int(fixed_absolute[0, 0, 1]) == 0
+    assert 120 <= int(fixed_absolute[0, 0, 2]) <= 135
+    assert panel.width == 5 * input_image.shape[-1]
+    assert panel.height > input_image.shape[-2]
 
 
 def test_legacy_checkpoint_loads_into_wrapped_landmarker() -> None:

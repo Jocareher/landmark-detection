@@ -30,7 +30,7 @@ input distribution before the pretrained landmarker.
 |---|---|---|---|
 | `normalizer_sanity` | Identity, frozen | Frozen | Verify unchanged images, heatmaps, visibility and decoded landmarks |
 | `normalizer_train_frozen_landmarker` | Trained | Fully frozen | Determine whether the adapter alone can improve supervised SynBaby validation |
-| `normalizer_joint_finetune` | Trained | Existing last-stage-plus-heads fine-tuning | Compare adapter-only training with the current partial fine-tuning policy |
+| `normalizer_joint_finetune` | Trained from identity | Official HRNet weights; transition 3, stage 4, and new task heads trained | Compare adapter-only training with partial HRNet adaptation without requiring a previously trained landmarker |
 
 All modes require the established Wasserstein heatmap loss and barycenter
 decoder. The normalizer does not replace or reimplement either path. Training
@@ -70,8 +70,14 @@ python -m scripts.main \
 python -m scripts.main \
   --config configs/normalizer_experiments.yaml \
   --experiment-mode normalizer_joint_finetune \
-  --checkpoint /absolute/path/to/best_model.pth
+  --pretrained-weights /absolute/path/to/HR18-300W.pth
 ```
+
+Joint fine-tuning requires `checkpoint: null`. It initializes the backbone from
+the official HRNet weights, creates new task heads and an identity-initialized
+normalizer, freezes the stem and stages 1--3 (including frozen BatchNorm
+statistics), and trains transition 3, stage 4, the task heads, and the
+normalizer.
 
 The same command-line options can override YAML values, for example:
 
@@ -150,10 +156,12 @@ Each run keeps the existing evaluation outputs and adds:
 - `configs/resolved_config.yaml` and `.json`;
 - `checkpoints/full_model_best.pth` and `full_model_last.pth`;
 - `checkpoints/normalizer_best.pth` and `normalizer_last.pth`;
-- modular landmarker checkpoints for joint fine-tuning;
+- modular landmarker checkpoints with the normalizer excluded;
 - `checkpoints/checkpoint_manifest.json`;
 - per-dataset image-change and prediction-drift CSV/JSON files in `metrics/`;
-- input, normalized, absolute-residual, and side-by-side examples in
+- input, normalized, auto-scaled absolute residual, fixed-scale absolute
+  residual, signed residual, amplified normalized output, and labeled
+  side-by-side examples in
   `visualizations/<dataset>/`;
 - fixed-probe checkpoint panels, grids, GIFs, and raw statistics in
   `normalizer_monitoring/source_validation/`;
@@ -165,12 +173,85 @@ decoded landmark displacement, visibility-logit drift, and visibility decision
 agreement. Official performance remains the NME, region, pose, visibility,
 failure-rate, and detection-rate output of the existing evaluation code.
 
-## Checkpoint compatibility
+## Residual visualizations
 
-Legacy checkpoints containing only the HRNet landmarker state can initialize a
-wrapped model. Wrapped checkpoints contain `normalizer.*` and `landmarker.*`
-keys. The manifest records the base checkpoint, mode, trainable modules,
-decoder, loss path, evaluation protocol, Git revision, and resolved config.
+The diagnostic `side_by_side` panel uses five labeled tiles:
+
+1. original input;
+2. normalized output;
+3. signed residual, with zero represented by middle gray and one fixed scale
+   for every image;
+4. absolute residual with the same fixed scale for every image;
+5. input plus an amplified signed residual, to make the direction of the
+   learned appearance correction visible.
+
+The header reports mean absolute residual, maximum absolute residual, and mean
+signed RGB change. The legacy `residual_abs` file remains available but is
+auto-scaled independently by each image's maximum and must not be used to
+compare magnitudes across images. New comparable outputs are stored under
+`residual_abs_fixed`, `residual_signed`, and
+`normalized_change_amplified`.
+
+## Standalone evaluation and checkpoint compatibility
+
+Every normalizer run exports three representations for both the best and last
+training checkpoints:
+
+- `full_model_best.pth`: landmarker and normalizer together; this is the
+  preferred checkpoint for evaluating the complete experiment;
+- `landmarker_best.pth`: landmarker only, with every `normalizer.*` tensor
+  excluded;
+- `normalizer_best.pth`: normalizer only; it cannot run without a compatible
+  landmarker.
+
+`evaluate.py` detects the checkpoint representation. When a normalized model
+is loaded, it automatically runs the official evaluation and the complete
+normalizer diagnostics, including the improved visualizations. For example,
+the complete model can be evaluated with:
+
+```bash
+python -m scripts.evaluate \
+  --eval-mode natural \
+  --checkpoint /run/checkpoints/full_model_best.pth \
+  --dataset-root /data/babyland/crops/all_detections \
+  --natural-gt-root /data/babyland/labels \
+  --dataset-name babyland \
+  --landmark-loss wasserstein \
+  --output-dir /run/standalone_evaluation/babyland
+```
+
+The same model can be reconstructed from modular checkpoints:
+
+```bash
+python -m scripts.evaluate \
+  --eval-mode natural \
+  --checkpoint /run/checkpoints/landmarker_best.pth \
+  --normalizer-checkpoint /run/checkpoints/normalizer_best.pth \
+  --dataset-root /data/babyland/crops/all_detections \
+  --natural-gt-root /data/babyland/labels \
+  --dataset-name babyland \
+  --landmark-loss wasserstein \
+  --output-dir /run/standalone_evaluation/babyland_split
+```
+
+To measure the exported landmarker without its normalizer, omit
+`--normalizer-checkpoint`:
+
+```bash
+python -m scripts.evaluate \
+  --eval-mode natural \
+  --checkpoint /run/checkpoints/landmarker_best.pth \
+  --dataset-root /data/babyland/crops/all_detections \
+  --natural-gt-root /data/babyland/labels \
+  --dataset-name babyland \
+  --landmark-loss wasserstein \
+  --output-dir /run/standalone_evaluation/landmarker_only
+```
+
+A normalizer-only checkpoint cannot be passed as `--checkpoint`. A separate
+normalizer also cannot be combined with `full_model_best.pth`, because that
+checkpoint already contains one. Legacy landmarker-only checkpoints remain
+supported.
 
 ## Interpretation and limitations
 

@@ -20,7 +20,11 @@ from scripts.dataset import build_dataloaders, build_natural_evaluation_dataload
 from scripts.engine.evaluate import evaluate_checkpoint
 from scripts.engine.evaluate_natural import evaluate_natural_checkpoint
 from scripts.engine.metrics import decoder_from_landmark_loss
-from scripts.models import build_model_from_checkpoints
+from scripts.engine.normalizer_experiments import (
+    run_normalizer_diagnostics,
+    write_combined_normalizer_diagnostics,
+)
+from scripts.models import NormalizedLandmarker, build_model_from_checkpoints
 from scripts.utils import get_default_device, set_seed
 
 
@@ -149,6 +153,41 @@ def parse_args() -> argparse.Namespace:
         default=defaults.save_natural_crop_overlays,
         help="In natural mode, additionally save qualitative overlays on the detector crops under predictions/crops/.",
     )
+    parser.add_argument(
+        "--dataset-name",
+        type=str,
+        default=None,
+        help=(
+            "Name used for normalizer diagnostic files. Defaults to 'synbaby' "
+            "in synthetic mode and 'natural' in natural mode."
+        ),
+    )
+    parser.add_argument(
+        "--disable-normalizer-diagnostics",
+        action="store_true",
+        help="Skip image-change and prediction-drift diagnostics for normalized models.",
+    )
+    parser.add_argument(
+        "--normalizer-visual-examples",
+        type=int,
+        default=32,
+        help="Maximum number of normalizer comparison panels to save.",
+    )
+    parser.add_argument(
+        "--normalizer-residual-display-scale",
+        type=float,
+        default=0.02,
+        help=(
+            "Fixed RGB residual magnitude mapped to full intensity in signed and "
+            "absolute diagnostic images. The same scale is used for every sample."
+        ),
+    )
+    parser.add_argument(
+        "--normalizer-residual-amplification",
+        type=float,
+        default=25.0,
+        help="Amplification used by the input-plus-residual diagnostic preview.",
+    )
     return parser.parse_args()
 
 
@@ -252,6 +291,12 @@ def main() -> None:
     Run standalone evaluation.
     """
     args = parse_args()
+    if args.normalizer_visual_examples < 0:
+        raise ValueError("--normalizer-visual-examples cannot be negative.")
+    if args.normalizer_residual_display_scale <= 0:
+        raise ValueError("--normalizer-residual-display-scale must be positive.")
+    if args.normalizer_residual_amplification <= 0:
+        raise ValueError("--normalizer-residual-amplification must be positive.")
     config = build_config_from_args(args)
 
     output_dir = config.output_dir
@@ -289,15 +334,25 @@ def main() -> None:
         fallback_normalizer_architecture=_normalizer_architecture_from_config(config),
     )
     model.to(device)
+    if isinstance(model, NormalizedLandmarker):
+        loading_mode = (
+            "landmarker + separate normalizer checkpoints"
+            if args.normalizer_checkpoint is not None
+            else "full normalized-model checkpoint"
+        )
+        print(f"[INFO] Loaded {loading_mode}; normalizer diagnostics are available.")
+    else:
+        print("[INFO] Loaded landmarker-only checkpoint; no normalizer is active.")
 
     if args.save_config:
         maybe_save_config(config, output_dir)
 
     if args.eval_mode == "synthetic":
         dataloaders = build_dataloaders(config)
+        evaluation_dataloader = dataloaders["test"]
         summary = evaluate_checkpoint(
             model=model,
-            dataloader=dataloaders["test"],
+            dataloader=evaluation_dataloader,
             device=device,
             output_dir=output_dir,
             visibility_threshold=config.visibility_threshold,
@@ -313,7 +368,7 @@ def main() -> None:
             wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
         )
     else:
-        dataloader = build_natural_evaluation_dataloader(
+        evaluation_dataloader = build_natural_evaluation_dataloader(
             export_root=config.dataset_root,
             gt_root=args.natural_gt_root,
             source_root=args.natural_source_root,
@@ -321,7 +376,7 @@ def main() -> None:
         )
         summary = evaluate_natural_checkpoint(
             model=model,
-            dataloader=dataloader,
+            dataloader=evaluation_dataloader,
             device=device,
             output_dir=output_dir,
             visibility_threshold=config.visibility_threshold,
@@ -337,6 +392,41 @@ def main() -> None:
             coordinate_decoder=config.coordinate_decoder,
             wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
         )
+
+    if isinstance(model, NormalizedLandmarker):
+        if args.disable_normalizer_diagnostics:
+            print("[INFO] Normalizer diagnostics disabled by CLI option.")
+        else:
+            dataset_name = args.dataset_name or (
+                "synbaby" if args.eval_mode == "synthetic" else "natural"
+            )
+            diagnostics_dir = output_dir / "normalizer_diagnostics"
+            print(
+                "[INFO] Generating normalizer diagnostics | "
+                f"dataset={dataset_name} examples={args.normalizer_visual_examples} "
+                f"fixed_scale={args.normalizer_residual_display_scale:g} "
+                f"amplification={args.normalizer_residual_amplification:g}x"
+            )
+            diagnostic_summary = run_normalizer_diagnostics(
+                model=model,
+                dataloader=evaluation_dataloader,
+                device=device,
+                output_dir=diagnostics_dir,
+                dataset_name=dataset_name,
+                coordinate_decoder=config.coordinate_decoder,
+                softmax_temperature=config.wasserstein_softmax_temperature,
+                visibility_threshold=config.visibility_threshold,
+                mean=config.normalization_mean,
+                std=config.normalization_std,
+                num_visual_examples=args.normalizer_visual_examples,
+                save_visual_examples=args.normalizer_visual_examples > 0,
+                residual_display_scale=args.normalizer_residual_display_scale,
+                residual_amplification=args.normalizer_residual_amplification,
+            )
+            write_combined_normalizer_diagnostics(
+                diagnostics_dir, {dataset_name: diagnostic_summary}
+            )
+            print(f"[INFO] Normalizer diagnostics dir: {diagnostics_dir}")
 
     print("[INFO] Evaluation finished.")
     has_explicit_visible_intersection = (
