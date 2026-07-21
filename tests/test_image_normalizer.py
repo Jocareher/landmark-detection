@@ -15,11 +15,17 @@ from scripts.engine.evaluation_reporting import (
     write_evaluation_report,
     write_official_metric_exports,
 )
-from scripts.engine.normalizer_experiments import run_normalizer_diagnostics
+from scripts.engine.normalizer_experiments import (
+    run_normalizer_diagnostics,
+    save_modular_checkpoints,
+)
 from scripts.engine.normalizer_monitoring import NormalizerProbeMonitor
+from scripts.main import validate_experiment_config
 from scripts.models import (
+    HRNetLandmarkVisibility,
     NormalizedLandmarker,
     ResidualImageNormalizer,
+    build_model_from_checkpoints,
     load_normalized_checkpoint,
 )
 
@@ -113,6 +119,41 @@ def test_wrapper_preserves_output_dictionary_and_freezing() -> None:
     assert all(parameter.requires_grad for parameter in wrapper.normalizer.parameters())
 
 
+def test_joint_finetune_trains_normalizer_stage4_transition3_and_heads_only() -> None:
+    wrapper = NormalizedLandmarker(
+        landmarker=HRNetLandmarkVisibility(num_landmarks=72),
+        normalizer=ResidualImageNormalizer(initialize_identity=True),
+    )
+    wrapper.configure_joint_finetune(num_unfrozen_stages=1, unfreeze_stem=False)
+    trainable_names = {
+        name
+        for name, parameter in wrapper.named_parameters()
+        if parameter.requires_grad
+    }
+
+    assert any(name.startswith("normalizer.") for name in trainable_names)
+    assert any(
+        name.startswith("landmarker.backbone.transition3") for name in trainable_names
+    )
+    assert any(
+        name.startswith("landmarker.backbone.stage4") for name in trainable_names
+    )
+    assert any(
+        name.startswith("landmarker.visibility_feature_head")
+        for name in trainable_names
+    )
+    assert not any(
+        name.startswith("landmarker.backbone.stage3") for name in trainable_names
+    )
+    assert not any(
+        name.startswith("landmarker.backbone.conv1") for name in trainable_names
+    )
+
+    wrapper.train()
+    assert wrapper.landmarker.backbone.stage3.training is False
+    assert wrapper.landmarker.backbone.stage4.training is True
+
+
 def test_yaml_nested_values_override_defaults(tmp_path: Path) -> None:
     config_path = tmp_path / "experiment.yaml"
     config_path.write_text(
@@ -176,6 +217,72 @@ def test_legacy_checkpoint_loads_into_wrapped_landmarker() -> None:
         torch.testing.assert_close(expected, actual)
 
 
+def test_full_and_split_normalizer_checkpoints_reconstruct_same_model() -> None:
+    source = NormalizedLandmarker(
+        landmarker=HRNetLandmarkVisibility(num_landmarks=72),
+        normalizer=ResidualImageNormalizer(
+            hidden_channels=5,
+            num_layers=2,
+            initialize_identity=True,
+        ),
+    )
+    architecture = source.normalizer.architecture_config()
+    full_model = build_model_from_checkpoints(
+        {
+            "model_state_dict": source.state_dict(),
+            "normalizer_architecture": architecture,
+        },
+        num_landmarks=72,
+    )
+    split_model = build_model_from_checkpoints(
+        {"model_state_dict": source.landmarker.state_dict()},
+        num_landmarks=72,
+        normalizer_checkpoint={
+            "normalizer_state_dict": source.normalizer.state_dict(),
+            "architecture": architecture,
+        },
+    )
+
+    assert isinstance(full_model, NormalizedLandmarker)
+    assert isinstance(split_model, NormalizedLandmarker)
+    for expected, actual in zip(source.parameters(), full_model.parameters()):
+        torch.testing.assert_close(expected, actual)
+    for expected, actual in zip(source.parameters(), split_model.parameters()):
+        torch.testing.assert_close(expected, actual)
+
+
+def test_modular_export_always_includes_landmarker_without_normalizer(
+    tmp_path: Path,
+) -> None:
+    model = NormalizedLandmarker(
+        landmarker=HRNetLandmarkVisibility(num_landmarks=72),
+        normalizer=ResidualImageNormalizer(initialize_identity=True),
+    )
+    saved = save_modular_checkpoints(
+        model=model,
+        output_dir=tmp_path,
+        base_checkpoint_path=None,
+        experiment_mode="normalizer_train_frozen_landmarker",
+        resolved_config_path=tmp_path / "resolved.yaml",
+        landmarker_updated=False,
+        normalizer_updated=True,
+        decoder_name="barycenter",
+        loss_pipeline_name="wasserstein",
+        evaluation_protocol="test",
+    )
+
+    landmarker_payload = torch.load(
+        saved["landmarker_best.pth"], map_location="cpu", weights_only=False
+    )
+    assert "model_state_dict" in landmarker_payload
+    assert all(
+        not key.startswith("normalizer.")
+        for key in landmarker_payload["model_state_dict"]
+    )
+    assert Path(saved["full_model_best.pth"]).exists()
+    assert Path(saved["normalizer_best.pth"]).exists()
+
+
 def test_shared_yaml_supports_argparser_names_and_inverse_flags() -> None:
     config = load_yaml_config("configs/normalizer_experiments.yaml")
     assert config.runs_dir == Path("/home/jocareher/Downloads/landmark-detection/runs")
@@ -195,6 +302,28 @@ def test_shared_yaml_supports_argparser_names_and_inverse_flags() -> None:
     assert config.use_cache is True
     assert config.save_config is False
     assert config.enable_photometric_augmentations is True
+
+
+def test_joint_finetune_requires_pretrained_hrnet_but_not_landmarker_checkpoint(
+    tmp_path: Path,
+) -> None:
+    pretrained_weights = tmp_path / "hrnet.pth"
+    pretrained_weights.touch()
+    config = build_config()
+    config.experiment_mode = "normalizer_joint_finetune"
+    config.checkpoint_path = None
+    config.pretrained_weights = pretrained_weights
+    config.landmark_loss = "wasserstein"
+    config.coordinate_decoder = "barycenter"
+    config.transfer_mode = "fine_tuning"
+    config.num_unfrozen_stages = 1
+
+    validate_experiment_config(config)
+
+    assert config.train_normalizer is True
+    assert config.freeze_landmarker is False
+    assert config.finetune_last_backbone_stage is True
+    assert config.train_heads is True
 
 
 def test_shared_yaml_lists_every_argparser_destination() -> None:

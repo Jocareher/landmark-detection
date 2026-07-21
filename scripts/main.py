@@ -610,11 +610,15 @@ def validate_experiment_config(config: ExperimentConfig) -> None:
     """Validate and resolve invariants of the normalizer experiment modes."""
     if config.experiment_mode == "none":
         return
-    if config.checkpoint_path is None:
+    checkpoint_required = config.experiment_mode in {
+        "normalizer_sanity",
+        "normalizer_train_frozen_landmarker",
+    }
+    if checkpoint_required and config.checkpoint_path is None:
         raise ValueError(
             f"{config.experiment_mode} requires checkpoint.path/--checkpoint."
         )
-    if not Path(config.checkpoint_path).exists():
+    if config.checkpoint_path is not None and not Path(config.checkpoint_path).exists():
         raise FileNotFoundError(
             f"Landmarker checkpoint not found: {config.checkpoint_path}"
         )
@@ -649,6 +653,20 @@ def validate_experiment_config(config: ExperimentConfig) -> None:
         config.finetune_last_backbone_stage = False
         config.train_heads = False
     elif config.experiment_mode == "normalizer_joint_finetune":
+        if config.checkpoint_path is not None:
+            raise ValueError(
+                "normalizer_joint_finetune starts from pretrained_weights and requires "
+                "checkpoint: null. Use a different run/resume workflow to continue a "
+                "previous joint model."
+            )
+        if (
+            config.pretrained_weights is None
+            or not Path(config.pretrained_weights).exists()
+        ):
+            raise FileNotFoundError(
+                "normalizer_joint_finetune requires valid official HRNet "
+                "pretrained_weights."
+            )
         if config.transfer_mode != "fine_tuning":
             raise ValueError(
                 "normalizer_joint_finetune requires transfer_mode: fine_tuning."
@@ -809,7 +827,11 @@ def finalize_normalizer_experiment(
             else (
                 "SynBaby-supervised normalizer training; landmarker frozen."
                 if config.experiment_mode == "normalizer_train_frozen_landmarker"
-                else "SynBaby-supervised normalizer plus HRNet stage 4 and head fine-tuning."
+                else (
+                    "SynBaby-supervised training from official HRNet backbone weights: "
+                    "normalizer, transition3, stage4, and task heads trainable; earlier "
+                    "backbone stages frozen."
+                )
             )
         ),
         warnings=warnings,
@@ -928,6 +950,14 @@ def main() -> None:
             f"total_params={total_parameters} "
             f"trainable_params={trainable_parameter_count}"
         )
+        if config.experiment_mode == "normalizer_joint_finetune":
+            print(
+                "[INFO] Joint initialization | "
+                f"HRNet backbone={config.pretrained_weights} | "
+                "new identity-initialized normalizer | new task heads | "
+                "trainable=normalizer, transition3, stage4, task heads | "
+                "frozen=stem, stage1, stage2, stage3"
+            )
 
         if config.checkpoint_path is not None:
             print(f"[INFO] Loading checkpoint from {config.checkpoint_path}...")

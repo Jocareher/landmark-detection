@@ -20,7 +20,7 @@ from scripts.dataset import build_dataloaders, build_natural_evaluation_dataload
 from scripts.engine.evaluate import evaluate_checkpoint
 from scripts.engine.evaluate_natural import evaluate_natural_checkpoint
 from scripts.engine.metrics import decoder_from_landmark_loss
-from scripts.models import HRNetLandmarkVisibility
+from scripts.models import build_model_from_checkpoints
 from scripts.utils import get_default_device, set_seed
 
 
@@ -49,6 +49,15 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         required=True,
         help="Checkpoint to evaluate on the test split.",
+    )
+    parser.add_argument(
+        "--normalizer-checkpoint",
+        type=Path,
+        default=None,
+        help=(
+            "Optional normalizer-only checkpoint to combine with a landmarker-only "
+            "--checkpoint. Do not use it with a full-model checkpoint."
+        ),
     )
     parser.add_argument(
         "--dataset-root",
@@ -203,22 +212,22 @@ def maybe_save_config(
     )
 
 
-def build_model(config: ExperimentConfig) -> HRNetLandmarkVisibility:
-    """
-    Instantiate the model.
-
-    Parameters
-    ----------
-    config : ExperimentConfig
-        Experiment configuration.
-
-    Returns
-    -------
-    HRNetLandmarkVisibility
-        Instantiated model.
-    """
-    model = HRNetLandmarkVisibility(num_landmarks=config.num_landmarks)
-    return model
+def _normalizer_architecture_from_config(config: ExperimentConfig) -> dict[str, object]:
+    """Return fallback normalizer metadata for legacy full checkpoints."""
+    return {
+        "type": "residual",
+        "input_channels": config.normalizer_input_channels,
+        "hidden_channels": config.normalizer_hidden_channels,
+        "num_layers": config.normalizer_num_layers,
+        "kernel_size": config.normalizer_kernel_size,
+        "activation": config.normalizer_activation,
+        "normalization": config.normalizer_internal_normalization,
+        "residual_scale": config.normalizer_residual_scale,
+        "initialize_identity": config.normalizer_initialize_identity,
+        "clamp_output": config.normalizer_clamp_output,
+        "clamp_min": config.normalizer_clamp_min,
+        "clamp_max": config.normalizer_clamp_max,
+    }
 
 
 def print_visibility_metrics(summary: dict) -> None:
@@ -267,9 +276,18 @@ def main() -> None:
         f"coordinate_decoder={config.coordinate_decoder}"
     )
 
-    model = build_model(config)
     checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
-    model.load_state_dict(checkpoint["model_state_dict"])
+    normalizer_checkpoint = (
+        torch.load(args.normalizer_checkpoint, map_location="cpu", weights_only=False)
+        if args.normalizer_checkpoint is not None
+        else None
+    )
+    model = build_model_from_checkpoints(
+        checkpoint,
+        num_landmarks=config.num_landmarks,
+        normalizer_checkpoint=normalizer_checkpoint,
+        fallback_normalizer_architecture=_normalizer_architecture_from_config(config),
+    )
     model.to(device)
 
     if args.save_config:

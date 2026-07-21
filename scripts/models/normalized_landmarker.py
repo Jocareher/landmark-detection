@@ -5,6 +5,7 @@ from collections.abc import Mapping
 import torch
 from torch import nn
 
+from .hrn import HRNetLandmarkVisibility
 from .image_normalizer import ResidualImageNormalizer
 
 
@@ -144,3 +145,91 @@ def load_normalized_checkpoint(
             model.landmarker.load_state_dict(landmarker_state, strict=strict)
         return
     model.landmarker.load_state_dict(state, strict=strict)
+
+
+def build_model_from_checkpoints(
+    checkpoint: Mapping[str, object],
+    *,
+    num_landmarks: int = 72,
+    normalizer_checkpoint: Mapping[str, object] | None = None,
+    fallback_normalizer_architecture: Mapping[str, object] | None = None,
+    strict: bool = True,
+) -> nn.Module:
+    """Reconstruct a landmarker or normalized full model from saved payloads.
+
+    A full-model checkpoint is sufficient by itself. A landmarker-only
+    checkpoint may optionally be combined with a normalizer-only checkpoint.
+    """
+    primary_state = checkpoint.get("model_state_dict")
+    if not isinstance(primary_state, Mapping):
+        primary_state = checkpoint.get("landmarker_state_dict")
+    if not isinstance(primary_state, Mapping):
+        if isinstance(checkpoint.get("normalizer_state_dict"), Mapping):
+            raise ValueError(
+                "A normalizer-only checkpoint cannot run independently. Pass a "
+                "full-model checkpoint, or use it alongside a landmarker checkpoint."
+            )
+        raise ValueError("Checkpoint does not contain model weights.")
+
+    state_keys = [str(key) for key in primary_state]
+    is_full_model = any(key.startswith("landmarker.") for key in state_keys)
+    if is_full_model:
+        if normalizer_checkpoint is not None:
+            raise ValueError(
+                "A separate normalizer checkpoint cannot be combined with an "
+                "already wrapped full-model checkpoint."
+            )
+        architecture = _resolve_normalizer_architecture(
+            checkpoint,
+            fallback=fallback_normalizer_architecture,
+        )
+        model = NormalizedLandmarker(
+            landmarker=HRNetLandmarkVisibility(num_landmarks=num_landmarks),
+            normalizer=ResidualImageNormalizer(**architecture),
+        )
+        model.load_state_dict(primary_state, strict=strict)
+        return model
+
+    landmarker = HRNetLandmarkVisibility(num_landmarks=num_landmarks)
+    landmarker.load_state_dict(primary_state, strict=strict)
+    if normalizer_checkpoint is None:
+        return landmarker
+
+    normalizer_state = normalizer_checkpoint.get("normalizer_state_dict")
+    if not isinstance(normalizer_state, Mapping):
+        raise ValueError(
+            "The separate normalizer checkpoint lacks normalizer_state_dict."
+        )
+    architecture = _resolve_normalizer_architecture(
+        normalizer_checkpoint,
+        fallback=fallback_normalizer_architecture,
+    )
+    model = NormalizedLandmarker(
+        landmarker=landmarker,
+        normalizer=ResidualImageNormalizer(**architecture),
+    )
+    model.normalizer.load_state_dict(normalizer_state, strict=strict)
+    return model
+
+
+def _resolve_normalizer_architecture(
+    checkpoint: Mapping[str, object],
+    *,
+    fallback: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Resolve constructor arguments stored with a normalizer checkpoint."""
+    architecture = checkpoint.get("normalizer_architecture")
+    if not isinstance(architecture, Mapping):
+        architecture = checkpoint.get("architecture")
+    if not isinstance(architecture, Mapping):
+        architecture = fallback
+    if not isinstance(architecture, Mapping):
+        raise ValueError(
+            "The checkpoint contains normalizer weights but no architecture metadata. "
+            "Provide fallback normalizer configuration."
+        )
+    resolved = dict(architecture)
+    normalizer_type = resolved.pop("type", "residual")
+    if normalizer_type != "residual":
+        raise ValueError(f"Unsupported normalizer type: {normalizer_type}")
+    return resolved

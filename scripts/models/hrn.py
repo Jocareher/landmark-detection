@@ -595,6 +595,7 @@ class HRNetLandmarkVisibility(nn.Module):
             padding=final_padding,
             bias=True,
         )
+        self._frozen_backbone_modules: list[nn.Module] = []
         self._initialize_new_heads()
 
     def _task_heads(self) -> list[nn.Module]:
@@ -709,38 +710,66 @@ class HRNetLandmarkVisibility(nn.Module):
             for parameter in head.parameters():
                 parameter.requires_grad = True
 
-        if mode == "feature_extractor":
-            return
-
-        num_unfrozen_stages = max(0, min(num_unfrozen_stages, 4))
         modules_to_unfreeze: list[nn.Module] = []
-        if num_unfrozen_stages >= 1:
-            modules_to_unfreeze.extend(
-                [self.backbone.transition3, self.backbone.stage4]
-            )
-        if num_unfrozen_stages >= 2:
-            modules_to_unfreeze.extend(
-                [self.backbone.transition2, self.backbone.stage3]
-            )
-        if num_unfrozen_stages >= 3:
-            modules_to_unfreeze.extend(
-                [self.backbone.transition1, self.backbone.stage2]
-            )
-        if num_unfrozen_stages >= 4:
-            modules_to_unfreeze.append(self.backbone.layer1)
-        if unfreeze_stem:
-            modules_to_unfreeze.extend(
-                [
-                    self.backbone.conv1,
-                    self.backbone.bn1,
-                    self.backbone.conv2,
-                    self.backbone.bn2,
-                ]
-            )
+        if mode == "fine_tuning":
+            num_unfrozen_stages = max(0, min(num_unfrozen_stages, 4))
+            if num_unfrozen_stages >= 1:
+                modules_to_unfreeze.extend(
+                    [self.backbone.transition3, self.backbone.stage4]
+                )
+            if num_unfrozen_stages >= 2:
+                modules_to_unfreeze.extend(
+                    [self.backbone.transition2, self.backbone.stage3]
+                )
+            if num_unfrozen_stages >= 3:
+                modules_to_unfreeze.extend(
+                    [self.backbone.transition1, self.backbone.stage2]
+                )
+            if num_unfrozen_stages >= 4:
+                modules_to_unfreeze.append(self.backbone.layer1)
+            if unfreeze_stem:
+                modules_to_unfreeze.extend(
+                    [
+                        self.backbone.conv1,
+                        self.backbone.bn1,
+                        self.backbone.conv2,
+                        self.backbone.bn2,
+                    ]
+                )
 
         for module in modules_to_unfreeze:
             for parameter in module.parameters():
                 parameter.requires_grad = True
+
+        backbone_modules = [
+            self.backbone.conv1,
+            self.backbone.bn1,
+            self.backbone.conv2,
+            self.backbone.bn2,
+            self.backbone.layer1,
+            self.backbone.transition1,
+            self.backbone.stage2,
+            self.backbone.transition2,
+            self.backbone.stage3,
+            self.backbone.transition3,
+            self.backbone.stage4,
+        ]
+        self._frozen_backbone_modules = [
+            module
+            for module in backbone_modules
+            if not any(parameter.requires_grad for parameter in module.parameters())
+        ]
+        if self.training:
+            for module in self._frozen_backbone_modules:
+                module.eval()
+
+    def train(self, mode: bool = True) -> HRNetLandmarkVisibility:
+        """Set training mode while preserving frozen backbone BN statistics."""
+        super().train(mode)
+        if mode:
+            for module in self._frozen_backbone_modules:
+                module.eval()
+        return self
 
     def get_trainable_parameter_names(self) -> list[str]:
         """Return the names of all parameters currently marked as trainable."""

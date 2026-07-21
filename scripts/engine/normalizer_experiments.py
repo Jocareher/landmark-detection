@@ -331,7 +331,7 @@ def write_combined_normalizer_diagnostics(
 def save_modular_checkpoints(
     model: NormalizedLandmarker,
     output_dir: str | Path,
-    base_checkpoint_path: str | Path,
+    base_checkpoint_path: str | Path | None,
     experiment_mode: str,
     resolved_config_path: str | Path,
     landmarker_updated: bool,
@@ -362,6 +362,9 @@ def save_modular_checkpoints(
                 "optimizer_state_dict": None,
                 "metrics": {},
             }
+        payload["model_type"] = type(model).__name__
+        if model.normalizer is not None:
+            payload["normalizer_architecture"] = model.normalizer.architecture_config()
         checkpoint_payloads[name] = payload
         target = checkpoints_dir / name
         torch.save(payload, target)
@@ -381,6 +384,7 @@ def save_modular_checkpoints(
             target = checkpoints_dir / name
             torch.save(
                 {
+                    "model_type": type(model.normalizer).__name__,
                     "experiment_mode": experiment_mode,
                     "normalizer_state_dict": normalizer_state
                     or model.normalizer.state_dict(),
@@ -389,30 +393,34 @@ def save_modular_checkpoints(
                 target,
             )
             saved[name] = str(target)
-    if landmarker_updated:
-        for full_name, name in (
-            ("full_model_best.pth", "landmarker_best.pth"),
-            ("full_model_last.pth", "landmarker_last.pth"),
-        ):
-            full_state = checkpoint_payloads[full_name]["model_state_dict"]
-            landmarker_state = {
-                key.removeprefix("landmarker."): value
-                for key, value in full_state.items()
-                if key.startswith("landmarker.")
-            }
-            target = checkpoints_dir / name
-            torch.save(
-                {
-                    "landmarker_state_dict": landmarker_state
-                    or model.landmarker.state_dict()
-                },
-                target,
-            )
-            saved[name] = str(target)
+    for full_name, name in (
+        ("full_model_best.pth", "landmarker_best.pth"),
+        ("full_model_last.pth", "landmarker_last.pth"),
+    ):
+        full_state = checkpoint_payloads[full_name]["model_state_dict"]
+        landmarker_state = {
+            key.removeprefix("landmarker."): value
+            for key, value in full_state.items()
+            if key.startswith("landmarker.")
+        }
+        landmarker_state = landmarker_state or model.landmarker.state_dict()
+        target = checkpoints_dir / name
+        torch.save(
+            {
+                "model_type": type(model.landmarker).__name__,
+                "model_state_dict": landmarker_state,
+                "landmarker_state_dict": landmarker_state,
+                "source_full_checkpoint": str(checkpoints_dir / full_name),
+            },
+            target,
+        )
+        saved[name] = str(target)
 
     manifest = {
         "experiment_mode": experiment_mode,
-        "base_landmarker_checkpoint": str(base_checkpoint_path),
+        "base_landmarker_checkpoint": (
+            str(base_checkpoint_path) if base_checkpoint_path is not None else None
+        ),
         "landmarker_updated": bool(landmarker_updated),
         "normalizer_updated": bool(normalizer_updated),
         "checkpoint_paths": saved,
@@ -432,7 +440,7 @@ def write_experiment_report(
     output_dir: str | Path,
     experiment_mode: str,
     objective: str,
-    checkpoint_path: str | Path,
+    checkpoint_path: str | Path | None,
     parameter_counts: dict[str, dict[str, int]],
     evaluation_summaries: dict[str, Any],
     diagnostics: dict[str, dict[str, Any]],
@@ -453,7 +461,7 @@ def write_experiment_report(
         "",
         f"**Objective:** {objective}",
         "",
-        f"**Base checkpoint:** `{checkpoint_path}`",
+        f"**Base checkpoint:** `{checkpoint_path if checkpoint_path is not None else 'none'}`",
         "",
         f"**Training protocol:** {training_protocol or 'Not provided'}",
         "",

@@ -8,7 +8,9 @@ arguments:
   output_dir: /home/jocareher/Downloads/landmark-detection/runs
   cache_dir: /home/jocareher/Downloads/landmark-detection/dataset_cache
   pretrained_weights: /home/jocareher/Downloads/landmark-detection/weights/HR18-300W.pth
-  checkpoint: null  # Required for every normalizer experiment.
+  # Required for sanity/frozen-landmarker modes. Keep null for joint_finetune,
+  # which starts from pretrained_weights with newly initialized task heads and normalizer.
+  checkpoint: null
   checkpoint_strict: true
 
   normalizer_hidden_channels: 16

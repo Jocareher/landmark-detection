@@ -295,17 +295,18 @@ def save_checkpoint(
 ) -> None:
     """Save a model checkpoint with optimizer state and tracked metrics."""
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(
-        {
-            "epoch": epoch,
-            "model_state_dict": model.state_dict(),
-            "optimizer_state_dict": optimizer.state_dict()
-            if optimizer is not None
-            else None,
-            "metrics": metrics,
-        },
-        checkpoint_path,
-    )
+    payload: dict[str, Any] = {
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict()
+        if optimizer is not None
+        else None,
+        "metrics": metrics,
+        "model_type": type(model).__name__,
+    }
+    if isinstance(model, NormalizedLandmarker) and model.normalizer is not None:
+        payload["normalizer_architecture"] = model.normalizer.architecture_config()
+    torch.save(payload, checkpoint_path)
 
 
 def initialize_results_csv(csv_path: str | Path) -> None:
