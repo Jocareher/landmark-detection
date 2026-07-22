@@ -129,9 +129,9 @@ or altered edge structure, but visual review remains necessary to identify
 color collapse, excessive smoothing, hallucinated texture, or
 identity-dependent effects.
 
-Raw outputs are saved under
-`normalizer_monitoring/source_validation/`, including per-checkpoint panels,
-CSV metrics, checkpoint grids, and GIF animations. The same panels and numeric
+Raw outputs are saved directly under `normalizer_monitoring/`, including
+per-checkpoint panels, CSV metrics, checkpoint grids, GIF animations, and
+professional trajectory/final-probe plots. The same panels and numeric
 summaries are sent to W&B when enabled. Logging more than approximately four
 probes or capturing every epoch is discouraged unless a short diagnostic run
 is being performed, because image encoding and W&B uploads can otherwise
@@ -158,14 +158,23 @@ Each run keeps the existing evaluation outputs and adds:
 - `checkpoints/normalizer_best.pth` and `normalizer_last.pth`;
 - modular landmarker checkpoints with the normalizer excluded;
 - `checkpoints/checkpoint_manifest.json`;
-- per-dataset image-change and prediction-drift CSV/JSON files in `metrics/`;
+- per-dataset image-change and prediction-drift CSV/JSON files in
+  `normalizer_diagnostics/diagnostic_tables/`;
 - input, normalized, auto-scaled absolute residual, fixed-scale absolute
   residual, signed residual, amplified normalized output, and labeled
   side-by-side examples in
-  `visualizations/<dataset>/`;
+  `normalizer_diagnostics/image_comparisons/<dataset>/`;
 - fixed-probe checkpoint panels, grids, GIFs, and raw statistics in
-  `normalizer_monitoring/source_validation/`;
-- `reports/report.md`.
+  `normalizer_monitoring/`;
+- `normalizer_monitoring/plots/probe_metric_trajectories.png`, showing the
+  checkpoint mean and probe min-max range for appearance change, landmark
+  displacement, localization-error change, and edge preservation;
+- `normalizer_monitoring/plots/final_probe_profile.png`, exposing whether the
+  final behavior is uniform or driven by individual probe images;
+- normalizer-specific protocol and diagnostic report in
+  `normalizer_diagnostics/experiment_report.md`;
+- official dataset metrics and consolidated spreadsheet exports only under
+  `evaluation/` and `evaluation/reports/`.
 
 The diagnostic report includes mean L1/L2 and maximum image difference,
 residual statistics, total variation, changed-pixel fractions, heatmap drift,

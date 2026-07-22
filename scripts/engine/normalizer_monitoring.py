@@ -51,9 +51,11 @@ class NormalizerProbeMonitor:
         self.panels_dir = self.output_dir / "panels"
         self.grids_dir = self.output_dir / "checkpoint_grids"
         self.animations_dir = self.output_dir / "animations"
+        self.plots_dir = self.output_dir / "plots"
         self.panels_dir.mkdir(parents=True, exist_ok=True)
         self.grids_dir.mkdir(parents=True, exist_ok=True)
         self.animations_dir.mkdir(parents=True, exist_ok=True)
+        self.plots_dir.mkdir(parents=True, exist_ok=True)
         self.mean = tuple(float(value) for value in mean)
         self.std = tuple(float(value) for value in std)
         self.coordinate_decoder = coordinate_decoder
@@ -102,7 +104,7 @@ class NormalizerProbeMonitor:
         if not isinstance(self.model, NormalizedLandmarker):
             raise TypeError("Normalizer monitoring requires NormalizedLandmarker.")
         step_name = "final" if is_final else f"step_{step:06d}"
-        capture_dir = self.panels_dir / stage / step_name
+        capture_dir = self.panels_dir / f"{_safe_name(stage)}_{step_name}"
         capture_dir.mkdir(parents=True, exist_ok=True)
         was_training = self.model.training
         self.model.eval()
@@ -232,10 +234,18 @@ class NormalizerProbeMonitor:
         return summary
 
     def _write_outputs(self) -> None:
-        """Persist raw per-probe metrics and an aggregate summary."""
+        """Persist raw metrics, per-checkpoint summaries, and readable plots."""
         _write_rows_csv(self.output_dir / "probe_metrics.csv", self.rows)
-        summary = _summarize_numeric_rows(self.rows)
-        _write_rows_csv(self.output_dir / "probe_metrics_summary.csv", [summary])
+        checkpoint_rows = _summarize_probe_checkpoints(self.rows)
+        _write_rows_csv(
+            self.output_dir / "probe_metrics_by_checkpoint.csv", checkpoint_rows
+        )
+        if checkpoint_rows:
+            _write_rows_csv(
+                self.output_dir / "probe_metrics_final_summary.csv",
+                [checkpoint_rows[-1]],
+            )
+        _write_probe_metric_plots(self.rows, self.plots_dir)
         _write_interpretation_report(
             self.output_dir / "monitoring_report.md",
             self.rows,
@@ -517,6 +527,223 @@ def _summarize_numeric_rows(rows: Sequence[dict[str, Any]]) -> dict[str, float]:
         if values:
             summary[f"mean_{key}"] = float(sum(values) / len(values))
     return summary
+
+
+def _summarize_probe_checkpoints(
+    rows: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Aggregate fixed-probe metrics independently for every capture."""
+    grouped: dict[tuple[str, str, int], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = (str(row["stage"]), str(row["checkpoint"]), int(row["step"]))
+        grouped.setdefault(key, []).append(row)
+    output: list[dict[str, Any]] = []
+    for (stage, checkpoint, step), checkpoint_rows in grouped.items():
+        metric_summary = _summarize_numeric_rows(checkpoint_rows)
+        metric_summary.pop("mean_step", None)
+        output.append(
+            {
+                "stage": stage,
+                "checkpoint": checkpoint,
+                "step": step,
+                "num_probes": len(checkpoint_rows),
+                "geometry_warning_count": sum(
+                    bool(row.get("geometry_warning")) for row in checkpoint_rows
+                ),
+                **metric_summary,
+            }
+        )
+    return output
+
+
+def _write_probe_metric_plots(rows: Sequence[dict[str, Any]], output_dir: Path) -> None:
+    """Create trajectory and final-probe charts from ``probe_metrics.csv``."""
+    if not rows:
+        return
+    output_dir.mkdir(parents=True, exist_ok=True)
+    captures = _ordered_capture_groups(rows)
+    trajectory_specs = (
+        ("mean_absolute_pixel_difference", "Appearance change", "mean |RGB delta|"),
+        ("mean_landmark_displacement_px", "Prediction displacement", "pixels"),
+        ("localization_error_change_px", "Localization error change", "pixels"),
+        ("edge_correlation", "Edge preservation", "correlation"),
+    )
+    charts = [
+        _draw_metric_chart(
+            labels=[label for label, _ in captures],
+            groups=[group for _, group in captures],
+            metric=metric,
+            title=title,
+            y_label=y_label,
+        )
+        for metric, title, y_label in trajectory_specs
+    ]
+    dashboard = Image.new("RGB", (1440, 790), "#F4F7FB")
+    draw = ImageDraw.Draw(dashboard)
+    draw.text(
+        (32, 18),
+        "Normalizer monitoring - fixed-probe evolution",
+        fill="#17233C",
+    )
+    draw.text(
+        (32, 42),
+        "Line = probe mean; shaded band = min-max across the unchanged probe set",
+        fill="#5A667D",
+    )
+    for index, chart in enumerate(charts):
+        dashboard.paste(chart, (20 + (index % 2) * 710, 75 + (index // 2) * 350))
+    dashboard.save(output_dir / "probe_metric_trajectories.png")
+
+    latest_label, latest_rows = captures[-1]
+    profile_specs = (
+        ("mean_absolute_pixel_difference", "Appearance change"),
+        ("mean_landmark_displacement_px", "Landmark displacement (px)"),
+        ("localization_error_change_px", "Localization error change (px)"),
+        ("edge_correlation", "Edge correlation"),
+    )
+    profile = _draw_final_probe_profile(latest_label, latest_rows, profile_specs)
+    profile.save(output_dir / "final_probe_profile.png")
+
+
+def _ordered_capture_groups(
+    rows: Sequence[dict[str, Any]],
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        key = (str(row["stage"]), str(row["checkpoint"]))
+        groups.setdefault(key, []).append(row)
+    return [
+        (checkpoint.replace("step_", ""), group)
+        for (_, checkpoint), group in groups.items()
+    ]
+
+
+def _finite_metric_values(rows: Sequence[dict[str, Any]], metric: str) -> list[float]:
+    return [
+        float(row[metric])
+        for row in rows
+        if isinstance(row.get(metric), (int, float))
+        and math.isfinite(float(row[metric]))
+    ]
+
+
+def _draw_metric_chart(
+    labels: Sequence[str],
+    groups: Sequence[Sequence[dict[str, Any]]],
+    metric: str,
+    title: str,
+    y_label: str,
+) -> Image.Image:
+    width, height = 690, 330
+    left, right, top, bottom = 74, 24, 48, 58
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((0, 0, width - 1, height - 1), 12, outline="#D8DFEA")
+    draw.text((18, 14), title, fill="#17233C")
+    draw.text((18, 31), y_label, fill="#647089")
+    series = [_finite_metric_values(group, metric) for group in groups]
+    valid_series = [(index, values) for index, values in enumerate(series) if values]
+    draw.line((left, top, left, height - bottom), fill="#9AA6B8", width=1)
+    draw.line(
+        (left, height - bottom, width - right, height - bottom),
+        fill="#9AA6B8",
+        width=1,
+    )
+    if not valid_series:
+        draw.text((left + 20, top + 80), "Metric unavailable", fill="#8B96A8")
+        return image
+    all_values = [value for _, values in valid_series for value in values]
+    value_min, value_max = min(all_values), max(all_values)
+    if metric in {"mean_absolute_pixel_difference", "mean_landmark_displacement_px"}:
+        value_min = min(0.0, value_min)
+    span = max(value_max - value_min, 1e-9)
+    padding = 0.08 * span
+    value_min -= padding
+    value_max += padding
+    span = value_max - value_min
+    x_span = max(len(labels) - 1, 1)
+
+    def point(index: int, value: float) -> tuple[float, float]:
+        x = left + index / x_span * (width - left - right)
+        y = height - bottom - (value - value_min) / span * (height - top - bottom)
+        return x, y
+
+    upper = [point(index, max(values)) for index, values in valid_series]
+    lower = [point(index, min(values)) for index, values in reversed(valid_series)]
+    if len(upper) > 1:
+        draw.polygon([*upper, *lower], fill="#DCEBFA")
+    means = [point(index, sum(values) / len(values)) for index, values in valid_series]
+    if len(means) > 1:
+        draw.line(means, fill="#1769AA", width=3)
+    for x, y in means:
+        draw.ellipse((x - 4, y - 4, x + 4, y + 4), fill="#1769AA")
+    for tick in range(5):
+        value = value_min + tick / 4 * span
+        _, y = point(0, value)
+        draw.line((left - 4, y, left, y), fill="#9AA6B8")
+        draw.text((6, y - 7), f"{value:.3g}", fill="#5A667D")
+    visible_label_indices = sorted({0, len(labels) // 2, len(labels) - 1})
+    for index in visible_label_indices:
+        x, _ = point(index, value_min)
+        draw.text((x - 14, height - bottom + 10), labels[index][:10], fill="#5A667D")
+    return image
+
+
+def _draw_final_probe_profile(
+    checkpoint: str,
+    rows: Sequence[dict[str, Any]],
+    specs: Sequence[tuple[str, str]],
+) -> Image.Image:
+    width = 1180
+    row_height = 34
+    section_height = 74 + row_height * len(rows)
+    height = 70 + section_height * len(specs)
+    image = Image.new("RGB", (width, height), "#F4F7FB")
+    draw = ImageDraw.Draw(image)
+    draw.text((28, 18), f"Final fixed-probe profile - {checkpoint}", fill="#17233C")
+    draw.text(
+        (28, 40),
+        "Bars compare individual probes; exact values remain available in probe_metrics.csv",
+        fill="#5A667D",
+    )
+    y = 68
+    colors = ("#1769AA", "#37A67E", "#D8842F", "#8A62B3", "#D24D57")
+    for metric, title in specs:
+        values = _finite_metric_values(rows, metric)
+        draw.rounded_rectangle(
+            (18, y, width - 18, y + section_height - 8),
+            10,
+            fill="white",
+            outline="#D8DFEA",
+        )
+        draw.text((34, y + 14), title, fill="#17233C")
+        if not values:
+            draw.text((34, y + 42), "Metric unavailable", fill="#8B96A8")
+            y += section_height
+            continue
+        scale_min = min(0.0, min(values))
+        scale_max = max(0.0, max(values))
+        span = max(scale_max - scale_min, 1e-9)
+        chart_left, chart_right = 270, width - 92
+        zero_x = chart_left + (0.0 - scale_min) / span * (chart_right - chart_left)
+        draw.line((zero_x, y + 43, zero_x, y + section_height - 20), fill="#AAB4C4")
+        for index, row in enumerate(rows):
+            value = float(row.get(metric, math.nan))
+            if not math.isfinite(value):
+                continue
+            row_y = y + 48 + index * row_height
+            label = str(row.get("sample_id", f"probe_{index}"))[:28]
+            draw.text((34, row_y), label, fill="#465168")
+            value_x = chart_left + (value - scale_min) / span * (
+                chart_right - chart_left
+            )
+            draw.rectangle(
+                (min(zero_x, value_x), row_y + 2, max(zero_x, value_x), row_y + 17),
+                fill=colors[index % len(colors)],
+            )
+            draw.text((chart_right + 10, row_y), f"{value:.4g}", fill="#465168")
+        y += section_height
+    return image
 
 
 def _make_checkpoint_grid(frames: Sequence[Image.Image]) -> Image.Image:

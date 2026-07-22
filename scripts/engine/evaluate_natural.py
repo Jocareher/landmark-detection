@@ -135,6 +135,12 @@ def evaluate_natural_checkpoint(
     orientation_to_box_nme_point_to_line_gt_valid_values: dict[str, list[float]] = {
         orientation: [] for orientation in orientation_names
     }
+    orientation_to_hausdorff_visible_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
+    orientation_to_hausdorff_gt_valid_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
     orientation_sample_counts = {orientation: 0 for orientation in orientation_names}
 
     with torch.inference_mode():
@@ -305,8 +311,14 @@ def evaluate_natural_checkpoint(
                 )
                 if np.isfinite(hausdorff_box_visible):
                     visible_image_hausdorff_values.append(hausdorff_box_visible)
+                    orientation_to_hausdorff_visible_values[orientation].append(
+                        hausdorff_box_visible
+                    )
                 if np.isfinite(hausdorff_box_gt_valid):
                     gt_valid_image_hausdorff_values.append(hausdorff_box_gt_valid)
+                    orientation_to_hausdorff_gt_valid_values[orientation].append(
+                        hausdorff_box_gt_valid
+                    )
                 if mean_box_nme_gt_valid is not None:
                     num_samples_with_gt_valid_metrics += 1
                     num_gt_valid_landmarks += len(gt_valid_errors)
@@ -501,6 +513,13 @@ def evaluate_natural_checkpoint(
                     if orientation_to_box_nme_point_to_line_values[orientation]
                     else None
                 ),
+                **summarize_metric_distribution(
+                    "hausdorff_box_visible_intersection",
+                    orientation_to_hausdorff_visible_values[orientation],
+                ),
+                "num_hausdorff_samples_visible_intersection": len(
+                    orientation_to_hausdorff_visible_values[orientation]
+                ),
                 "mean_nme_box_gt_valid": (
                     float(np.mean(orientation_to_box_nme_gt_valid_values[orientation]))
                     if orientation_to_box_nme_gt_valid_values[orientation]
@@ -535,6 +554,13 @@ def evaluate_natural_checkpoint(
                     if orientation_to_box_nme_point_to_line_gt_valid_values[orientation]
                     else None
                 ),
+                **summarize_metric_distribution(
+                    "hausdorff_box_gt_valid",
+                    orientation_to_hausdorff_gt_valid_values[orientation],
+                ),
+                "num_hausdorff_samples_gt_valid": len(
+                    orientation_to_hausdorff_gt_valid_values[orientation]
+                ),
                 "mean_nme_interocular": None,
             }
             for orientation, values in orientation_to_box_nme_values.items()
@@ -564,10 +590,16 @@ def evaluate_natural_checkpoint(
                 "median_nme_box_visible_intersection": None,
                 "mean_nme_box_point_to_line_visible_intersection": None,
                 "median_nme_box_point_to_line_visible_intersection": None,
+                **summarize_metric_distribution(
+                    "hausdorff_box_visible_intersection", []
+                ),
+                "num_hausdorff_samples_visible_intersection": 0,
                 "mean_nme_box_gt_valid": None,
                 "median_nme_box_gt_valid": None,
                 "mean_nme_box_point_to_line_gt_valid": None,
                 "median_nme_box_point_to_line_gt_valid": None,
+                **summarize_metric_distribution("hausdorff_box_gt_valid", []),
+                "num_hausdorff_samples_gt_valid": 0,
                 "mean_nme_interocular": None,
             }
             for orientation in orientation_names

@@ -11,12 +11,6 @@ import numpy as np
 import torch
 from PIL import Image, ImageDraw
 
-from .evaluation_reporting import (
-    REPORT_CATEGORIES,
-    collect_official_metric_rows,
-    format_report_value,
-    write_official_metric_exports,
-)
 from .metrics import decode_heatmaps_to_image_coords
 from ..models import NormalizedLandmarker
 
@@ -69,12 +63,12 @@ def run_normalizer_diagnostics(
     if residual_amplification <= 0:
         raise ValueError("residual_amplification must be positive.")
     output_dir = Path(output_dir)
-    metrics_dir = output_dir / "metrics"
-    visual_root = output_dir / "visualizations" / dataset_name
+    metrics_dir = output_dir / "diagnostic_tables"
+    visual_root = output_dir / "image_comparisons" / dataset_name
     metrics_dir.mkdir(parents=True, exist_ok=True)
     if save_visual_examples and num_visual_examples > 0:
         _write_visualization_readme(
-            output_dir / "visualizations",
+            output_dir / "image_comparisons",
             residual_display_scale=residual_display_scale,
             residual_amplification=residual_amplification,
         )
@@ -264,7 +258,7 @@ def write_combined_normalizer_diagnostics(
 ) -> None:
     """Save a cross-dataset table and combined prediction-drift table."""
     output_dir = Path(output_dir)
-    metrics_dir = output_dir / "metrics"
+    metrics_dir = output_dir / "diagnostic_tables"
     metrics_dir.mkdir(parents=True, exist_ok=True)
     rows = list(summaries.values())
     if rows:
@@ -457,7 +451,6 @@ def write_experiment_report(
     objective: str,
     checkpoint_path: str | Path | None,
     parameter_counts: dict[str, dict[str, int]],
-    evaluation_summaries: dict[str, Any],
     diagnostics: dict[str, dict[str, Any]],
     checkpoint_paths: dict[str, str],
     normalizer_architecture: dict[str, Any] | None = None,
@@ -466,11 +459,8 @@ def write_experiment_report(
 ) -> Path:
     """Write a concise Markdown report for one normalizer experiment."""
     output_dir = Path(output_dir)
-    reports_dir = output_dir / "reports"
-    reports_dir.mkdir(parents=True, exist_ok=True)
-    report_path = reports_dir / "report.md"
-    official_metric_rows = collect_official_metric_rows(evaluation_summaries)
-    write_official_metric_exports(reports_dir, official_metric_rows)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_path = output_dir / "experiment_report.md"
     lines = [
         f"# {experiment_mode}",
         "",
@@ -495,32 +485,11 @@ def write_experiment_report(
         lines.append(
             f"| {module_name} | {counts['total']} | {counts['trainable']} | {counts['frozen']} |"
         )
-    lines.extend(["", "## Official evaluation summaries", ""])
-    for dataset_name, evaluation_summary in evaluation_summaries.items():
-        dataset_rows = [
-            row for row in official_metric_rows if row["dataset"] == dataset_name
-        ]
-        lines.extend([f"### {dataset_name}", ""])
-        if not dataset_rows:
-            lines.extend(["See the existing evaluation output directory.", ""])
-            continue
-        for category in REPORT_CATEGORIES:
-            category_rows = [row for row in dataset_rows if row["category"] == category]
-            if not category_rows:
-                continue
-            lines.extend([f"#### {category}", "", "| Metric | Value |", "|---|---:|"])
-            lines.extend(
-                f"| {row['metric']} | {format_report_value(row['value'])} |"
-                for row in category_rows
-            )
-            lines.append("")
     lines.extend(
         [
-            "Excel-ready exports:",
+            "## Official evaluation results",
             "",
-            "- `official_metrics_long.csv`: one row per dataset and metric.",
-            "- `official_metrics_wide.csv`: one dataset per row.",
-            "- `official_metrics_copy_paste.tsv`: tab-separated wide table for direct copy/paste.",
+            "Dataset metrics and spreadsheet-ready consolidated reports are stored only under `evaluation/` and `evaluation/reports/`.",
             "",
         ]
     )
@@ -562,7 +531,7 @@ def write_experiment_report(
             "",
             "## Visual examples",
             "",
-            f"Inverse-normalized RGB examples are stored under `{output_dir / 'visualizations'}`.",
+            f"Inverse-normalized RGB examples are stored under `{output_dir / 'image_comparisons'}`.",
             "",
             "## Interpretation",
             "",

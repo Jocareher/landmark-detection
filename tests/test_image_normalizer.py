@@ -15,6 +15,7 @@ from scripts.engine.evaluation_reporting import (
     write_evaluation_report,
     write_official_metric_exports,
 )
+from scripts.engine.evaluate import save_metrics_summary_csv
 from scripts.engine.normalizer_experiments import (
     _save_visual_example,
     run_normalizer_diagnostics,
@@ -76,6 +77,61 @@ def test_official_metric_exports_unwrap_metrics_and_keep_hausdorff(
     assert wide_rows[1]["mean_hausdorff_box"] == "0.18"
     assert (tmp_path / "official_metrics_long.csv").exists()
     assert (tmp_path / "official_metrics_copy_paste.tsv").exists()
+
+
+def test_official_metric_exports_include_orientation_nme_and_hausdorff(
+    tmp_path: Path,
+) -> None:
+    summaries = {
+        "babyland": {
+            "mean_nme_box_gt_valid": 0.1041,
+            "orientation_metrics": {
+                "frontal": {
+                    "mean_nme_box_gt_valid": 0.08,
+                    "mean_hausdorff_box_gt_valid": 0.15,
+                }
+            },
+        }
+    }
+
+    rows = collect_official_metric_rows(summaries)
+    paths = write_evaluation_report(tmp_path, summaries)
+
+    orientation_rows = [row for row in rows if row["category"] == "Orientation"]
+    assert {row["metric"] for row in orientation_rows} == {
+        "orientation_frontal_mean_nme_box_gt_valid",
+        "orientation_frontal_mean_hausdorff_box_gt_valid",
+    }
+    report = Path(paths["markdown"]).read_text(encoding="utf-8")
+    assert "### Orientation" in report
+    assert "orientation_frontal_mean_hausdorff_box_gt_valid" in report
+
+
+def test_dataset_metrics_summary_includes_all_orientation_hausdorff_statistics(
+    tmp_path: Path,
+) -> None:
+    output_path = tmp_path / "metrics_summary.csv"
+    save_metrics_summary_csv(
+        output_path,
+        {
+            "orientation_sample_counts": {"frontal": 4},
+            "orientation_metrics": {
+                "frontal": {
+                    "mean_nme_box_gt_valid": 0.08,
+                    "mean_hausdorff_box_gt_valid": 0.15,
+                    "median_hausdorff_box_gt_valid": 0.14,
+                    "p90_hausdorff_box_gt_valid": 0.20,
+                    "p95_hausdorff_box_gt_valid": 0.22,
+                    "p99_hausdorff_box_gt_valid": 0.25,
+                }
+            },
+        },
+    )
+
+    with output_path.open(newline="", encoding="utf-8") as handle:
+        metrics = {row["metric"]: row["value"] for row in csv.DictReader(handle)}
+    assert metrics["mean_hausdorff_box_gt_valid_frontal"] == "0.1500"
+    assert metrics["p99_hausdorff_box_gt_valid_frontal"] == "0.2500"
 
 
 def test_repository_wide_evaluation_report_is_experiment_agnostic(
@@ -201,14 +257,14 @@ def test_diagnostics_save_visual_example_with_tiny_batch(tmp_path: Path) -> None
         num_visual_examples=1,
     )
     assert summary["max_absolute_difference"] == 0.0
-    assert (tmp_path / "visualizations/tiny/side_by_side/tiny.png").exists()
-    assert (tmp_path / "visualizations/tiny/residual_abs_fixed/tiny.png").exists()
-    assert (tmp_path / "visualizations/tiny/residual_signed/tiny.png").exists()
+    assert (tmp_path / "image_comparisons/tiny/side_by_side/tiny.png").exists()
+    assert (tmp_path / "image_comparisons/tiny/residual_abs_fixed/tiny.png").exists()
+    assert (tmp_path / "image_comparisons/tiny/residual_signed/tiny.png").exists()
     assert (
-        tmp_path / "visualizations/tiny/normalized_change_amplified/tiny.png"
+        tmp_path / "image_comparisons/tiny/normalized_change_amplified/tiny.png"
     ).exists()
-    assert (tmp_path / "visualizations/README.md").exists()
-    assert (tmp_path / "metrics/tiny_normalizer_diagnostics.json").exists()
+    assert (tmp_path / "image_comparisons/README.md").exists()
+    assert (tmp_path / "diagnostic_tables/tiny_normalizer_diagnostics.json").exists()
 
 
 def test_residual_visualizations_use_fixed_scale_and_preserve_sign(
@@ -455,9 +511,13 @@ def test_fixed_probe_monitor_saves_panels_metrics_and_tta_losses(
 
     assert summary["mean_mean_absolute_pixel_difference"] == 0.0
     assert summary["geometry_warning_count"] == 0.0
-    assert (tmp_path / "panels/tta/step_000000/fixed-probe.png").exists()
+    assert (tmp_path / "panels/tta_step_000000/fixed-probe.png").exists()
     assert (tmp_path / "checkpoint_grids/fixed-probe.png").exists()
     assert (tmp_path / "animations/fixed-probe.gif").exists()
     assert (tmp_path / "probe_metrics.csv").exists()
+    assert (tmp_path / "probe_metrics_by_checkpoint.csv").exists()
+    assert (tmp_path / "probe_metrics_final_summary.csv").exists()
+    assert (tmp_path / "plots/probe_metric_trajectories.png").exists()
+    assert (tmp_path / "plots/final_probe_profile.png").exists()
     assert (tmp_path / "adaptation_losses.csv").exists()
     assert (tmp_path / "adaptation_losses.png").exists()

@@ -765,12 +765,13 @@ def finalize_normalizer_experiment(
 ) -> None:
     """Generate diagnostics, modular checkpoints, and the experiment report."""
     diagnostic_loaders = build_normalizer_diagnostic_loaders(config, synbaby_dataloader)
+    diagnostics_root = config.output_dir / "normalizer_diagnostics"
     diagnostics = {
         dataset_name: run_normalizer_diagnostics(
             model=model,
             dataloader=dataloader,
             device=device,
-            output_dir=config.output_dir,
+            output_dir=diagnostics_root,
             dataset_name=dataset_name,
             coordinate_decoder=config.coordinate_decoder,
             softmax_temperature=config.wasserstein_softmax_temperature,
@@ -783,7 +784,7 @@ def finalize_normalizer_experiment(
         )
         for dataset_name, dataloader in diagnostic_loaders.items()
     }
-    write_combined_normalizer_diagnostics(config.output_dir, diagnostics)
+    write_combined_normalizer_diagnostics(diagnostics_root, diagnostics)
     checkpoint_paths = save_modular_checkpoints(
         model=model,
         output_dir=config.output_dir,
@@ -810,12 +811,11 @@ def finalize_normalizer_experiment(
                     f"tolerance ({config.normalizer_sanity_atol:g} px)."
                 )
     report_path = write_experiment_report(
-        output_dir=config.output_dir,
+        output_dir=diagnostics_root,
         experiment_mode=config.experiment_mode,
         objective="Evaluate a shallow residual appearance adapter before BabyLand-72.",
         checkpoint_path=config.checkpoint_path,
         parameter_counts=model.parameter_counts(),
-        evaluation_summaries=evaluation_summary.get("summaries", {}),
         diagnostics=diagnostics,
         checkpoint_paths=checkpoint_paths,
         normalizer_architecture=model.normalizer.architecture_config()
@@ -836,14 +836,6 @@ def finalize_normalizer_experiment(
         ),
         warnings=warnings,
     )
-    commit_report_source = (
-        Path(__file__).resolve().parent.parent / "reports" / "commit_report.md"
-    )
-    if commit_report_source.exists():
-        run_commit_report = config.output_dir / "reports" / "commit_report.md"
-        run_commit_report.write_text(
-            commit_report_source.read_text(encoding="utf-8"), encoding="utf-8"
-        )
     if config.use_wandb:
         import wandb
 

@@ -41,6 +41,43 @@ def _format_metric(value: Any) -> str:
     return str(value)
 
 
+def _write_evaluation_readme(evaluation_root: Path) -> Path:
+    """Document the canonical evaluation artifact layout and metric scope."""
+    path = evaluation_root / "README.md"
+    path.write_text(
+        "\n".join(
+            [
+                "# Evaluation outputs",
+                "",
+                "Each evaluated dataset uses the same top-level structure:",
+                "",
+                "```text",
+                "<dataset>/",
+                "  figures/",
+                "  predictions/",
+                "    images/",
+                "    labels/",
+                "  metrics_summary.csv",
+                "  summary.json",
+                "  per_image_nme.csv",
+                "  per_image_per_landmark_nme.csv",
+                "```",
+                "",
+                "`figures/` contains evaluation plots. `predictions/images/` contains overlays and `predictions/labels/` contains exported landmark files. Dataset-level tables stay directly in the dataset folder.",
+                "",
+                "`reports/` is the only consolidated reporting directory. It contains the Markdown report and long, wide, and tab-separated tables intended for spreadsheet use.",
+                "",
+                "Orientation metrics are identified with the `orientation_<orientation>_` prefix in consolidated exports and include NME and Hausdorff whenever the dataset protocol supports them.",
+                "",
+                "Normalizer-only image-change diagnostics are intentionally stored outside this tree under `normalizer_diagnostics/`; they are not substitutes for model evaluation metrics.",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _print_visibility_summary(summary: dict[str, Any], dataset_name: str) -> None:
     """Print visibility precision/recall/F1 metrics when available."""
     metrics = summary.get("visibility_metrics")
@@ -279,8 +316,6 @@ def evaluate_infanface(
     gt_root = _require_path(config, "infanface_gt_root", "InfAnFace")
     source_root = _optional_path(getattr(config, "infanface_source_root", None))
     output_dir = Path(output_dir)
-    inference_dir = output_dir / "inference"
-    metrics_dir = output_dir / "metrics"
 
     inference_config = type(config)(**vars(config).copy())
     inference_config.project_to_original = True
@@ -292,8 +327,8 @@ def evaluate_infanface(
     if source_root is not None:
         print(f"[INFO] InfAnFace source root: {source_root}")
     print(f"[INFO] InfAnFace output dir: {output_dir}")
-    print(f"[INFO] InfAnFace inference output dir: {inference_dir}")
-    print(f"[INFO] InfAnFace metrics output dir: {metrics_dir}")
+    print(f"[INFO] InfAnFace predictions output dir: {output_dir / 'predictions'}")
+    print(f"[INFO] InfAnFace figures output dir: {output_dir / 'figures'}")
     print("[INFO] InfAnFace dataloader construction started...")
     dataloader = build_inference_dataloader(crop_root, inference_config)
     print(f"[INFO] InfAnFace samples queued: {len(dataloader.dataset)}")
@@ -309,7 +344,7 @@ def evaluate_infanface(
         model=model,
         dataloader=dataloader,
         device=device,
-        output_dir=inference_dir,
+        output_dir=output_dir,
         visibility_threshold=config.visibility_threshold,
         save_overlays=config.save_inference_overlays,
         show_indices=config.show_landmark_indices,
@@ -334,12 +369,12 @@ def evaluate_infanface(
     benchmark_summary = benchmark_infantface_prediction_directory(
         gt_root=gt_root,
         prediction_root=inference_summary_for_return["prediction_labels_dir"],
-        output_dir=metrics_dir,
+        output_dir=output_dir,
         use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
         fixed_log_y_limits=(1e-3, 1.0),
     )
     print("[INFO] InfAnFace final evaluation finished.")
-    print_evaluation_summary("InfAnFace", benchmark_summary, metrics_dir)
+    print_evaluation_summary("InfAnFace", benchmark_summary, output_dir)
     return {
         "inference": inference_summary_for_return,
         "metrics": benchmark_summary,
@@ -356,6 +391,7 @@ def run_full_evaluation(
     """Run all enabled experiment evaluations in the configured sequence."""
     evaluation_root = Path(config.output_dir) / config.evaluation_dirname
     evaluation_root.mkdir(parents=True, exist_ok=True)
+    _write_evaluation_readme(evaluation_root)
 
     print("[INFO] Full evaluation started...")
     print(

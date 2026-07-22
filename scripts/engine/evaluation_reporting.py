@@ -7,7 +7,14 @@ from typing import Any
 import numpy as np
 
 
-REPORT_CATEGORIES = ("Coverage", "NME", "Hausdorff", "Visibility", "Setup")
+REPORT_CATEGORIES = (
+    "Coverage",
+    "NME",
+    "Hausdorff",
+    "Orientation",
+    "Visibility",
+    "Setup",
+)
 
 
 def evaluation_metrics_view(summary: Any) -> dict[str, Any]:
@@ -85,6 +92,27 @@ def collect_official_metric_rows(
                                 "value": class_metrics[metric_name],
                             }
                         )
+        orientation_metrics = summary.get("orientation_metrics", {})
+        if isinstance(orientation_metrics, dict):
+            for orientation_name, metrics in orientation_metrics.items():
+                if not isinstance(metrics, dict):
+                    continue
+                for metric_name, value in metrics.items():
+                    if isinstance(value, (dict, list, tuple)):
+                        continue
+                    if (
+                        "nme" not in metric_name.lower()
+                        and "hausdorff" not in metric_name.lower()
+                    ):
+                        continue
+                    rows.append(
+                        {
+                            "dataset": dataset_name,
+                            "category": "Orientation",
+                            "metric": f"orientation_{orientation_name}_{metric_name}",
+                            "value": value,
+                        }
+                    )
     return rows
 
 
