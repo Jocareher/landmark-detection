@@ -310,6 +310,8 @@ def evaluate_infanface(
     device: torch.device,
     config: ExperimentConfig,
     output_dir: str | Path,
+    dataloader: torch.utils.data.DataLoader | None = None,
+    print_summary: bool = True,
 ) -> dict[str, Any]:
     """Run InfAnFace crop inference, reprojection, and benchmark evaluation."""
     crop_root = _require_path(config, "infanface_crop_root", "InfAnFace")
@@ -330,7 +332,8 @@ def evaluate_infanface(
     print(f"[INFO] InfAnFace predictions output dir: {output_dir / 'predictions'}")
     print(f"[INFO] InfAnFace figures output dir: {output_dir / 'figures'}")
     print("[INFO] InfAnFace dataloader construction started...")
-    dataloader = build_inference_dataloader(crop_root, inference_config)
+    if dataloader is None:
+        dataloader = build_inference_dataloader(crop_root, inference_config)
     print(f"[INFO] InfAnFace samples queued: {len(dataloader.dataset)}")
     print(
         "[INFO] InfAnFace decoder: "
@@ -374,7 +377,8 @@ def evaluate_infanface(
         fixed_log_y_limits=(1e-3, 1.0),
     )
     print("[INFO] InfAnFace final evaluation finished.")
-    print_evaluation_summary("InfAnFace", benchmark_summary, output_dir)
+    if print_summary:
+        print_evaluation_summary("InfAnFace", benchmark_summary, output_dir)
     return {
         "inference": inference_summary_for_return,
         "metrics": benchmark_summary,

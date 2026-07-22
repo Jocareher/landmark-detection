@@ -19,12 +19,14 @@ from scripts.config import (
 from scripts.dataset import build_dataloaders, build_natural_evaluation_dataloader
 from scripts.engine.evaluate import evaluate_checkpoint
 from scripts.engine.evaluate_natural import evaluate_natural_checkpoint
+from scripts.engine.full_evaluation import evaluate_infanface, print_evaluation_summary
 from scripts.engine.metrics import decoder_from_landmark_loss
 from scripts.engine.normalizer_experiments import (
     run_normalizer_diagnostics,
     write_combined_normalizer_diagnostics,
 )
 from scripts.models import NormalizedLandmarker, build_model_from_checkpoints
+from scripts.inference import build_inference_dataloader
 from scripts.utils import get_default_device, set_seed
 
 
@@ -44,9 +46,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--eval-mode",
-        choices=["synthetic", "natural"],
+        choices=["synthetic", "natural", "babyland", "infanface"],
         default="synthetic",
-        help="Evaluation mode. Synthetic expects the repository split layout, while natural expects a detector-export root with images/metadata.",
+        help=(
+            "Dataset evaluation protocol. 'natural' is retained as a backward-"
+            "compatible alias for 'babyland'. InfantFace uses its dedicated "
+            "72-to-68 benchmark protocol."
+        ),
     )
     parser.add_argument(
         "--checkpoint",
@@ -67,13 +73,19 @@ def parse_args() -> argparse.Namespace:
         "--dataset-root",
         type=Path,
         default=defaults.dataset_root,
-        help="Synthetic dataset root in synthetic mode, or detector-export root in natural mode.",
+        help=(
+            "Synthetic dataset root in synthetic mode, or detector-export crop "
+            "root containing images/ and metadata/ in BabyLand/InfantFace mode."
+        ),
     )
     parser.add_argument(
         "--natural-gt-root",
         type=Path,
         default=None,
-        help="Directory that contains GT txt files for the original natural images. Required in natural mode.",
+        help=(
+            "Directory containing original-image GT txt files. Required for "
+            "BabyLand and InfantFace."
+        ),
     )
     parser.add_argument(
         "--natural-source-root",
@@ -158,8 +170,8 @@ def parse_args() -> argparse.Namespace:
         type=str,
         default=None,
         help=(
-            "Name used for normalizer diagnostic files. Defaults to 'synbaby' "
-            "in synthetic mode and 'natural' in natural mode."
+            "Name used for normalizer diagnostic files. Defaults to the resolved "
+            "dataset protocol: synbaby, babyland, or infanface."
         ),
     )
     parser.add_argument(
@@ -207,9 +219,15 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     """
     config = build_config()
     config.dataset_root = args.dataset_root
-    config.eval_mode = args.eval_mode
+    dataset_protocol = resolve_dataset_protocol(args.eval_mode)
+    config.eval_mode = "synthetic" if dataset_protocol == "synthetic" else "natural"
+    config.dataset_protocol = dataset_protocol
     config.natural_gt_root = args.natural_gt_root
     config.natural_source_root = args.natural_source_root
+    if dataset_protocol == "infanface":
+        config.infanface_crop_root = args.dataset_root
+        config.infanface_gt_root = args.natural_gt_root
+        config.infanface_source_root = args.natural_source_root
     config.cache_dir = args.cache_dir
     config.eval_batch_size = args.batch_size
     config.num_workers = args.num_workers
@@ -229,6 +247,11 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
         config.output_dir = args.output_dir
 
     return config
+
+
+def resolve_dataset_protocol(eval_mode: str) -> str:
+    """Resolve legacy evaluation modes to an explicit dataset protocol."""
+    return "babyland" if eval_mode == "natural" else eval_mode
 
 
 def maybe_save_config(
@@ -269,23 +292,6 @@ def _normalizer_architecture_from_config(config: ExperimentConfig) -> dict[str, 
     }
 
 
-def print_visibility_metrics(summary: dict) -> None:
-    """Print visibility precision, recall, and F1 metrics."""
-    metrics = summary.get("visibility_metrics", {})
-    for label, display_name in (
-        ("global", "Global"),
-        ("visible", "Visible class"),
-        ("invisible", "Invisible class"),
-    ):
-        current = metrics.get(label, {})
-        print(
-            f"[INFO] Visibility {display_name}: "
-            f"precision={current.get('precision', 0.0):.4f} "
-            f"recall={current.get('recall', 0.0):.4f} "
-            f"f1={current.get('f1', 0.0):.4f}"
-        )
-
-
 def main() -> None:
     """
     Run standalone evaluation.
@@ -298,6 +304,7 @@ def main() -> None:
     if args.normalizer_residual_amplification <= 0:
         raise ValueError("--normalizer-residual-amplification must be positive.")
     config = build_config_from_args(args)
+    dataset_protocol = config.dataset_protocol
 
     output_dir = config.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -305,13 +312,13 @@ def main() -> None:
     set_seed(config.seed)
     device = get_default_device(config.device)
 
-    if args.eval_mode == "natural" and args.natural_gt_root is None:
+    if dataset_protocol in {"babyland", "infanface"} and args.natural_gt_root is None:
         raise ValueError(
-            "--natural-gt-root is required when --eval-mode natural is used."
+            "--natural-gt-root is required for BabyLand and InfantFace evaluation."
         )
 
     print(f"[INFO] Device: {device}")
-    print(f"[INFO] Eval mode: {args.eval_mode}")
+    print(f"[INFO] Dataset protocol: {dataset_protocol}")
     print(f"[INFO] Dataset root: {config.dataset_root}")
     print(f"[INFO] Checkpoint: {args.checkpoint}")
     print(f"[INFO] Output dir: {output_dir}")
@@ -347,7 +354,8 @@ def main() -> None:
     if args.save_config:
         maybe_save_config(config, output_dir)
 
-    if args.eval_mode == "synthetic":
+    artifact_summary: dict = {}
+    if dataset_protocol == "synthetic":
         dataloaders = build_dataloaders(config)
         evaluation_dataloader = dataloaders["test"]
         summary = evaluate_checkpoint(
@@ -367,7 +375,8 @@ def main() -> None:
             coordinate_decoder=config.coordinate_decoder,
             wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
         )
-    else:
+        artifact_summary = summary
+    elif dataset_protocol == "babyland":
         evaluation_dataloader = build_natural_evaluation_dataloader(
             export_root=config.dataset_root,
             gt_root=args.natural_gt_root,
@@ -392,14 +401,31 @@ def main() -> None:
             coordinate_decoder=config.coordinate_decoder,
             wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
         )
+        artifact_summary = summary
+    else:
+        inference_config = type(config)(**vars(config).copy())
+        inference_config.project_to_original = True
+        inference_config.source_root = args.natural_source_root
+        evaluation_dataloader = build_inference_dataloader(
+            config.dataset_root,
+            inference_config,
+        )
+        infanface_result = evaluate_infanface(
+            model=model,
+            device=device,
+            config=config,
+            output_dir=output_dir,
+            dataloader=evaluation_dataloader,
+            print_summary=False,
+        )
+        summary = infanface_result["metrics"]
+        artifact_summary = infanface_result["inference"]
 
     if isinstance(model, NormalizedLandmarker):
         if args.disable_normalizer_diagnostics:
             print("[INFO] Normalizer diagnostics disabled by CLI option.")
         else:
-            dataset_name = args.dataset_name or (
-                "synbaby" if args.eval_mode == "synthetic" else "natural"
-            )
+            dataset_name = args.dataset_name or dataset_protocol
             diagnostics_dir = output_dir / "normalizer_diagnostics"
             print(
                 "[INFO] Generating normalizer diagnostics | "
@@ -429,75 +455,20 @@ def main() -> None:
             print(f"[INFO] Normalizer diagnostics dir: {diagnostics_dir}")
 
     print("[INFO] Evaluation finished.")
-    has_explicit_visible_intersection = (
-        "mean_nme_box_visible_intersection" in summary
-        or "mean_nme_box_point_to_line_visible_intersection" in summary
-    )
-    if has_explicit_visible_intersection:
-        for key, label in (
-            (
-                "mean_nme_box_visible_intersection",
-                "Mean NME box visible-intersection",
-            ),
-            (
-                "median_nme_box_visible_intersection",
-                "Median NME box visible-intersection",
-            ),
-            (
-                "mean_nme_box_point_to_line_visible_intersection",
-                "Mean NME box point-to-line visible-intersection",
-            ),
-            (
-                "median_nme_box_point_to_line_visible_intersection",
-                "Median NME box point-to-line visible-intersection",
-            ),
-            ("mean_nme_box_gt_valid", "Mean NME box GT-valid"),
-            ("median_nme_box_gt_valid", "Median NME box GT-valid"),
-            (
-                "mean_nme_box_point_to_line_gt_valid",
-                "Mean NME box point-to-line GT-valid",
-            ),
-            (
-                "median_nme_box_point_to_line_gt_valid",
-                "Median NME box point-to-line GT-valid",
-            ),
-        ):
-            metric_value = summary.get(key)
-            if metric_value is not None:
-                print(f"[INFO] {label}: {metric_value:.4f}")
-            else:
-                print(f"[INFO] {label}: n/a")
-    else:
-        if summary["mean_nme_box"] is not None:
-            print(f"[INFO] Mean NME box: {summary['mean_nme_box']:.4f}")
-        else:
-            print("[INFO] Mean NME box: n/a")
-        if summary["median_nme_box"] is not None:
-            print(f"[INFO] Median NME box: {summary['median_nme_box']:.4f}")
-        else:
-            print("[INFO] Median NME box: n/a")
-        if summary.get("mean_nme_box_point_to_line") is not None:
-            print(
-                "[INFO] Mean NME box point-to-line: "
-                f"{summary['mean_nme_box_point_to_line']:.4f}"
-            )
-        else:
-            print("[INFO] Mean NME box point-to-line: n/a")
-        if summary.get("median_nme_box_point_to_line") is not None:
-            print(
-                "[INFO] Median NME box point-to-line: "
-                f"{summary['median_nme_box_point_to_line']:.4f}"
-            )
-        else:
-            print("[INFO] Median NME box point-to-line: n/a")
-    if summary["mean_nme_interocular"] is not None:
-        print(f"[INFO] Mean NME interocular: {summary['mean_nme_interocular']:.4f}")
-    print_visibility_metrics(summary)
-    print(f"[INFO] Labels dir: {summary['prediction_labels_dir']}")
-    if summary["prediction_overlays_dir"] is not None:
-        print(f"[INFO] Overlays dir: {summary['prediction_overlays_dir']}")
-    if summary.get("prediction_crop_overlays_dir") is not None:
-        print(f"[INFO] Crop overlays dir: {summary['prediction_crop_overlays_dir']}")
+    terminal_summary = dict(summary)
+    for key in (
+        "prediction_labels_dir",
+        "prediction_overlays_dir",
+        "prediction_crop_overlays_dir",
+    ):
+        if artifact_summary.get(key) is not None:
+            terminal_summary[key] = artifact_summary[key]
+    display_name = {
+        "synthetic": "SynBaby",
+        "babyland": "BabyLand",
+        "infanface": "InfAnFace",
+    }[dataset_protocol]
+    print_evaluation_summary(display_name, terminal_summary, output_dir)
 
 
 if __name__ == "__main__":
