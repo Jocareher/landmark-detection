@@ -23,7 +23,6 @@ python scripts/evaluate.py \
   --dataset-root /path/to/babyland/crops/all_detections \
   --natural-gt-root /path/to/babyland72/labels \
   --natural-source-root /optional/path/to/source/images \
-  --dataset-name babyland \
   --landmark-loss wasserstein \
   --output-dir /path/to/run/evaluation/babyland
 ```
@@ -37,7 +36,6 @@ python scripts/evaluate.py \
   --dataset-root /path/to/infanface/crops/all_detections \
   --natural-gt-root /path/to/infanface/labels \
   --natural-source-root /optional/path/to/source/images \
-  --dataset-name infanface \
   --landmark-loss wasserstein \
   --output-dir /path/to/run/evaluation/infanface
 ```

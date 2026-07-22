@@ -45,6 +45,20 @@ def test_legacy_natural_mode_remains_a_babyland_alias() -> None:
     assert standalone_evaluate.resolve_dataset_protocol("infanface") == "infanface"
 
 
+def test_dataset_name_is_derived_instead_of_exposed_as_cli_argument(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["evaluate.py", "--checkpoint", "model.pth"],
+    )
+
+    args = standalone_evaluate.parse_args()
+
+    assert not hasattr(args, "dataset_name")
+
+
 def test_infanface_evaluator_reuses_provided_dataloader(
     tmp_path: Path, monkeypatch
 ) -> None:

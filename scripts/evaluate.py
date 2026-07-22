@@ -166,15 +166,6 @@ def parse_args() -> argparse.Namespace:
         help="In natural mode, additionally save qualitative overlays on the detector crops under predictions/crops/.",
     )
     parser.add_argument(
-        "--dataset-name",
-        type=str,
-        default=None,
-        help=(
-            "Name used for normalizer diagnostic files. Defaults to the resolved "
-            "dataset protocol: synbaby, babyland, or infanface."
-        ),
-    )
-    parser.add_argument(
         "--disable-normalizer-diagnostics",
         action="store_true",
         help="Skip image-change and prediction-drift diagnostics for normalized models.",
@@ -425,7 +416,7 @@ def main() -> None:
         if args.disable_normalizer_diagnostics:
             print("[INFO] Normalizer diagnostics disabled by CLI option.")
         else:
-            dataset_name = args.dataset_name or dataset_protocol
+            dataset_name = dataset_protocol
             diagnostics_dir = output_dir / "normalizer_diagnostics"
             print(
                 "[INFO] Generating normalizer diagnostics | "
