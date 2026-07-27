@@ -83,6 +83,7 @@ NORMALIZATION_STD = (0.229, 0.224, 0.225)
 TRANSFER_MODE = "feature_extractor"
 NUM_UNFROZEN_STAGES = 0
 UNFREEZE_STEM = False
+STEM_FINETUNE_STAGE1 = False
 
 
 # ---------------------------------------------------------------------------
@@ -134,6 +135,11 @@ TRAIN_HEADS = False
 # ---------------------------------------------------------------------------
 NUM_EPOCHS = 60
 LEARNING_RATE = 1e-4
+USE_DIFFERENTIAL_LEARNING_RATES = False
+STEM_LEARNING_RATE = 1e-5
+STAGE1_LEARNING_RATE = 1e-5
+STAGE4_LEARNING_RATE = 1e-5
+HEADS_LEARNING_RATE = 1e-4
 WEIGHT_DECAY = 0.0
 LR_MILESTONES = (30, 50)
 LR_GAMMA = 0.1
@@ -255,6 +261,7 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "transfer_mode": TRANSFER_MODE,
     "num_unfrozen_stages": NUM_UNFROZEN_STAGES,
     "unfreeze_stem": UNFREEZE_STEM,
+    "stem_finetune_stage1": STEM_FINETUNE_STAGE1,
     "experiment_mode": EXPERIMENT_MODE,
     "checkpoint_path": CHECKPOINT_PATH,
     "checkpoint_strict": CHECKPOINT_STRICT,
@@ -296,6 +303,11 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "train_heads": TRAIN_HEADS,
     "num_epochs": NUM_EPOCHS,
     "learning_rate": LEARNING_RATE,
+    "use_differential_learning_rates": USE_DIFFERENTIAL_LEARNING_RATES,
+    "stem_learning_rate": STEM_LEARNING_RATE,
+    "stage1_learning_rate": STAGE1_LEARNING_RATE,
+    "stage4_learning_rate": STAGE4_LEARNING_RATE,
+    "heads_learning_rate": HEADS_LEARNING_RATE,
     "weight_decay": WEIGHT_DECAY,
     "lr_milestones": LR_MILESTONES,
     "lr_gamma": LR_GAMMA,

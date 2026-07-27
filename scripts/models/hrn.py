@@ -763,6 +763,56 @@ class HRNetLandmarkVisibility(nn.Module):
             for module in self._frozen_backbone_modules:
                 module.eval()
 
+    def set_stem_stage4_finetune(self, unfreeze_stage1: bool = False) -> None:
+        """Train the HRNet stem and final stage while freezing the middle stages.
+
+        This non-contiguous policy is intended for the early-feature adaptation
+        experiment. The official HRNet backbone weights initialize every backbone
+        module, while the task heads retain their standard new initialization.
+        """
+        for parameter in self.backbone.parameters():
+            parameter.requires_grad = False
+        for head in self._task_heads():
+            for parameter in head.parameters():
+                parameter.requires_grad = True
+
+        modules_to_unfreeze: list[nn.Module] = [
+            self.backbone.conv1,
+            self.backbone.bn1,
+            self.backbone.conv2,
+            self.backbone.bn2,
+            self.backbone.transition3,
+            self.backbone.stage4,
+        ]
+        if unfreeze_stage1:
+            modules_to_unfreeze.append(self.backbone.layer1)
+
+        for module in modules_to_unfreeze:
+            for parameter in module.parameters():
+                parameter.requires_grad = True
+
+        backbone_modules = [
+            self.backbone.conv1,
+            self.backbone.bn1,
+            self.backbone.conv2,
+            self.backbone.bn2,
+            self.backbone.layer1,
+            self.backbone.transition1,
+            self.backbone.stage2,
+            self.backbone.transition2,
+            self.backbone.stage3,
+            self.backbone.transition3,
+            self.backbone.stage4,
+        ]
+        self._frozen_backbone_modules = [
+            module
+            for module in backbone_modules
+            if not any(parameter.requires_grad for parameter in module.parameters())
+        ]
+        if self.training:
+            for module in self._frozen_backbone_modules:
+                module.eval()
+
     def train(self, mode: bool = True) -> HRNetLandmarkVisibility:
         """Set training mode while preserving frozen backbone BN statistics."""
         super().train(mode)

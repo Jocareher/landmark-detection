@@ -2,6 +2,7 @@
 # scripts/main.py. CLI options override the values defined here.
 arguments:
   # Change this value in this same file; no per-experiment YAML is required.
+  # Use hrnet_stem_finetune for trainable stem + transition3 + stage4 + heads.
   experiment_mode: none
 
   dataset_root: /home/jocareher/Downloads/landmark-detection/data/synbaby72
@@ -37,6 +38,13 @@ arguments:
   eval_batch_size: 32
   epochs: 60
   lr: 0.0001
+  # The common `lr` above is used for every trainable parameter by default.
+  # Enable this flag only for the later differential-LR ablation.
+  use_differential_learning_rates: false
+  stem_learning_rate: 0.00001
+  stage1_learning_rate: 0.00001
+  stage4_learning_rate: 0.00001
+  heads_learning_rate: 0.0001
   landmark_loss: wasserstein
   adaptive_wing_omega: 14.0
   adaptive_wing_theta: 0.5
@@ -52,6 +60,9 @@ arguments:
   transfer_mode: fine_tuning
   num_unfrozen_stages: 1
   unfreeze_stem: false
+  # Applies only to hrnet_stem_finetune. False is the primary stem-only run;
+  # true additionally trains layer1 (HRNet Stage 1) as a later ablation.
+  stem_finetune_stage1: false
 
   use_wandb: true
   wandb_project: BabyLMKS

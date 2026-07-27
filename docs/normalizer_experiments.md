@@ -31,10 +31,13 @@ input distribution before the pretrained landmarker.
 | `normalizer_sanity` | Identity, frozen | Frozen | Verify unchanged images, heatmaps, visibility and decoded landmarks |
 | `normalizer_train_frozen_landmarker` | Trained | Fully frozen | Determine whether the adapter alone can improve supervised SynBaby validation |
 | `normalizer_joint_finetune` | Trained from identity | Official HRNet weights; transition 3, stage 4, and new task heads trained | Compare adapter-only training with partial HRNet adaptation without requiring a previously trained landmarker |
+| `hrnet_stem_finetune` | Not used | Official HRNet weights; stem, transition 3, stage 4, and new task heads trained | Test non-contiguous early/late feature adaptation while stages 1--3 remain frozen |
 
-All modes require the established Wasserstein heatmap loss and barycenter
-decoder. The normalizer does not replace or reimplement either path. Training
-uses SynBaby labels only. BabyLand-72 and InfAnFace remain evaluation-only.
+The three residual-normalizer modes require the established Wasserstein heatmap
+loss and barycenter decoder. The stem experiment uses the repository's selected
+landmark-loss pipeline; the shared YAML keeps Wasserstein as the default.
+Training uses SynBaby labels only. BabyLand-72 and InfAnFace remain
+evaluation-only.
 
 ## Configuration and precedence
 
@@ -78,6 +81,47 @@ the official HRNet weights, creates new task heads and an identity-initialized
 normalizer, freezes the stem and stages 1--3 (including frozen BatchNorm
 statistics), and trains transition 3, stage 4, the task heads, and the
 normalizer.
+
+### HRNet stem adaptation
+
+The stem experiment does not instantiate the separate RGB residual normalizer.
+It starts from the official HRNet weights and new task heads, then trains
+`conv1`, `bn1`, `conv2`, `bn2`, transition 3, stage 4, and the task heads.
+`layer1` (HRNet Stage 1), transition 1, Stage 2, transition 2, and Stage 3 stay
+frozen by default. Run it with the shared YAML:
+
+```bash
+python -m scripts.main \
+  --config configs/normalizer_experiments.yaml \
+  --experiment-mode hrnet_stem_finetune \
+  --pretrained-weights /absolute/path/to/HR18-300W.pth
+```
+
+In YAML, `checkpoint` must be `null`; no previously trained BabyLand landmarker
+is loaded. The primary experiment uses the common `lr` for every trainable
+component:
+
+```yaml
+experiment_mode: hrnet_stem_finetune
+checkpoint: null
+stem_finetune_stage1: false
+use_differential_learning_rates: false
+lr: 0.0001
+```
+
+The later differential-rate ablation is already supported:
+
+```yaml
+use_differential_learning_rates: true
+stem_learning_rate: 0.00001
+stage1_learning_rate: 0.00001
+stage4_learning_rate: 0.00001
+heads_learning_rate: 0.0001
+```
+
+Set `stem_finetune_stage1: true` only for the subsequent stem-plus-Stage-1
+ablation. Empty parameter groups are omitted automatically, and W&B records
+the active rates under `lr/stem`, `lr/stage1`, `lr/stage4`, and `lr/heads`.
 
 The same command-line options can override YAML values, for example:
 

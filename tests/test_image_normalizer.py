@@ -22,7 +22,7 @@ from scripts.engine.normalizer_experiments import (
     save_modular_checkpoints,
 )
 from scripts.engine.normalizer_monitoring import NormalizerProbeMonitor
-from scripts.main import validate_experiment_config
+from scripts.main import build_optimizer, validate_experiment_config
 from scripts.models import (
     HRNetLandmarkVisibility,
     NormalizedLandmarker,
@@ -209,6 +209,84 @@ def test_joint_finetune_trains_normalizer_stage4_transition3_and_heads_only() ->
     wrapper.train()
     assert wrapper.landmarker.backbone.stage3.training is False
     assert wrapper.landmarker.backbone.stage4.training is True
+
+
+def test_stem_finetune_trains_stem_stage4_and_heads_only() -> None:
+    model = HRNetLandmarkVisibility(num_landmarks=72)
+    model.set_stem_stage4_finetune(unfreeze_stage1=False)
+    trainable_names = {
+        name for name, parameter in model.named_parameters() if parameter.requires_grad
+    }
+
+    assert any(name.startswith("backbone.conv1") for name in trainable_names)
+    assert any(name.startswith("backbone.bn1") for name in trainable_names)
+    assert any(name.startswith("backbone.conv2") for name in trainable_names)
+    assert any(name.startswith("backbone.bn2") for name in trainable_names)
+    assert any(name.startswith("backbone.transition3") for name in trainable_names)
+    assert any(name.startswith("backbone.stage4") for name in trainable_names)
+    assert any(name.startswith("visibility_feature_head") for name in trainable_names)
+    assert not any(name.startswith("backbone.layer1") for name in trainable_names)
+    assert not any(name.startswith("backbone.transition1") for name in trainable_names)
+    assert not any(name.startswith("backbone.stage2") for name in trainable_names)
+    assert not any(name.startswith("backbone.transition2") for name in trainable_names)
+    assert not any(name.startswith("backbone.stage3") for name in trainable_names)
+
+    model.train()
+    assert model.backbone.bn1.training is True
+    assert model.backbone.layer1.training is False
+    assert model.backbone.stage2.training is False
+    assert model.backbone.stage3.training is False
+    assert model.backbone.stage4.training is True
+
+
+def test_stem_finetune_can_optionally_train_stage1() -> None:
+    model = HRNetLandmarkVisibility(num_landmarks=72)
+    model.set_stem_stage4_finetune(unfreeze_stage1=True)
+
+    assert all(
+        parameter.requires_grad for parameter in model.backbone.layer1.parameters()
+    )
+    assert all(
+        not parameter.requires_grad for parameter in model.backbone.stage2.parameters()
+    )
+
+
+def test_stem_finetune_uses_common_learning_rate_by_default() -> None:
+    model = HRNetLandmarkVisibility(num_landmarks=72)
+    model.set_stem_stage4_finetune(unfreeze_stage1=False)
+    config = build_config()
+    config.experiment_mode = "hrnet_stem_finetune"
+    config.learning_rate = 1.0e-4
+    config.use_differential_learning_rates = False
+
+    optimizer = build_optimizer(model, config)
+
+    assert len(optimizer.param_groups) == 1
+    assert optimizer.param_groups[0]["lr"] == 1.0e-4
+
+
+def test_stem_finetune_supports_differential_component_learning_rates() -> None:
+    model = HRNetLandmarkVisibility(num_landmarks=72)
+    model.set_stem_stage4_finetune(unfreeze_stage1=True)
+    config = build_config()
+    config.experiment_mode = "hrnet_stem_finetune"
+    config.use_differential_learning_rates = True
+    config.stem_learning_rate = 1.0e-5
+    config.stage1_learning_rate = 2.0e-5
+    config.stage4_learning_rate = 3.0e-5
+    config.heads_learning_rate = 1.0e-4
+
+    optimizer = build_optimizer(model, config)
+    learning_rates = {
+        str(group["name"]): float(group["lr"]) for group in optimizer.param_groups
+    }
+
+    assert learning_rates == {
+        "stem": 1.0e-5,
+        "stage1": 2.0e-5,
+        "stage4": 3.0e-5,
+        "heads": 1.0e-4,
+    }
 
 
 def test_yaml_nested_values_override_defaults(tmp_path: Path) -> None:
@@ -423,6 +501,25 @@ def test_joint_finetune_requires_pretrained_hrnet_but_not_landmarker_checkpoint(
     validate_experiment_config(config)
 
     assert config.train_normalizer is True
+    assert config.freeze_landmarker is False
+    assert config.finetune_last_backbone_stage is True
+    assert config.train_heads is True
+
+
+def test_stem_finetune_requires_pretrained_hrnet_and_no_checkpoint(
+    tmp_path: Path,
+) -> None:
+    pretrained_weights = tmp_path / "hrnet.pth"
+    pretrained_weights.touch()
+    config = build_config()
+    config.experiment_mode = "hrnet_stem_finetune"
+    config.checkpoint_path = None
+    config.pretrained_weights = pretrained_weights
+    config.transfer_mode = "fine_tuning"
+
+    validate_experiment_config(config)
+
+    assert config.train_normalizer is False
     assert config.freeze_landmarker is False
     assert config.finetune_last_backbone_stage is True
     assert config.train_heads is True

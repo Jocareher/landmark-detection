@@ -633,34 +633,34 @@ def train_model(
         )
 
         if use_wandb and wandb is not None:
-            wandb.log(
-                {
-                    "epoch": epoch,
-                    "lr": current_lr,
-                    "train/total_loss": train_metrics["total_loss"],
-                    "train/full_landmark_loss": train_metrics["full_landmark_loss"],
-                    "train/visible_landmark_loss": train_metrics[
-                        "visible_landmark_loss"
-                    ],
-                    "train/visibility_loss": train_metrics["visibility_loss"],
-                    "train/pca_loss": train_metrics["pca_loss"],
-                    "train/image_l1_loss": train_metrics["image_l1_loss"],
-                    "train/image_tv_loss": train_metrics["image_tv_loss"],
-                    "train/nme": train_metrics["nme"],
-                    "train/visible_nme": train_metrics["visible_nme"],
-                    "val/total_loss": val_metrics["total_loss"],
-                    "val/full_landmark_loss": val_metrics["full_landmark_loss"],
-                    "val/visible_landmark_loss": val_metrics["visible_landmark_loss"],
-                    "val/visibility_loss": val_metrics["visibility_loss"],
-                    "val/pca_loss": val_metrics["pca_loss"],
-                    "val/image_l1_loss": val_metrics["image_l1_loss"],
-                    "val/image_tv_loss": val_metrics["image_tv_loss"],
-                    "val/nme": val_metrics["nme"],
-                    "val/visible_nme": val_metrics["visible_nme"],
-                    "best/val_total_loss": best_val_loss,
-                    "best/val_nme": best_val_nme,
-                }
-            )
+            wandb_metrics = {
+                "epoch": epoch,
+                "lr": current_lr,
+                "train/total_loss": train_metrics["total_loss"],
+                "train/full_landmark_loss": train_metrics["full_landmark_loss"],
+                "train/visible_landmark_loss": train_metrics["visible_landmark_loss"],
+                "train/visibility_loss": train_metrics["visibility_loss"],
+                "train/pca_loss": train_metrics["pca_loss"],
+                "train/image_l1_loss": train_metrics["image_l1_loss"],
+                "train/image_tv_loss": train_metrics["image_tv_loss"],
+                "train/nme": train_metrics["nme"],
+                "train/visible_nme": train_metrics["visible_nme"],
+                "val/total_loss": val_metrics["total_loss"],
+                "val/full_landmark_loss": val_metrics["full_landmark_loss"],
+                "val/visible_landmark_loss": val_metrics["visible_landmark_loss"],
+                "val/visibility_loss": val_metrics["visibility_loss"],
+                "val/pca_loss": val_metrics["pca_loss"],
+                "val/image_l1_loss": val_metrics["image_l1_loss"],
+                "val/image_tv_loss": val_metrics["image_tv_loss"],
+                "val/nme": val_metrics["nme"],
+                "val/visible_nme": val_metrics["visible_nme"],
+                "best/val_total_loss": best_val_loss,
+                "best/val_nme": best_val_nme,
+            }
+            for group_index, parameter_group in enumerate(optimizer.param_groups):
+                group_name = str(parameter_group.get("name", f"group_{group_index}"))
+                wandb_metrics[f"lr/{group_name}"] = float(parameter_group["lr"])
+            wandb.log(wandb_metrics)
 
         if visualize_every_n_epochs > 0 and (epoch + 1) % visualize_every_n_epochs == 0:
             from ..utils.visualization import (

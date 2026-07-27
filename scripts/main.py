@@ -45,6 +45,14 @@ from scripts.utils import (
 from scripts.utils.visualization import save_dataset_preview_grid
 
 
+NORMALIZER_EXPERIMENT_MODES = {
+    "normalizer_sanity",
+    "normalizer_train_frozen_landmarker",
+    "normalizer_joint_finetune",
+}
+HRNET_STEM_EXPERIMENT_MODE = "hrnet_stem_finetune"
+
+
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments for the end-to-end training pipeline."""
     config_parser = argparse.ArgumentParser(add_help=False)
@@ -72,9 +80,10 @@ def parse_args() -> argparse.Namespace:
             "normalizer_sanity",
             "normalizer_train_frozen_landmarker",
             "normalizer_joint_finetune",
+            HRNET_STEM_EXPERIMENT_MODE,
         ],
         default=defaults.experiment_mode,
-        help="Residual image normalizer experiment mode.",
+        help="Training experiment mode.",
     )
     parser.add_argument(
         "--dataset-root",
@@ -233,6 +242,39 @@ def parse_args() -> argparse.Namespace:
         help="Learning rate for the optimizer.",
     )
     parser.add_argument(
+        "--use-differential-learning-rates",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.use_differential_learning_rates,
+        help=(
+            "Use component-specific learning rates for hrnet_stem_finetune. "
+            "Disabled by default so --lr applies to every trainable parameter."
+        ),
+    )
+    parser.add_argument(
+        "--stem-learning-rate",
+        type=float,
+        default=defaults.stem_learning_rate,
+        help="Learning rate for conv1/bn1/conv2/bn2 when differential rates are enabled.",
+    )
+    parser.add_argument(
+        "--stage1-learning-rate",
+        type=float,
+        default=defaults.stage1_learning_rate,
+        help="Learning rate for layer1 when it is enabled and differential rates are used.",
+    )
+    parser.add_argument(
+        "--stage4-learning-rate",
+        type=float,
+        default=defaults.stage4_learning_rate,
+        help="Learning rate for transition3 and stage4 with differential rates.",
+    )
+    parser.add_argument(
+        "--heads-learning-rate",
+        type=float,
+        default=defaults.heads_learning_rate,
+        help="Learning rate for task heads with differential rates.",
+    )
+    parser.add_argument(
         "--landmark-loss",
         choices=["mse", "adaptive_wing", "wasserstein"],
         default=defaults.landmark_loss,
@@ -315,6 +357,15 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=defaults.unfreeze_stem,
         help="Unfreeze the HRNet stem layers as part of transfer learning.",
+    )
+    parser.add_argument(
+        "--stem-finetune-stage1",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.stem_finetune_stage1,
+        help=(
+            "Also train layer1 (HRNet Stage 1) in hrnet_stem_finetune. "
+            "The primary experiment keeps it frozen."
+        ),
     )
     parser.add_argument(
         "--use-wandb",
@@ -545,7 +596,7 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
         load_yaml_config(args.config) if args.config is not None else build_config()
     )
     apply_argparse_arguments(config, args)
-    config.normalizer_enabled = args.experiment_mode != "none"
+    config.normalizer_enabled = args.experiment_mode in NORMALIZER_EXPERIMENT_MODES
     config.normalizer_monitor_steps = tuple(args.normalizer_monitor_steps)
     config.normalizer_tta_monitor_steps = tuple(args.normalizer_tta_monitor_steps)
     config.coordinate_decoder = decoder_from_landmark_loss(args.landmark_loss)
@@ -607,9 +658,41 @@ def validate_full_evaluation_paths(config: ExperimentConfig) -> None:
 
 
 def validate_experiment_config(config: ExperimentConfig) -> None:
-    """Validate and resolve invariants of the normalizer experiment modes."""
+    """Validate and resolve invariants of specialized experiment modes."""
     if config.experiment_mode == "none":
         return
+    if config.experiment_mode == HRNET_STEM_EXPERIMENT_MODE:
+        if config.checkpoint_path is not None:
+            raise ValueError(
+                "hrnet_stem_finetune starts from pretrained_weights and requires "
+                "checkpoint: null."
+            )
+        if (
+            config.pretrained_weights is None
+            or not Path(config.pretrained_weights).exists()
+        ):
+            raise FileNotFoundError(
+                "hrnet_stem_finetune requires valid official HRNet pretrained_weights."
+            )
+        if config.transfer_mode != "fine_tuning":
+            raise ValueError("hrnet_stem_finetune requires transfer_mode: fine_tuning.")
+        component_rates = (
+            config.stem_learning_rate,
+            config.stage1_learning_rate,
+            config.stage4_learning_rate,
+            config.heads_learning_rate,
+        )
+        if config.use_differential_learning_rates and any(
+            learning_rate <= 0 for learning_rate in component_rates
+        ):
+            raise ValueError("All component learning rates must be positive.")
+        config.train_normalizer = False
+        config.freeze_landmarker = False
+        config.finetune_last_backbone_stage = True
+        config.train_heads = True
+        return
+    if config.experiment_mode not in NORMALIZER_EXPERIMENT_MODES:
+        raise ValueError(f"Unsupported experiment mode: {config.experiment_mode}")
     checkpoint_required = config.experiment_mode in {
         "normalizer_sanity",
         "normalizer_train_frozen_landmarker",
@@ -694,6 +777,9 @@ def build_model(config: ExperimentConfig) -> torch.nn.Module:
         landmarker.load_official_hrnet_pretrained(
             str(config.pretrained_weights), verbose=True
         )
+    if config.experiment_mode == HRNET_STEM_EXPERIMENT_MODE:
+        landmarker.set_stem_stage4_finetune(unfreeze_stage1=config.stem_finetune_stage1)
+        return landmarker
     if not config.normalizer_enabled:
         landmarker.set_transfer_learning_mode(
             mode=config.transfer_mode,
@@ -729,6 +815,75 @@ def build_model(config: ExperimentConfig) -> torch.nn.Module:
     else:
         raise ValueError(f"Unsupported experiment mode: {config.experiment_mode}")
     return model
+
+
+def build_optimizer(
+    model: torch.nn.Module,
+    config: ExperimentConfig,
+) -> torch.optim.Optimizer:
+    """Build Adam with either one common LR or named component LR groups."""
+    trainable_named_parameters = [
+        (name, parameter)
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    ]
+    if not trainable_named_parameters:
+        raise ValueError("The model has no trainable parameters.")
+    if not config.use_differential_learning_rates:
+        return torch.optim.Adam(
+            [parameter for _, parameter in trainable_named_parameters],
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay,
+        )
+    if config.experiment_mode != HRNET_STEM_EXPERIMENT_MODE:
+        raise ValueError(
+            "Differential learning rates are currently supported only for "
+            "hrnet_stem_finetune."
+        )
+
+    grouped_parameters: dict[str, list[torch.nn.Parameter]] = {
+        "stem": [],
+        "stage1": [],
+        "stage4": [],
+        "heads": [],
+    }
+    for name, parameter in trainable_named_parameters:
+        if name.startswith(
+            ("backbone.conv1", "backbone.bn1", "backbone.conv2", "backbone.bn2")
+        ):
+            component = "stem"
+        elif name.startswith("backbone.layer1"):
+            component = "stage1"
+        elif name.startswith(("backbone.transition3", "backbone.stage4")):
+            component = "stage4"
+        elif not name.startswith("backbone."):
+            component = "heads"
+        else:
+            raise ValueError(
+                f"Trainable parameter {name!r} does not belong to a configured LR group."
+            )
+        grouped_parameters[component].append(parameter)
+
+    learning_rates = {
+        "stem": config.stem_learning_rate,
+        "stage1": config.stage1_learning_rate,
+        "stage4": config.stage4_learning_rate,
+        "heads": config.heads_learning_rate,
+    }
+    parameter_groups = [
+        {
+            "name": component,
+            "params": parameters,
+            "lr": learning_rates[component],
+        }
+        for component, parameters in grouped_parameters.items()
+        if parameters
+    ]
+    return torch.optim.Adam(
+        parameter_groups,
+        lr=config.learning_rate,
+        weight_decay=config.weight_decay,
+    )
 
 
 def build_normalizer_diagnostic_loaders(
@@ -950,6 +1105,14 @@ def main() -> None:
                 "trainable=normalizer, transition3, stage4, task heads | "
                 "frozen=stem, stage1, stage2, stage3"
             )
+        elif config.experiment_mode == HRNET_STEM_EXPERIMENT_MODE:
+            early_trainable = "stem + stage1" if config.stem_finetune_stage1 else "stem"
+            print(
+                "[INFO] HRNet early/late initialization | "
+                f"HRNet backbone={config.pretrained_weights} | new task heads | "
+                f"trainable={early_trainable}, transition3, stage4, task heads | "
+                "frozen=transition1, stage2, transition2, stage3"
+            )
 
         if config.checkpoint_path is not None:
             print(f"[INFO] Loading checkpoint from {config.checkpoint_path}...")
@@ -1023,11 +1186,12 @@ def main() -> None:
             return
 
         print("[INFO] Building optimizer, scheduler, and losses...")
-        optimizer = torch.optim.Adam(
-            trainable_parameters,
-            lr=config.learning_rate,
-            weight_decay=config.weight_decay,
+        optimizer = build_optimizer(model, config)
+        optimizer_lr_summary = ", ".join(
+            f"{group.get('name', 'all')}={float(group['lr']):.6g}"
+            for group in optimizer.param_groups
         )
+        print(f"[INFO] Optimizer learning rates | {optimizer_lr_summary}")
         scheduler = torch.optim.lr_scheduler.MultiStepLR(
             optimizer,
             milestones=list(config.lr_milestones),
@@ -1106,7 +1270,7 @@ def main() -> None:
             run_name=config.wandb_run_name,
             use_wandb=config.use_wandb,
             wandb_config=config_to_serializable_dict(config),
-            finish_wandb=config.experiment_mode == "none",
+            finish_wandb=not config.normalizer_enabled,
             use_amp=config.use_amp,
             landmark_loss=config.landmark_loss,
             coordinate_decoder=config.coordinate_decoder,
