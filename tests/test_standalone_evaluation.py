@@ -4,7 +4,9 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import torch
+import yaml
 
 from scripts import evaluate as standalone_evaluate
 from scripts.engine import full_evaluation
@@ -91,6 +93,93 @@ def test_pca_tta_cli_options_are_resolved(monkeypatch) -> None:
     assert config.pca_tta_steps == 7
     assert config.pca_tta_learning_rate == 0.00002
     assert config.pca_tta_monitor_steps == (0, 1, 7)
+
+
+def test_evaluation_yaml_supplies_every_parser_argument(monkeypatch) -> None:
+    config_path = (
+        Path(__file__).resolve().parents[1] / "configs" / "pca_tta_evaluation.yaml"
+    )
+    yaml_arguments = yaml.safe_load(config_path.read_text(encoding="utf-8"))["arguments"]
+    monkeypatch.setattr(sys, "argv", ["evaluate.py", "--config", str(config_path)])
+
+    args = standalone_evaluate.parse_args()
+
+    assert set(vars(args)) == set(yaml_arguments) | {"config"}
+    assert args.checkpoint == Path(yaml_arguments["checkpoint"])
+    assert args.pca_tta is True
+    assert args.pca_tta_monitor_steps == [0, 1, 5, 10, 20]
+
+
+def test_explicit_cli_arguments_override_yaml_values(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "evaluation.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "arguments": {
+                    "checkpoint": "yaml_model.pth",
+                    "pca_tta": True,
+                    "pca_tta_steps": 20,
+                    "use_wandb": True,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "evaluate.py",
+            "--config",
+            str(config_path),
+            "--checkpoint",
+            "cli_model.pth",
+            "--no-pca-tta",
+            "--pca-tta-steps",
+            "7",
+            "--no-use-wandb",
+        ],
+    )
+
+    args = standalone_evaluate.parse_args()
+
+    assert args.checkpoint == Path("cli_model.pth")
+    assert args.pca_tta is False
+    assert args.pca_tta_steps == 7
+    assert args.use_wandb is False
+
+
+def test_evaluation_yaml_rejects_unknown_arguments(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "evaluation.yaml"
+    config_path.write_text(
+        "arguments:\n  checkpoint: model.pth\n  unsupported_option: 3\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", ["evaluate.py", "--config", str(config_path)])
+
+    with pytest.raises(ValueError, match="unsupported_option"):
+        standalone_evaluate.parse_args()
+
+
+def test_evaluation_yaml_requires_boolean_values_for_boolean_flags(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    config_path = tmp_path / "evaluation.yaml"
+    config_path.write_text(
+        "arguments:\n  checkpoint: model.pth\n  pca_tta: 'yes'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sys, "argv", ["evaluate.py", "--config", str(config_path)])
+
+    with pytest.raises(ValueError, match="pca_tta.*true or false"):
+        standalone_evaluate.parse_args()
 
 
 def test_infanface_evaluator_reuses_provided_dataloader(

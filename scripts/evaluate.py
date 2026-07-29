@@ -4,8 +4,10 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import torch
+import yaml
 
 if __package__ is None or __package__ == "":
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -41,10 +43,20 @@ def parse_args() -> argparse.Namespace:
     argparse.Namespace
         Parsed CLI arguments.
     """
+    config_parser = argparse.ArgumentParser(add_help=False)
+    config_parser.add_argument("--config", type=Path, default=None)
+    config_args, _ = config_parser.parse_known_args()
+    yaml_defaults = _load_yaml_argument_defaults(config_args.config)
     defaults = build_config()
     parser = argparse.ArgumentParser(
         description="Evaluate a trained landmark detection checkpoint on the test split.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=config_args.config,
+        help="Optional evaluation YAML. Explicit CLI values take precedence.",
     )
     parser.add_argument(
         "--eval-mode",
@@ -59,7 +71,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--checkpoint",
         type=Path,
-        required=True,
+        default=None,
+        required=yaml_defaults.get("checkpoint") is None,
         help="Checkpoint to evaluate on the test split.",
     )
     parser.add_argument(
@@ -151,25 +164,26 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--use-landmark-names",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=defaults.use_landmark_names_in_boxplot,
         help="Use landmark names instead of indices on evaluation boxplots.",
     )
     parser.add_argument(
         "--save-config",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=False,
         help="Save the resolved configuration JSON next to the evaluation outputs.",
     )
     parser.add_argument(
         "--save-crop-overlays",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=defaults.save_natural_crop_overlays,
         help="In natural mode, additionally save qualitative overlays on the detector crops under predictions/crops/.",
     )
     parser.add_argument(
         "--disable-normalizer-diagnostics",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=False,
         help="Skip image-change and prediction-drift diagnostics for normalized models.",
     )
     parser.add_argument(
@@ -195,7 +209,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--pca-tta",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=defaults.pca_tta_enabled,
         help=(
             "Enable episodic per-image TTA. Only the external normalizer is "
@@ -241,7 +255,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--use-wandb",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
         default=defaults.use_wandb,
         help="Log aggregate PCA-TTA curves, image summaries, and probes to W&B.",
     )
@@ -255,7 +269,71 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional W&B run name for this standalone TTA evaluation.",
     )
+    _apply_yaml_argument_defaults(parser, yaml_defaults)
     return parser.parse_args()
+
+
+def _load_yaml_argument_defaults(config_path: Path | None) -> dict[str, Any]:
+    """Read standalone evaluation parser defaults from one optional YAML file."""
+    if config_path is None:
+        return {}
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ValueError("The evaluation YAML root must be a mapping.")
+    arguments = payload.get("arguments", payload)
+    if not isinstance(arguments, dict):
+        raise ValueError("The evaluation YAML 'arguments' entry must be a mapping.")
+    return dict(arguments)
+
+
+def _apply_yaml_argument_defaults(
+    parser: argparse.ArgumentParser,
+    yaml_defaults: dict[str, Any],
+) -> None:
+    """Validate and type-convert YAML values against every parser destination."""
+    actions = {
+        action.dest: action
+        for action in parser._actions
+        if action.dest not in {"help", "config"}
+    }
+    unknown = sorted(set(yaml_defaults).difference(actions))
+    if unknown:
+        raise ValueError(f"Unsupported evaluation YAML arguments: {unknown}")
+
+    converted: dict[str, Any] = {}
+    for destination, value in yaml_defaults.items():
+        action = actions[destination]
+        if value is None:
+            converted[destination] = None
+            continue
+        if isinstance(action, argparse.BooleanOptionalAction):
+            if not isinstance(value, bool):
+                raise ValueError(
+                    f"YAML argument '{destination}' must be true or false."
+                )
+            converted[destination] = value
+            continue
+        if action.nargs in {"+", "*"}:
+            if not isinstance(value, (list, tuple)):
+                raise ValueError(
+                    f"YAML argument '{destination}' must be a list because the "
+                    "corresponding CLI option accepts multiple values."
+                )
+            typed_value = [
+                action.type(item) if action.type is not None else item for item in value
+            ]
+        else:
+            typed_value = action.type(value) if action.type is not None else value
+        if action.choices is not None:
+            values = typed_value if isinstance(typed_value, list) else [typed_value]
+            invalid = [item for item in values if item not in action.choices]
+            if invalid:
+                raise ValueError(
+                    f"Invalid YAML value for '{destination}': {invalid}. "
+                    f"Expected one of {list(action.choices)}."
+                )
+        converted[destination] = typed_value
+    parser.set_defaults(**converted)
 
 
 def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
@@ -305,6 +383,7 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.use_wandb = args.use_wandb
     config.wandb_project = args.wandb_project
     config.wandb_run_name = args.wandb_run_name
+    config.config_path = args.config
 
     if args.output_dir is None:
         resolve_evaluation_output_dir(config, args.checkpoint)

@@ -1,0 +1,45 @@
+# One reusable configuration for standalone PCA-guided TTA evaluation.
+# Every entry under `arguments` corresponds exactly to a destination exposed by
+# `python scripts/evaluate.py --help`. Explicit CLI options override this file.
+arguments:
+  eval_mode: babyland
+
+  # Use either a full-model checkpoint by itself, or a landmarker-only
+  # checkpoint together with normalizer_checkpoint.
+  checkpoint: /home/jocareher/Downloads/landmark-detection/runs/EXPERIMENT/checkpoints/full_model_best.pth
+  normalizer_checkpoint: null
+
+  dataset_root: /home/jocareher/Downloads/babyland72_622_inference/crops/all_detections
+  natural_gt_root: /home/jocareher/Downloads/landmark-detection/data/babyland72/labels
+  natural_source_root: null
+  output_dir: /home/jocareher/Downloads/landmark-detection/runs/EXPERIMENT/evaluation/babyland_pca_tta
+  cache_dir: /home/jocareher/Downloads/landmark-detection/dataset_cache
+
+  batch_size: 1
+  num_workers: 4
+  device: auto
+  seed: 42
+
+  visibility_threshold: 0.5
+  landmark_loss: wasserstein
+  wasserstein_softmax_temperature: 1.0
+  use_landmark_names: false
+
+  save_config: true
+  save_crop_overlays: true
+  disable_normalizer_diagnostics: true
+  normalizer_visual_examples: 4
+  normalizer_residual_display_scale: 0.02
+  normalizer_residual_amplification: 25.0
+
+  pca_tta: true
+  pca_prior_path: /home/jocareher/Downloads/landmark-detection/weights/pca_prior_13y_k32.pt
+  pca_tta_steps: 20
+  pca_tta_learning_rate: 0.0001
+  pca_tta_monitor_steps: [0, 1, 5, 10, 20]
+  pca_tta_probe_count: 4
+  pca_tta_difference_display_max: 0.15
+
+  use_wandb: true
+  wandb_project: BabyLMKS
+  wandb_run_name: babyland_pca_tta_k32
