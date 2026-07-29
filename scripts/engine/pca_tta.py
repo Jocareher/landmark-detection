@@ -91,6 +91,16 @@ class PCAGuidedTTA:
         self.model.freeze_landmarker()
         self.model.unfreeze_normalizer()
         self._restore_source_normalizer()
+        self._validate_parameter_partition()
+        landmarker_total = _count_parameters(self.model.landmarker.parameters())
+        normalizer_total = _count_parameters(self.model.normalizer.parameters())
+        print(
+            "[PCA-TTA] Parameter audit | "
+            f"landmarker_total={landmarker_total:,} "
+            "landmarker_trainable=0 "
+            f"normalizer_total={normalizer_total:,} "
+            f"normalizer_trainable={normalizer_total:,}"
+        )
 
     def adapt_batch(
         self,
@@ -132,6 +142,7 @@ class PCAGuidedTTA:
     ) -> dict[str, torch.Tensor]:
         """Run one independent adaptation episode and restore source weights."""
         self._restore_source_normalizer()
+        self._validate_parameter_partition()
         self.model.landmarker.eval()
         assert self.model.normalizer is not None
         self.model.normalizer.train()
@@ -139,6 +150,12 @@ class PCAGuidedTTA:
             self.model.normalizer.parameters(),
             lr=self.config.learning_rate,
             weight_decay=0.0,
+        )
+        episode_number = self.processed_samples + 1
+        print(
+            f"[PCA-TTA][episode={episode_number:06d}] sample={sample_id} | "
+            "source_normalizer_restored=yes optimizer=fresh "
+            "landmarker=frozen normalizer=trainable"
         )
         image = image.detach().to(self.device)
         sample_rows: list[dict[str, Any]] = []
@@ -249,7 +266,8 @@ class PCAGuidedTTA:
                 row["failed"] = failed
                 row["failure_message"] = failure_message
             self.trajectory_rows.extend(sample_rows)
-            self.summary_rows.append(_summarize_sample_rows(sample_rows))
+            sample_summary = _summarize_sample_rows(sample_rows)
+            self.summary_rows.append(sample_summary)
             if self.processed_samples < self.config.probe_count and snapshots:
                 self._save_probe(
                     sample_id=sample_id,
@@ -260,6 +278,13 @@ class PCAGuidedTTA:
             self.processed_samples += 1
             self._restore_source_normalizer()
             self.model.eval()
+            print(
+                f"[PCA-TTA][episode={episode_number:06d}] sample={sample_id} | "
+                f"status={'failed' if failed else 'ok'} "
+                f"initial_loss={sample_summary['initial_pca_reconstruction_loss']:.6g} "
+                f"final_loss={sample_summary['final_pca_reconstruction_loss']:.6g} "
+                "source_normalizer_restored_after=yes"
+            )
 
         assert final_outputs is not None
         return final_outputs
@@ -282,6 +307,35 @@ class PCAGuidedTTA:
         )
         for parameter in self.model.normalizer.parameters():
             parameter.requires_grad = True
+        current_state = self.model.normalizer.state_dict()
+        if any(
+            not torch.equal(current_state[key].detach().cpu(), source_value)
+            for key, source_value in self.source_normalizer_state.items()
+        ):
+            raise RuntimeError("Failed to restore the source normalizer state exactly.")
+
+    def _validate_parameter_partition(self) -> None:
+        """Fail fast unless only the complete normalizer remains trainable."""
+        trainable_landmarker = sum(
+            parameter.numel()
+            for parameter in self.model.landmarker.parameters()
+            if parameter.requires_grad
+        )
+        frozen_normalizer = sum(
+            parameter.numel()
+            for parameter in self.model.normalizer.parameters()
+            if not parameter.requires_grad
+        )
+        if trainable_landmarker:
+            raise RuntimeError(
+                "PCA TTA requires the complete landmarker to be frozen, but "
+                f"{trainable_landmarker:,} parameters remain trainable."
+            )
+        if frozen_normalizer:
+            raise RuntimeError(
+                "PCA TTA requires the complete normalizer to be trainable, but "
+                f"{frozen_normalizer:,} parameters remain frozen."
+            )
 
     def _save_probe(
         self,
@@ -398,6 +452,11 @@ class PCAGuidedTTA:
                     }
                 )
         return summary
+
+
+def _count_parameters(parameters: Any) -> int:
+    """Count scalar parameters from an iterable without modifying it."""
+    return sum(parameter.numel() for parameter in parameters)
 
 
 def _gradient_norm(parameters: Any) -> float:

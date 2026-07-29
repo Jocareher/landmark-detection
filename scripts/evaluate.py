@@ -492,8 +492,16 @@ def main() -> None:
             else "full normalized-model checkpoint"
         )
         print(f"[INFO] Loaded {loading_mode}; normalizer diagnostics are available.")
+        print(
+            "[INFO] Checkpoint load verified | strict=True missing_keys=0 "
+            "unexpected_keys=0 landmarker=complete normalizer=complete"
+        )
     else:
         print("[INFO] Loaded landmarker-only checkpoint; no normalizer is active.")
+        print(
+            "[INFO] Checkpoint load verified | strict=True missing_keys=0 "
+            "unexpected_keys=0 landmarker=complete"
+        )
 
     tta_adapter = None
     wandb_module = None

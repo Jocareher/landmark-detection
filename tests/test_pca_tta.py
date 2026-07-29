@@ -54,7 +54,10 @@ def _pca_prior() -> dict[str, object]:
     }
 
 
-def test_pca_tta_is_episodic_and_restores_source_normalizer(tmp_path: Path) -> None:
+def test_pca_tta_is_episodic_and_restores_source_normalizer(
+    tmp_path: Path,
+    capsys,
+) -> None:
     torch.manual_seed(7)
     model = NormalizedLandmarker(
         landmarker=TinyLandmarker(),
@@ -79,6 +82,10 @@ def test_pca_tta_is_episodic_and_restores_source_normalizer(tmp_path: Path) -> N
             probe_count=0,
         ),
     )
+    assert all(
+        not parameter.requires_grad for parameter in model.landmarker.parameters()
+    )
+    assert all(parameter.requires_grad for parameter in model.normalizer.parameters())
     image = torch.randn(1, 3, 12, 12)
 
     first = adapter.adapt_batch(image, ["first"])
@@ -110,6 +117,13 @@ def test_pca_tta_is_episodic_and_restores_source_normalizer(tmp_path: Path) -> N
     assert (tmp_path / "tta/image_summary.csv").exists()
     assert (tmp_path / "tta/aggregate_curves.csv").exists()
     assert (tmp_path / "tta/figures/pca_reconstruction_loss_curve.png").exists()
+    terminal_output = capsys.readouterr().out
+    assert "landmarker_trainable=0" in terminal_output
+    assert "sample=first" in terminal_output
+    assert "sample=second" in terminal_output
+    assert terminal_output.count("source_normalizer_restored=yes") == 2
+    assert terminal_output.count("optimizer=fresh") == 2
+    assert terminal_output.count("source_normalizer_restored_after=yes") == 2
 
 
 def test_pca_tta_uses_reconstruction_loss_without_regularization(
