@@ -82,6 +82,7 @@ def evaluate_natural_checkpoint(
     landmark_loss: str | None = None,
     coordinate_decoder: str = "argmax_subpixel",
     wasserstein_softmax_temperature: float = 1.0,
+    tta_adapter: Any | None = None,
 ) -> dict[str, Any]:
     """Evaluate a checkpoint on detector-export crops and original-image GT."""
     output_dir = Path(output_dir)
@@ -143,11 +144,17 @@ def evaluate_natural_checkpoint(
     }
     orientation_sample_counts = {orientation: 0 for orientation in orientation_names}
 
-    with torch.inference_mode():
-        for batch in tqdm(dataloader, desc="Evaluating", dynamic_ncols=True):
-            images = batch["image"].to(device, non_blocking=True)
-            outputs = model(images)
+    for batch in tqdm(dataloader, desc="Evaluating", dynamic_ncols=True):
+        images = batch["image"].to(device, non_blocking=True)
+        metadata_batch = batch["metadata"]
+        sample_ids = [str(value) for value in metadata_batch["sample_id"]]
+        if tta_adapter is None:
+            with torch.inference_mode():
+                outputs = model(images)
+        else:
+            outputs = tta_adapter.adapt_batch(images=images, sample_ids=sample_ids)
 
+        with torch.inference_mode():
             predicted_landmarks_batch = decode_heatmaps_to_image_coords(
                 heatmaps=outputs["heatmaps"],
                 image_height=images.shape[2],
@@ -165,7 +172,6 @@ def evaluate_natural_checkpoint(
 
             target_landmarks_batch = batch["landmarks"].cpu()
             target_visibility_batch = batch["visibility"].cpu()
-            metadata_batch = batch["metadata"]
             batch_size = images.shape[0]
 
             if per_landmark_errors is None:

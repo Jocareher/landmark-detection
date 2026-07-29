@@ -59,6 +59,40 @@ def test_dataset_name_is_derived_instead_of_exposed_as_cli_argument(
     assert not hasattr(args, "dataset_name")
 
 
+def test_pca_tta_cli_options_are_resolved(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "evaluate.py",
+            "--eval-mode",
+            "babyland",
+            "--checkpoint",
+            "full_model.pth",
+            "--pca-tta",
+            "--pca-prior-path",
+            "prior.pt",
+            "--pca-tta-steps",
+            "7",
+            "--pca-tta-learning-rate",
+            "0.00002",
+            "--pca-tta-monitor-steps",
+            "0",
+            "1",
+            "7",
+        ],
+    )
+
+    args = standalone_evaluate.parse_args()
+    config = standalone_evaluate.build_config_from_args(args)
+
+    assert config.pca_tta_enabled is True
+    assert config.pca_prior_path == Path("prior.pt")
+    assert config.pca_tta_steps == 7
+    assert config.pca_tta_learning_rate == 0.00002
+    assert config.pca_tta_monitor_steps == (0, 1, 7)
+
+
 def test_infanface_evaluator_reuses_provided_dataloader(
     tmp_path: Path, monkeypatch
 ) -> None:

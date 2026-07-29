@@ -312,6 +312,7 @@ def evaluate_infanface(
     output_dir: str | Path,
     dataloader: torch.utils.data.DataLoader | None = None,
     print_summary: bool = True,
+    tta_adapter: Any | None = None,
 ) -> dict[str, Any]:
     """Run InfAnFace crop inference, reprojection, and benchmark evaluation."""
     crop_root = _require_path(config, "infanface_crop_root", "InfAnFace")
@@ -359,6 +360,7 @@ def evaluate_infanface(
         landmark_loss=config.landmark_loss,
         coordinate_decoder=config.coordinate_decoder,
         wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
+        tta_adapter=tta_adapter,
     )
     inference_summary_for_return = {
         key: value for key, value in inference_summary.items() if key != "predictions"

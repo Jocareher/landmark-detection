@@ -151,6 +151,12 @@ WASSERSTEIN_EPSILON = 1e-8
 WASSERSTEIN_VALIDATE_NORMALIZATION = False
 PCA_PRIOR_PATH = None
 LAMBDA_PCA_PROJECTION = 0.0
+PCA_TTA_ENABLED = False
+PCA_TTA_STEPS = 20
+PCA_TTA_LEARNING_RATE = 1e-4
+PCA_TTA_MONITOR_STEPS = (0, 1, 5, 10, 20)
+PCA_TTA_PROBE_COUNT = 4
+PCA_TTA_DIFFERENCE_DISPLAY_MAX = 0.15
 PATIENCE = 15
 USE_AMP = True
 RUN_SMOKE_TEST = False
@@ -313,6 +319,12 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "wasserstein_validate_normalization": WASSERSTEIN_VALIDATE_NORMALIZATION,
     "pca_prior_path": PCA_PRIOR_PATH,
     "lambda_pca_projection": LAMBDA_PCA_PROJECTION,
+    "pca_tta_enabled": PCA_TTA_ENABLED,
+    "pca_tta_steps": PCA_TTA_STEPS,
+    "pca_tta_learning_rate": PCA_TTA_LEARNING_RATE,
+    "pca_tta_monitor_steps": PCA_TTA_MONITOR_STEPS,
+    "pca_tta_probe_count": PCA_TTA_PROBE_COUNT,
+    "pca_tta_difference_display_max": PCA_TTA_DIFFERENCE_DISPLAY_MAX,
     "patience": PATIENCE,
     "use_amp": USE_AMP,
     "run_smoke_test": RUN_SMOKE_TEST,

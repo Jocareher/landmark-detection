@@ -25,6 +25,8 @@ from scripts.engine.normalizer_experiments import (
     run_normalizer_diagnostics,
     write_combined_normalizer_diagnostics,
 )
+from scripts.engine.pca_shape_prior import load_pca_shape_prior
+from scripts.engine.pca_tta import PCAGuidedTTA, PCATTAConfig
 from scripts.models import NormalizedLandmarker, build_model_from_checkpoints
 from scripts.inference import build_inference_dataloader
 from scripts.utils import get_default_device, set_seed
@@ -191,6 +193,68 @@ def parse_args() -> argparse.Namespace:
         default=25.0,
         help="Amplification used by the input-plus-residual diagnostic preview.",
     )
+    parser.add_argument(
+        "--pca-tta",
+        action="store_true",
+        default=defaults.pca_tta_enabled,
+        help=(
+            "Enable episodic per-image TTA. Only the external normalizer is "
+            "updated and PCA reconstruction loss is the sole objective."
+        ),
+    )
+    parser.add_argument(
+        "--pca-prior-path",
+        type=Path,
+        default=defaults.pca_prior_path,
+        help="Source-trained PCA shape-prior checkpoint required by --pca-tta.",
+    )
+    parser.add_argument(
+        "--pca-tta-steps",
+        type=int,
+        default=defaults.pca_tta_steps,
+        help="Number of independent normalizer updates performed per target image.",
+    )
+    parser.add_argument(
+        "--pca-tta-learning-rate",
+        type=float,
+        default=defaults.pca_tta_learning_rate,
+        help="Adam learning rate used for the normalizer during each TTA episode.",
+    )
+    parser.add_argument(
+        "--pca-tta-monitor-steps",
+        type=int,
+        nargs="+",
+        default=list(defaults.pca_tta_monitor_steps),
+        help="Adaptation steps saved for fixed target-image probe panels.",
+    )
+    parser.add_argument(
+        "--pca-tta-probe-count",
+        type=int,
+        default=defaults.pca_tta_probe_count,
+        help="Number of target images receiving detailed visual trajectories.",
+    )
+    parser.add_argument(
+        "--pca-tta-difference-display-max",
+        type=float,
+        default=defaults.pca_tta_difference_display_max,
+        help="Fixed absolute RGB difference mapped to full probe-map intensity.",
+    )
+    parser.add_argument(
+        "--use-wandb",
+        action="store_true",
+        default=defaults.use_wandb,
+        help="Log aggregate PCA-TTA curves, image summaries, and probes to W&B.",
+    )
+    parser.add_argument(
+        "--wandb-project",
+        default=defaults.wandb_project,
+        help="Weights & Biases project used by optional TTA logging.",
+    )
+    parser.add_argument(
+        "--wandb-run-name",
+        default=None,
+        help="Optional W&B run name for this standalone TTA evaluation.",
+    )
     return parser.parse_args()
 
 
@@ -231,6 +295,16 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.wasserstein_softmax_temperature = args.wasserstein_softmax_temperature
     config.use_landmark_names_in_boxplot = args.use_landmark_names
     config.save_natural_crop_overlays = args.save_crop_overlays
+    config.pca_tta_enabled = args.pca_tta
+    config.pca_prior_path = args.pca_prior_path
+    config.pca_tta_steps = args.pca_tta_steps
+    config.pca_tta_learning_rate = args.pca_tta_learning_rate
+    config.pca_tta_monitor_steps = tuple(args.pca_tta_monitor_steps)
+    config.pca_tta_probe_count = args.pca_tta_probe_count
+    config.pca_tta_difference_display_max = args.pca_tta_difference_display_max
+    config.use_wandb = args.use_wandb
+    config.wandb_project = args.wandb_project
+    config.wandb_run_name = args.wandb_run_name
 
     if args.output_dir is None:
         resolve_evaluation_output_dir(config, args.checkpoint)
@@ -342,6 +416,50 @@ def main() -> None:
     else:
         print("[INFO] Loaded landmarker-only checkpoint; no normalizer is active.")
 
+    tta_adapter = None
+    wandb_module = None
+    if config.pca_tta_enabled:
+        if dataset_protocol == "synthetic":
+            raise ValueError("PCA-guided TTA is supported only for natural datasets.")
+        if not isinstance(model, NormalizedLandmarker):
+            raise ValueError(
+                "--pca-tta requires a full normalized-model checkpoint or a "
+                "landmarker checkpoint combined with --normalizer-checkpoint."
+            )
+        if config.pca_prior_path is None:
+            raise ValueError("--pca-prior-path is required when --pca-tta is enabled.")
+        if config.use_wandb:
+            import wandb as wandb_module
+
+            wandb_module.init(
+                project=config.wandb_project,
+                name=config.wandb_run_name,
+                config=config_to_serializable_dict(config),
+            )
+        pca_prior = load_pca_shape_prior(config.pca_prior_path, device=device)
+        tta_adapter = PCAGuidedTTA(
+            model=model,
+            pca_prior=pca_prior,
+            device=device,
+            output_dir=output_dir / "tta",
+            config=PCATTAConfig(
+                steps=config.pca_tta_steps,
+                learning_rate=config.pca_tta_learning_rate,
+                monitor_steps=tuple(config.pca_tta_monitor_steps),
+                probe_count=config.pca_tta_probe_count,
+                difference_display_max=config.pca_tta_difference_display_max,
+                normalization_mean=tuple(config.normalization_mean),
+                normalization_std=tuple(config.normalization_std),
+            ),
+            wandb_module=wandb_module,
+        )
+        print(
+            "[INFO] PCA-guided episodic TTA enabled | "
+            f"steps={config.pca_tta_steps} "
+            f"lr={config.pca_tta_learning_rate:g} "
+            f"prior={config.pca_prior_path}"
+        )
+
     if args.save_config:
         maybe_save_config(config, output_dir)
 
@@ -391,6 +509,7 @@ def main() -> None:
             landmark_loss=config.landmark_loss,
             coordinate_decoder=config.coordinate_decoder,
             wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
+            tta_adapter=tta_adapter,
         )
         artifact_summary = summary
     else:
@@ -408,9 +527,21 @@ def main() -> None:
             output_dir=output_dir,
             dataloader=evaluation_dataloader,
             print_summary=False,
+            tta_adapter=tta_adapter,
         )
         summary = infanface_result["metrics"]
         artifact_summary = infanface_result["inference"]
+
+    if tta_adapter is not None:
+        tta_summary = tta_adapter.finalize()
+        artifact_summary["tta_dir"] = str(output_dir / "tta")
+        artifact_summary["tta_failed_samples"] = tta_summary["failed_samples"]
+        print(
+            "[INFO] PCA TTA reports saved | "
+            f"dir={output_dir / 'tta'} "
+            f"failed={tta_summary['failed_samples']}/"
+            f"{tta_summary['processed_samples']}"
+        )
 
     if isinstance(model, NormalizedLandmarker):
         if args.disable_normalizer_diagnostics:
@@ -460,6 +591,8 @@ def main() -> None:
         "infanface": "InfAnFace",
     }[dataset_protocol]
     print_evaluation_summary(display_name, terminal_summary, output_dir)
+    if wandb_module is not None:
+        wandb_module.finish()
 
 
 if __name__ == "__main__":
