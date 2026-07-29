@@ -3,10 +3,18 @@ from __future__ import annotations
 from copy import deepcopy
 from pathlib import Path
 
+import numpy as np
+import pytest
 import torch
+from PIL import Image
 from torch import nn
 
-from scripts.engine.pca_tta import PCAGuidedTTA, PCATTAConfig
+from scripts.engine.pca_tta import (
+    PCAGuidedTTA,
+    PCATTAConfig,
+    _colorize_difference,
+    _robust_difference_display_max,
+)
 from scripts.models import NormalizedLandmarker, ResidualImageNormalizer
 
 
@@ -149,3 +157,17 @@ def test_pca_tta_uses_reconstruction_loss_without_regularization(
     assert (tmp_path / "probes/sample/step_0000.png").exists()
     assert (tmp_path / "probes/sample/step_0001.png").exists()
     assert (tmp_path / "probes/sample/adaptation_grid.png").exists()
+    with Image.open(tmp_path / "probes/sample/step_0001.png") as panel:
+        assert panel.size == (60, 60)
+
+
+def test_enhanced_difference_view_exposes_small_nonzero_changes() -> None:
+    difference = np.zeros((8, 8), dtype=np.float32)
+    difference[2:6, 2:6] = 0.001
+
+    display_max = _robust_difference_display_max(difference)
+    heatmap = _colorize_difference(difference, display_max=display_max)
+
+    assert display_max == pytest.approx(0.001)
+    assert np.all(heatmap[0, 0] == 0.0)
+    assert float(heatmap[3, 3].max()) == pytest.approx(0.9)

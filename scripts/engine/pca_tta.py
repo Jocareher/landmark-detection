@@ -362,18 +362,32 @@ class PCAGuidedTTA:
                 std=self.config.normalization_std,
             )
             difference = np.abs(normalized_rgb - original_rgb)
-            difference_rgb = np.clip(
-                difference / self.config.difference_display_max, 0.0, 1.0
+            difference_magnitude = difference.mean(axis=2)
+            fixed_difference_rgb = _colorize_difference(
+                difference_magnitude,
+                display_max=self.config.difference_display_max,
+            )
+            enhanced_display_max = _robust_difference_display_max(
+                difference_magnitude
+            )
+            enhanced_difference_rgb = _colorize_difference(
+                difference_magnitude,
+                display_max=enhanced_display_max,
             )
             panel = _build_probe_panel(
                 original_rgb=original_rgb,
                 normalized_rgb=normalized_rgb,
-                difference_rgb=difference_rgb,
+                fixed_difference_rgb=fixed_difference_rgb,
+                enhanced_difference_rgb=enhanced_difference_rgb,
+                fixed_display_max=self.config.difference_display_max,
+                enhanced_display_max=enhanced_display_max,
                 baseline_landmarks=baseline_landmarks[0].cpu(),
                 adapted_landmarks=snapshot["landmarks"][0],
                 title=(
                     f"{sample_id} | step {snapshot['step']} | "
-                    f"PCA loss {snapshot['loss']:.6g}"
+                    f"PCA loss {snapshot['loss']:.6g} | "
+                    f"RGB MAE {difference.mean():.5f} | "
+                    f"RGB max {difference.max():.5f}"
                 ),
             )
             panel_path = probe_dir / f"step_{int(snapshot['step']):04d}.png"
@@ -650,32 +664,81 @@ def _as_image(array: np.ndarray) -> Image.Image:
     return Image.fromarray(np.clip(array * 255.0, 0, 255).astype(np.uint8), mode="RGB")
 
 
+def _robust_difference_display_max(difference: np.ndarray) -> float:
+    """Return a per-panel P99 scale that exposes subtle non-zero changes."""
+    positive = np.asarray(difference, dtype=np.float32)
+    if not np.any(positive > 0.0):
+        return 1.0
+    return max(float(np.percentile(positive, 99.0)), 1e-8)
+
+
+def _colorize_difference(
+    difference: np.ndarray,
+    display_max: float,
+) -> np.ndarray:
+    """Map scalar absolute RGB differences to a perceptual black-to-red heatmap."""
+    if display_max <= 0:
+        raise ValueError("display_max must be positive.")
+    values = np.clip(
+        np.asarray(difference, dtype=np.float32) / float(display_max),
+        0.0,
+        1.0,
+    )
+    stops = np.asarray(
+        [
+            [0.00, 0.00, 0.00],
+            [0.05, 0.15, 0.55],
+            [0.00, 0.75, 0.95],
+            [1.00, 0.90, 0.10],
+            [0.90, 0.05, 0.02],
+        ],
+        dtype=np.float32,
+    )
+    scaled = values * float(len(stops) - 1)
+    lower = np.floor(scaled).astype(np.int64)
+    upper = np.minimum(lower + 1, len(stops) - 1)
+    fraction = (scaled - lower)[..., None]
+    return stops[lower] * (1.0 - fraction) + stops[upper] * fraction
+
+
 def _build_probe_panel(
     original_rgb: np.ndarray,
     normalized_rgb: np.ndarray,
-    difference_rgb: np.ndarray,
+    fixed_difference_rgb: np.ndarray,
+    enhanced_difference_rgb: np.ndarray,
+    fixed_display_max: float,
+    enhanced_display_max: float,
     baseline_landmarks: torch.Tensor,
     adapted_landmarks: torch.Tensor,
     title: str,
 ) -> Image.Image:
     original = _as_image(original_rgb)
     normalized = _as_image(normalized_rgb)
-    difference = _as_image(difference_rgb)
+    fixed_difference = _as_image(fixed_difference_rgb)
+    enhanced_difference = _as_image(enhanced_difference_rgb)
     baseline = _draw_landmarks(original.copy(), baseline_landmarks, "#00FFFF")
     adapted = _draw_landmarks(normalized.copy(), adapted_landmarks, "#FF00FF")
     names = (
         "Input crop",
         "Normalizer output",
-        "Absolute difference (fixed scale)",
+        f"Abs. RGB diff (fixed 0–{fixed_display_max:.3g})",
+        f"Abs. RGB diff (enhanced P99={enhanced_display_max:.3g})",
         "Step-0 landmarks",
         "Current landmarks",
     )
-    tiles = (original, normalized, difference, baseline, adapted)
+    tiles = (
+        original,
+        normalized,
+        fixed_difference,
+        enhanced_difference,
+        baseline,
+        adapted,
+    )
     width, height = original.size
     header_height = 22
     title_height = 28
     canvas = Image.new(
-        "RGB", (5 * width, height + header_height + title_height), "white"
+        "RGB", (len(tiles) * width, height + header_height + title_height), "white"
     )
     draw = ImageDraw.Draw(canvas)
     draw.text((6, 7), title, fill="black")
@@ -718,6 +781,10 @@ loss is used.
 - `probes/` shows crop-space normalizer and landmark evolution. Final evaluator
   predictions are independently reprojected from crop coordinates to the
   original image by the existing BabyLand/InfAnFace pipeline.
+- Every probe contains both a fixed-scale absolute RGB-difference heatmap for
+  comparisons across images/steps and a contrast-enhanced P99 heatmap for
+  exposing subtle spatial changes. The enhanced panel must not be used to
+  compare change magnitude; its numeric P99 scale is printed in the header.
 
 Ground-truth metrics are computed only after adaptation by the standard dataset
 evaluator and never feed the optimizer.
