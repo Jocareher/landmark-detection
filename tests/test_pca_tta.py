@@ -191,6 +191,47 @@ def test_pca_tta_uses_reconstruction_loss_without_regularization(
         assert panel.size == (60, 60)
 
 
+def test_zero_step_pca_tta_is_an_unadapted_reference(tmp_path: Path) -> None:
+    model = NormalizedLandmarker(
+        landmarker=TinyLandmarker(),
+        normalizer=ResidualImageNormalizer(
+            hidden_channels=4,
+            num_layers=2,
+            residual_scale=0.1,
+            initialize_identity=False,
+        ),
+    )
+    source_normalizer = deepcopy(model.normalizer.state_dict())
+    adapter = PCAGuidedTTA(
+        model=model,
+        pca_prior=_pca_prior(),
+        device=torch.device("cpu"),
+        output_dir=tmp_path,
+        config=PCATTAConfig(
+            steps=0,
+            monitor_steps=(0, 1, 5),
+            probe_count=0,
+        ),
+    )
+
+    outputs = adapter.adapt_batch(torch.randn(1, 3, 10, 10), ["baseline"])
+
+    assert len(adapter.trajectory_rows) == 1
+    assert adapter.trajectory_rows[0]["step"] == 0
+    assert np.isnan(adapter.trajectory_rows[0]["gradient_norm"])
+    torch.testing.assert_close(outputs["heatmaps"], outputs["tta_baseline_heatmaps"])
+    torch.testing.assert_close(
+        outputs["visibility_logits"], outputs["tta_baseline_visibility_logits"]
+    )
+    for key, expected in source_normalizer.items():
+        torch.testing.assert_close(model.normalizer.state_dict()[key], expected)
+
+
+def test_negative_pca_tta_steps_are_rejected() -> None:
+    with pytest.raises(ValueError, match="cannot be negative"):
+        PCATTAConfig(steps=-1).validate()
+
+
 def test_enhanced_difference_view_exposes_small_nonzero_changes() -> None:
     difference = np.zeros((8, 8), dtype=np.float32)
     difference[2:6, 2:6] = 0.001

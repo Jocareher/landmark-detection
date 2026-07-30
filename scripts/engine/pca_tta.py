@@ -35,8 +35,8 @@ class PCATTAConfig:
 
     def validate(self) -> None:
         """Validate values before any target image is adapted."""
-        if self.steps < 1:
-            raise ValueError("PCA TTA requires at least one adaptation step.")
+        if self.steps < 0:
+            raise ValueError("PCA TTA adaptation steps cannot be negative.")
         if self.learning_rate <= 0:
             raise ValueError("PCA TTA learning_rate must be positive.")
         if self.probe_count < 0:
