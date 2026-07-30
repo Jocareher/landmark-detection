@@ -36,8 +36,8 @@ arguments:
   pca_prior_path: /home/jocareher/Downloads/landmark-detection/weights/pca_prior_13y_k32.pt
   pca_tta_steps: 20
   pca_tta_learning_rate: 0.0001
-  pca_tta_monitor_steps: [0, 1, 5, 10, 20]
-  pca_tta_probe_count: 4
+  pca_tta_monitor_steps: [0, 1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200]
+  pca_tta_probe_count: 10
   pca_tta_difference_display_max: 0.15
 
   use_wandb: true

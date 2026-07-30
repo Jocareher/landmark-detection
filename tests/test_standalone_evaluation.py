@@ -99,7 +99,9 @@ def test_evaluation_yaml_supplies_every_parser_argument(monkeypatch) -> None:
     config_path = (
         Path(__file__).resolve().parents[1] / "configs" / "pca_tta_evaluation.yaml"
     )
-    yaml_arguments = yaml.safe_load(config_path.read_text(encoding="utf-8"))["arguments"]
+    yaml_arguments = yaml.safe_load(config_path.read_text(encoding="utf-8"))[
+        "arguments"
+    ]
     monkeypatch.setattr(sys, "argv", ["evaluate.py", "--config", str(config_path)])
 
     args = standalone_evaluate.parse_args()
@@ -107,7 +109,24 @@ def test_evaluation_yaml_supplies_every_parser_argument(monkeypatch) -> None:
     assert set(vars(args)) == set(yaml_arguments) | {"config"}
     assert args.checkpoint == Path(yaml_arguments["checkpoint"])
     assert args.pca_tta is True
-    assert args.pca_tta_monitor_steps == [0, 1, 5, 10, 20]
+    assert args.pca_tta_monitor_steps == [
+        0,
+        1,
+        5,
+        10,
+        20,
+        30,
+        40,
+        50,
+        60,
+        70,
+        80,
+        90,
+        100,
+        150,
+        200,
+    ]
+    assert args.pca_tta_probe_count == 10
 
 
 def test_explicit_cli_arguments_override_yaml_values(
