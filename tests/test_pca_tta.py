@@ -98,8 +98,28 @@ def test_pca_tta_is_episodic_and_restores_source_normalizer(
 
     first = adapter.adapt_batch(image, ["first"])
     second = adapter.adapt_batch(image, ["second"])
+    adapter.record_evaluation_metrics(
+        sample_id="first",
+        orientation="frontal",
+        initial_nme_box_gt_valid=0.10,
+        final_nme_box_gt_valid=0.08,
+        initial_hausdorff_box_gt_valid=0.20,
+        final_hausdorff_box_gt_valid=0.18,
+        number_of_valid_landmarks=4,
+    )
+    adapter.record_evaluation_metrics(
+        sample_id="second",
+        orientation="right",
+        initial_nme_box_gt_valid=0.12,
+        final_nme_box_gt_valid=0.14,
+        initial_hausdorff_box_gt_valid=0.22,
+        final_hausdorff_box_gt_valid=0.25,
+        number_of_valid_landmarks=3,
+    )
 
     assert first["heatmaps"].shape == (1, 4, 12, 12)
+    assert first["tta_baseline_heatmaps"].shape == (1, 4, 12, 12)
+    assert first["tta_baseline_visibility_logits"].shape == (1, 4)
     torch.testing.assert_close(first["heatmaps"], second["heatmaps"])
     assert len(adapter.trajectory_rows) == 6
     first_losses = [
@@ -125,6 +145,16 @@ def test_pca_tta_is_episodic_and_restores_source_normalizer(
     assert (tmp_path / "tta/image_summary.csv").exists()
     assert (tmp_path / "tta/aggregate_curves.csv").exists()
     assert (tmp_path / "tta/figures/pca_reconstruction_loss_curve.png").exists()
+    assert (tmp_path / "tta/figures/landmark_drift_curve.png").exists()
+    assert (tmp_path / "tta/figures/final_adaptation_distribution.png").exists()
+    assert (tmp_path / "tta/figures/nme_before_after_scatter.png").exists()
+    assert (tmp_path / "tta/figures/pca_loss_reduction_vs_nme_change.png").exists()
+    assert (tmp_path / "tta/figures/nme_before_after_by_orientation.png").exists()
+    assert (tmp_path / "tta/figures/nme_change_by_orientation.png").exists()
+    assert (tmp_path / "tta/orientation_tta_summary.csv").exists()
+    assert (tmp_path / "tta/evaluation_analysis.json").exists()
+    assert summary["evaluation_analysis"]["num_improved"] == 1
+    assert summary["evaluation_analysis"]["num_worsened"] == 1
     terminal_output = capsys.readouterr().out
     assert "landmarker_trainable=0" in terminal_output
     assert "sample=first" in terminal_output

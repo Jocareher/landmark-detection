@@ -696,6 +696,10 @@ def save_per_image_nme_csv(
                 "mean_nme_box_point_to_line_gt_valid",
                 "hausdorff_pixel_gt_valid",
                 "hausdorff_box_gt_valid",
+                "tta_initial_nme_box_gt_valid",
+                "tta_delta_nme_box_gt_valid",
+                "tta_initial_hausdorff_box_gt_valid",
+                "tta_delta_hausdorff_box_gt_valid",
                 "mean_nme_box_non_contour",
                 "mean_nme_box_point_to_line_non_contour",
                 "hausdorff_pixel_non_contour",
@@ -791,6 +795,42 @@ def save_per_image_nme_csv(
                         )
                         if row.get("hausdorff_box_gt_valid") is not None
                         and np.isfinite(row.get("hausdorff_box_gt_valid"))
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(
+                                float(row["tta_initial_nme_box_gt_valid"])
+                            )
+                        )
+                        if row.get("tta_initial_nme_box_gt_valid") is not None
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(float(row["tta_delta_nme_box_gt_valid"]))
+                        )
+                        if row.get("tta_delta_nme_box_gt_valid") is not None
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(
+                                float(row["tta_initial_hausdorff_box_gt_valid"])
+                            )
+                        )
+                        if row.get("tta_initial_hausdorff_box_gt_valid") is not None
+                        and np.isfinite(row.get("tta_initial_hausdorff_box_gt_valid"))
+                        else None
+                    ),
+                    (
+                        format_metric_value(
+                            round_metric_value(
+                                float(row["tta_delta_hausdorff_box_gt_valid"])
+                            )
+                        )
+                        if row.get("tta_delta_hausdorff_box_gt_valid") is not None
+                        and np.isfinite(row.get("tta_delta_hausdorff_box_gt_valid"))
                         else None
                     ),
                     (

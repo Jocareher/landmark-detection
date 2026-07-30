@@ -18,6 +18,7 @@ from .pca_shape_prior import (
     softargmax_heatmaps_to_image_coords,
 )
 from ..models import NormalizedLandmarker
+from ..utils.visualization import plt as plotting
 
 
 @dataclass(frozen=True)
@@ -82,6 +83,7 @@ class PCAGuidedTTA:
         }
         self.trajectory_rows: list[dict[str, Any]] = []
         self.summary_rows: list[dict[str, Any]] = []
+        self.summary_by_sample_id: dict[str, dict[str, Any]] = {}
         self.processed_samples = 0
         self.failed_samples = 0
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -161,6 +163,7 @@ class PCAGuidedTTA:
         sample_rows: list[dict[str, Any]] = []
         snapshots: list[dict[str, Any]] = []
         baseline_landmarks: torch.Tensor | None = None
+        baseline_outputs: dict[str, torch.Tensor] | None = None
         final_outputs: dict[str, torch.Tensor] | None = None
         failed = False
         failure_message = ""
@@ -183,6 +186,9 @@ class PCAGuidedTTA:
                     )
                 if baseline_landmarks is None:
                     baseline_landmarks = landmarks.detach().clone()
+                    baseline_outputs = {
+                        key: value.detach().clone() for key, value in outputs.items()
+                    }
                 drift = torch.linalg.norm(
                     landmarks.detach() - baseline_landmarks, dim=-1
                 )
@@ -246,6 +252,10 @@ class PCAGuidedTTA:
             final_outputs = {
                 key: value.detach().clone() for key, value in direct_outputs.items()
             }
+            if baseline_outputs is None:
+                baseline_outputs = {
+                    key: value.detach().clone() for key, value in direct_outputs.items()
+                }
             if not sample_rows:
                 sample_rows.append(
                     {
@@ -268,6 +278,7 @@ class PCAGuidedTTA:
             self.trajectory_rows.extend(sample_rows)
             sample_summary = _summarize_sample_rows(sample_rows)
             self.summary_rows.append(sample_summary)
+            self.summary_by_sample_id[sample_id] = sample_summary
             if self.processed_samples < self.config.probe_count and snapshots:
                 self._save_probe(
                     sample_id=sample_id,
@@ -287,7 +298,53 @@ class PCAGuidedTTA:
             )
 
         assert final_outputs is not None
+        assert baseline_outputs is not None
+        final_outputs["tta_baseline_heatmaps"] = baseline_outputs["heatmaps"]
+        final_outputs["tta_baseline_visibility_logits"] = baseline_outputs[
+            "visibility_logits"
+        ]
         return final_outputs
+
+    def record_evaluation_metrics(
+        self,
+        *,
+        sample_id: str,
+        orientation: str,
+        initial_nme_box_gt_valid: float | None,
+        final_nme_box_gt_valid: float | None,
+        initial_hausdorff_box_gt_valid: float | None,
+        final_hausdorff_box_gt_valid: float | None,
+        number_of_valid_landmarks: int,
+    ) -> None:
+        """Attach post-adaptation GT diagnostics without affecting optimization."""
+        row = self.summary_by_sample_id.get(str(sample_id))
+        if row is None:
+            raise KeyError(f"No completed PCA-TTA episode exists for '{sample_id}'.")
+        initial_nme = _finite_or_nan(initial_nme_box_gt_valid)
+        final_nme = _finite_or_nan(final_nme_box_gt_valid)
+        nme_delta = final_nme - initial_nme
+        relative_nme_change = (
+            nme_delta / initial_nme
+            if math.isfinite(initial_nme) and abs(initial_nme) > 1e-12
+            else math.nan
+        )
+        row.update(
+            {
+                "orientation": str(orientation),
+                "number_of_valid_landmarks": int(number_of_valid_landmarks),
+                "initial_nme_box_gt_valid": initial_nme,
+                "final_nme_box_gt_valid": final_nme,
+                "delta_nme_box_gt_valid": nme_delta,
+                "relative_nme_change": relative_nme_change,
+                "nme_improved": bool(nme_delta < 0.0),
+                "initial_hausdorff_box_gt_valid": _finite_or_nan(
+                    initial_hausdorff_box_gt_valid
+                ),
+                "final_hausdorff_box_gt_valid": _finite_or_nan(
+                    final_hausdorff_box_gt_valid
+                ),
+            }
+        )
 
     def _capture_steps(self) -> set[int]:
         """Return requested monitoring steps clipped to the episode length."""
@@ -419,6 +476,18 @@ class PCAGuidedTTA:
             aggregate_rows,
             self.output_dir / "figures" / "pca_reconstruction_loss_curve.png",
         )
+        _save_drift_plot(
+            aggregate_rows,
+            self.output_dir / "figures" / "landmark_drift_curve.png",
+        )
+        _save_final_adaptation_distribution(
+            self.summary_rows,
+            self.output_dir / "figures" / "final_adaptation_distribution.png",
+        )
+        evaluation_analysis = _save_evaluation_analysis(
+            self.summary_rows,
+            output_dir=self.output_dir,
+        )
         summary = {
             "method": "episodic_pca_reconstruction_tta",
             "adapted_module": "external_image_normalizer",
@@ -431,6 +500,7 @@ class PCAGuidedTTA:
             "image_summary_csv": str(summary_path),
             "aggregate_curves_csv": str(aggregate_path),
             "probe_dir": str(self.output_dir / "probes"),
+            "evaluation_analysis": evaluation_analysis,
         }
         (self.output_dir / "summary.json").write_text(
             json.dumps(summary, indent=2), encoding="utf-8"
@@ -473,6 +543,14 @@ def _count_parameters(parameters: Any) -> int:
     return sum(parameter.numel() for parameter in parameters)
 
 
+def _finite_or_nan(value: float | None) -> float:
+    """Convert an optional numeric diagnostic to a finite float or NaN."""
+    if value is None:
+        return math.nan
+    numeric = float(value)
+    return numeric if math.isfinite(numeric) else math.nan
+
+
 def _gradient_norm(parameters: Any) -> float:
     squared_norm = 0.0
     for parameter in parameters:
@@ -511,14 +589,46 @@ def _summarize_sample_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _aggregate_trajectories(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    by_step: dict[int, list[float]] = {}
+    initial_by_sample = {
+        str(row["sample_id"]): float(row["pca_reconstruction_loss"])
+        for row in rows
+        if int(row["step"]) == 0
+        and not bool(row["failed"])
+        and math.isfinite(float(row["pca_reconstruction_loss"]))
+    }
+    by_step: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
         value = float(row["pca_reconstruction_loss"])
         if not bool(row["failed"]) and math.isfinite(value):
-            by_step.setdefault(int(row["step"]), []).append(value)
+            by_step.setdefault(int(row["step"]), []).append(row)
     aggregate: list[dict[str, Any]] = []
     for step in sorted(by_step):
-        values = np.asarray(by_step[step], dtype=np.float64)
+        step_rows = by_step[step]
+        values = np.asarray(
+            [float(row["pca_reconstruction_loss"]) for row in step_rows],
+            dtype=np.float64,
+        )
+        relative_reductions = np.asarray(
+            [
+                (
+                    initial_by_sample[str(row["sample_id"])]
+                    - float(row["pca_reconstruction_loss"])
+                )
+                / initial_by_sample[str(row["sample_id"])]
+                for row in step_rows
+                if str(row["sample_id"]) in initial_by_sample
+                and abs(initial_by_sample[str(row["sample_id"])]) > 1e-12
+            ],
+            dtype=np.float64,
+        )
+        mean_drifts = np.asarray(
+            [float(row["mean_landmark_drift_px"]) for row in step_rows],
+            dtype=np.float64,
+        )
+        max_drifts = np.asarray(
+            [float(row["max_landmark_drift_px"]) for row in step_rows],
+            dtype=np.float64,
+        )
         aggregate.append(
             {
                 "step": step,
@@ -529,6 +639,22 @@ def _aggregate_trajectories(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "p25": float(np.percentile(values, 25)),
                 "p75": float(np.percentile(values, 75)),
                 "p90": float(np.percentile(values, 90)),
+                "relative_reduction_mean": float(relative_reductions.mean()),
+                "relative_reduction_median": float(np.median(relative_reductions)),
+                "relative_reduction_p25": float(
+                    np.percentile(relative_reductions, 25)
+                ),
+                "relative_reduction_p75": float(
+                    np.percentile(relative_reductions, 75)
+                ),
+                "mean_drift_mean_px": float(mean_drifts.mean()),
+                "mean_drift_median_px": float(np.median(mean_drifts)),
+                "mean_drift_p25_px": float(np.percentile(mean_drifts, 25)),
+                "mean_drift_p75_px": float(np.percentile(mean_drifts, 75)),
+                "max_drift_median_px": float(np.median(max_drifts)),
+                "max_drift_p25_px": float(np.percentile(max_drifts, 25)),
+                "max_drift_p75_px": float(np.percentile(max_drifts, 75)),
+                "max_drift_p90_px": float(np.percentile(max_drifts, 90)),
             }
         )
     return aggregate
@@ -546,91 +672,557 @@ def _write_rows_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def _save_aggregate_plot(rows: list[dict[str, Any]], path: Path) -> None:
+    """Save a slide-ready absolute-loss and relative-improvement figure."""
     if not rows:
         return
-    width, height = 1400, 820
-    left, right, top, bottom = 150, 45, 80, 110
-    plot_width = width - left - right
-    plot_height = height - top - bottom
-    steps = [int(row["step"]) for row in rows]
-    y_values = [
-        float(row[key])
-        for row in rows
-        for key in ("p10", "p25", "median", "p75", "p90")
-    ]
-    y_min = min(y_values)
-    y_max = max(y_values)
-    if math.isclose(y_min, y_max):
-        y_max = y_min + max(abs(y_min) * 0.05, 1e-12)
-    x_min, x_max = min(steps), max(steps)
-    if x_min == x_max:
-        x_max = x_min + 1
+    if plotting is None:
+        _save_plotting_unavailable(path, "PCA reconstruction loss")
+        return
+    plt = plotting
+    from matplotlib.ticker import PercentFormatter
 
-    def point(step: int, value: float) -> tuple[int, int]:
-        x_coord = left + int((step - x_min) / (x_max - x_min) * plot_width)
-        y_coord = top + int((y_max - value) / (y_max - y_min) * plot_height)
-        return x_coord, y_coord
-
-    image = Image.new("RGB", (width, height), "white")
-    draw = ImageDraw.Draw(image)
-    draw.text((left, 28), "PCA-guided test-time adaptation", fill="#102A43")
-    for fraction in np.linspace(0.0, 1.0, 6):
-        y_coord = top + int(fraction * plot_height)
-        value = y_max - fraction * (y_max - y_min)
-        draw.line((left, y_coord, left + plot_width, y_coord), fill="#D9E2EC")
-        draw.text((8, y_coord - 7), f"{value:.3e}", fill="#486581")
-    draw.line((left, top, left, top + plot_height), fill="#243B53", width=2)
-    draw.line(
-        (left, top + plot_height, left + plot_width, top + plot_height),
-        fill="#243B53",
-        width=2,
-    )
-    outer = [point(step, float(row["p90"])) for step, row in zip(steps, rows)]
-    outer += [
-        point(step, float(row["p10"]))
-        for step, row in reversed(list(zip(steps, rows)))
-    ]
-    inner = [point(step, float(row["p75"])) for step, row in zip(steps, rows)]
-    inner += [
-        point(step, float(row["p25"]))
-        for step, row in reversed(list(zip(steps, rows)))
-    ]
-    if len(outer) >= 3:
-        draw.polygon(outer, fill="#D9EAF7")
-        draw.polygon(inner, fill="#9CCAE5")
-    median_points = [
-        point(step, float(row["median"])) for step, row in zip(steps, rows)
-    ]
-    if len(median_points) >= 2:
-        draw.line(median_points, fill="#0B6E99", width=5, joint="curve")
-    for step, current_point in zip(steps, median_points):
-        draw.ellipse(
-            (
-                current_point[0] - 4,
-                current_point[1] - 4,
-                current_point[0] + 4,
-                current_point[1] + 4,
-            ),
-            fill="#0B6E99",
+    _configure_plot_style(plt)
+    steps = np.asarray([int(row["step"]) for row in rows])
+    values = {
+        key: np.asarray([float(row[key]) for row in rows], dtype=np.float64)
+        for key in (
+            "mean",
+            "median",
+            "p10",
+            "p25",
+            "p75",
+            "p90",
+            "relative_reduction_median",
+            "relative_reduction_p25",
+            "relative_reduction_p75",
         )
-        if step in {x_min, x_max} or step in {1, 5, 10, 20}:
-            draw.text(
-                (current_point[0] - 6, top + plot_height + 16),
-                str(step),
-                fill="#486581",
-            )
-    draw.text(
-        (left + plot_width // 2 - 65, height - 52),
-        "Episodic TTA step",
-        fill="#243B53",
+    }
+    figure, axes = plt.subplots(1, 2, figsize=(15, 5.8))
+    loss_axis, reduction_axis = axes
+    loss_axis.fill_between(
+        steps, values["p10"], values["p90"], color="#CFE8F3", label="P10–P90"
     )
-    draw.text((left + 18, top + 16), "Median", fill="#0B6E99")
-    draw.rectangle((left + 115, top + 16, left + 145, top + 28), fill="#9CCAE5")
-    draw.text((left + 152, top + 15), "P25–P75", fill="#486581")
-    draw.rectangle((left + 265, top + 16, left + 295, top + 28), fill="#D9EAF7")
-    draw.text((left + 302, top + 15), "P10–P90", fill="#486581")
+    loss_axis.fill_between(
+        steps, values["p25"], values["p75"], color="#79B9D1", label="P25–P75"
+    )
+    loss_axis.plot(
+        steps, values["median"], color="#005F73", linewidth=3, label="Median"
+    )
+    loss_axis.plot(
+        steps,
+        values["mean"],
+        color="#BB3E03",
+        linewidth=2.2,
+        linestyle="--",
+        label="Mean",
+    )
+    loss_axis.set_yscale("log")
+    loss_axis.set_title("Absolute PCA reconstruction loss")
+    loss_axis.set_xlabel("TTA optimization step")
+    loss_axis.set_ylabel("PCA reconstruction loss (log scale)")
+    loss_axis.legend(loc="best")
+
+    reduction_axis.fill_between(
+        steps,
+        values["relative_reduction_p25"],
+        values["relative_reduction_p75"],
+        color="#94D2BD",
+        alpha=0.8,
+        label="P25–P75",
+    )
+    reduction_axis.plot(
+        steps,
+        values["relative_reduction_median"],
+        color="#0A9396",
+        linewidth=3,
+        label="Median reduction",
+    )
+    reduction_axis.axhline(0.0, color="#52606D", linewidth=1)
+    reduction_axis.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
+    reduction_axis.set_title("Reduction relative to each image at step 0")
+    reduction_axis.set_xlabel("TTA optimization step")
+    reduction_axis.set_ylabel("Relative PCA-loss reduction")
+    reduction_axis.legend(loc="best")
+
+    figure.suptitle("PCA-guided episodic test-time adaptation", fontsize=18, weight="bold")
+    figure.tight_layout(rect=(0, 0, 1, 0.94))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=220, bbox_inches="tight", facecolor="white")
+    plt.close(figure)
+
+
+def _configure_plot_style(plt: Any) -> None:
+    """Apply a consistent high-legibility style for meeting figures."""
+    plt.rcParams.update(
+        {
+            "font.size": 12,
+            "axes.titlesize": 15,
+            "axes.labelsize": 13,
+            "xtick.labelsize": 11,
+            "ytick.labelsize": 11,
+            "legend.fontsize": 11,
+            "axes.spines.top": False,
+            "axes.spines.right": False,
+            "axes.grid": True,
+            "grid.alpha": 0.22,
+            "grid.linestyle": "--",
+        }
+    )
+
+
+def _save_plotting_unavailable(path: Path, title: str) -> None:
+    """Preserve report generation when optional Matplotlib binaries are absent."""
+    image = Image.new("RGB", (1600, 500), "white")
+    draw = ImageDraw.Draw(image)
+    draw.text((60, 55), title, fill="#102A43")
+    draw.text(
+        (60, 130),
+        "Plot unavailable: install a Matplotlib build compatible with the active NumPy.",
+        fill="#486581",
+    )
     path.parent.mkdir(parents=True, exist_ok=True)
     image.save(path)
+
+
+def _save_drift_plot(rows: list[dict[str, Any]], path: Path) -> None:
+    """Plot typical and worst-landmark displacement throughout adaptation."""
+    if not rows:
+        return
+    if plotting is None:
+        _save_plotting_unavailable(path, "Landmark drift introduced by TTA")
+        return
+    plt = plotting
+
+    _configure_plot_style(plt)
+    steps = np.asarray([int(row["step"]) for row in rows])
+    figure, axes = plt.subplots(1, 2, figsize=(15, 5.6), sharex=True)
+    definitions = (
+        (
+            axes[0],
+            "mean_drift_median_px",
+            "mean_drift_p25_px",
+            "mean_drift_p75_px",
+            "Mean displacement across 72 landmarks",
+        ),
+        (
+            axes[1],
+            "max_drift_median_px",
+            "max_drift_p25_px",
+            "max_drift_p75_px",
+            "Largest single-landmark displacement",
+        ),
+    )
+    for axis, median_key, low_key, high_key, title in definitions:
+        low = np.asarray([float(row[low_key]) for row in rows])
+        high = np.asarray([float(row[high_key]) for row in rows])
+        median = np.asarray([float(row[median_key]) for row in rows])
+        axis.fill_between(steps, low, high, color="#A9D6C9", label="P25–P75")
+        axis.plot(steps, median, color="#006D77", linewidth=3, label="Median")
+        axis.set_title(title)
+        axis.set_xlabel("TTA optimization step")
+        axis.set_ylabel("Landmark displacement from step 0 (pixels)")
+        axis.legend(loc="upper left")
+    figure.suptitle("Landmark drift introduced by TTA", fontsize=18, weight="bold")
+    figure.tight_layout(rect=(0, 0, 1, 0.94))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=220, bbox_inches="tight", facecolor="white")
+    plt.close(figure)
+
+
+def _save_final_adaptation_distribution(
+    rows: list[dict[str, Any]],
+    path: Path,
+) -> None:
+    """Show final loss-reduction and landmark-drift distributions."""
+    valid = [row for row in rows if not bool(row.get("failed", False))]
+    if not valid:
+        return
+    if plotting is None:
+        _save_plotting_unavailable(path, "Distribution of TTA effects")
+        return
+    plt = plotting
+    from matplotlib.ticker import PercentFormatter
+
+    _configure_plot_style(plt)
+    reductions = np.asarray(
+        [float(row["relative_loss_reduction"]) for row in valid], dtype=np.float64
+    )
+    mean_drifts = np.asarray(
+        [float(row["final_mean_landmark_drift_px"]) for row in valid],
+        dtype=np.float64,
+    )
+    max_drifts = np.asarray(
+        [float(row["final_max_landmark_drift_px"]) for row in valid],
+        dtype=np.float64,
+    )
+    figure, axes = plt.subplots(1, 2, figsize=(15, 5.6))
+    axes[0].hist(reductions, bins=30, color="#0A9396", alpha=0.85)
+    axes[0].axvline(np.median(reductions), color="#9B2226", linewidth=2.5, label="Median")
+    axes[0].xaxis.set_major_formatter(PercentFormatter(xmax=1.0))
+    axes[0].set_title("PCA-loss reduction per image")
+    axes[0].set_xlabel("Relative reduction from step 0")
+    axes[0].set_ylabel("Number of images")
+    axes[0].legend()
+    axes[1].hist(
+        mean_drifts,
+        bins=30,
+        color="#005F73",
+        alpha=0.82,
+        label="Mean across landmarks",
+    )
+    axes[1].hist(
+        max_drifts,
+        bins=30,
+        color="#EE9B00",
+        alpha=0.58,
+        label="Maximum landmark",
+    )
+    axes[1].set_title("Final landmark displacement")
+    axes[1].set_xlabel("Displacement from step 0 (pixels)")
+    axes[1].set_ylabel("Number of images")
+    axes[1].legend()
+    figure.suptitle("Distribution of TTA effects", fontsize=18, weight="bold")
+    figure.tight_layout(rect=(0, 0, 1, 0.94))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=220, bbox_inches="tight", facecolor="white")
+    plt.close(figure)
+
+
+def _save_evaluation_analysis(
+    rows: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+) -> dict[str, Any] | None:
+    """Save GT-only post-hoc analyses after adaptation has fully completed."""
+    required = {
+        "orientation",
+        "initial_nme_box_gt_valid",
+        "final_nme_box_gt_valid",
+        "delta_nme_box_gt_valid",
+    }
+    valid = [
+        row
+        for row in rows
+        if required.issubset(row)
+        and math.isfinite(float(row["initial_nme_box_gt_valid"]))
+        and math.isfinite(float(row["final_nme_box_gt_valid"]))
+    ]
+    if not valid:
+        return None
+
+    figures_dir = output_dir / "figures"
+    orientation_rows = _summarize_evaluation_by_orientation(valid)
+    orientation_csv = output_dir / "orientation_tta_summary.csv"
+    _write_rows_csv(orientation_csv, orientation_rows)
+    initial = np.asarray(
+        [float(row["initial_nme_box_gt_valid"]) for row in valid], dtype=np.float64
+    )
+    final = np.asarray(
+        [float(row["final_nme_box_gt_valid"]) for row in valid], dtype=np.float64
+    )
+    delta = final - initial
+    pca_reduction = np.asarray(
+        [float(row["relative_loss_reduction"]) for row in valid], dtype=np.float64
+    )
+    correlation = _spearman_correlation(pca_reduction, delta)
+    _save_nme_before_after_scatter(
+        valid, figures_dir / "nme_before_after_scatter.png"
+    )
+    _save_pca_vs_nme_scatter(
+        valid,
+        correlation=correlation,
+        path=figures_dir / "pca_loss_reduction_vs_nme_change.png",
+    )
+    _save_orientation_nme_plot(
+        orientation_rows,
+        path=figures_dir / "nme_before_after_by_orientation.png",
+    )
+    _save_orientation_delta_boxplot(
+        valid,
+        path=figures_dir / "nme_change_by_orientation.png",
+    )
+    analysis = {
+        "num_images": len(valid),
+        "num_improved": int((delta < 0.0).sum()),
+        "num_worsened": int((delta > 0.0).sum()),
+        "num_unchanged": int((delta == 0.0).sum()),
+        "mean_initial_nme_box_gt_valid": float(initial.mean()),
+        "mean_final_nme_box_gt_valid": float(final.mean()),
+        "mean_delta_nme_box_gt_valid": float(delta.mean()),
+        "median_delta_nme_box_gt_valid": float(np.median(delta)),
+        "spearman_pca_reduction_vs_nme_delta": correlation,
+        "orientation_summary_csv": str(orientation_csv),
+        "ground_truth_usage": "post_hoc_analysis_only_not_adaptation",
+    }
+    analysis_path = output_dir / "evaluation_analysis.json"
+    analysis_path.write_text(json.dumps(analysis, indent=2), encoding="utf-8")
+    analysis["analysis_json"] = str(analysis_path)
+    return analysis
+
+
+def _summarize_evaluation_by_orientation(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Aggregate before/after NME and improvement rate by face orientation."""
+    orientation_order = ["left", "quarter_left", "frontal", "quarter_right", "right"]
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(str(row["orientation"]), []).append(row)
+    result: list[dict[str, Any]] = []
+    ordered = [name for name in orientation_order if name in grouped]
+    ordered.extend(sorted(set(grouped).difference(ordered)))
+    for orientation in ordered:
+        current = grouped[orientation]
+        initial = np.asarray(
+            [float(row["initial_nme_box_gt_valid"]) for row in current]
+        )
+        final = np.asarray([float(row["final_nme_box_gt_valid"]) for row in current])
+        delta = final - initial
+        result.append(
+            {
+                "orientation": orientation,
+                "count": int(len(current)),
+                "mean_nme_before": float(initial.mean()),
+                "mean_nme_after": float(final.mean()),
+                "mean_nme_delta": float(delta.mean()),
+                "median_nme_before": float(np.median(initial)),
+                "median_nme_after": float(np.median(final)),
+                "median_nme_delta": float(np.median(delta)),
+                "improved_images": int((delta < 0.0).sum()),
+                "worsened_images": int((delta > 0.0).sum()),
+                "improvement_rate": float((delta < 0.0).mean()),
+            }
+        )
+    return result
+
+
+def _orientation_colors() -> dict[str, str]:
+    return {
+        "left": "#5E3C99",
+        "quarter_left": "#3288BD",
+        "frontal": "#1A9850",
+        "quarter_right": "#F6A01A",
+        "right": "#D73027",
+        "unknown": "#6B7280",
+    }
+
+
+def _save_nme_before_after_scatter(rows: list[dict[str, Any]], path: Path) -> None:
+    if plotting is None:
+        _save_plotting_unavailable(path, "Per-image localization before and after TTA")
+        return
+    plt = plotting
+
+    _configure_plot_style(plt)
+    figure, axis = plt.subplots(figsize=(8.2, 7.2))
+    colors = _orientation_colors()
+    for orientation in dict.fromkeys(str(row["orientation"]) for row in rows):
+        current = [row for row in rows if str(row["orientation"]) == orientation]
+        x_values = np.asarray(
+            [float(row["initial_nme_box_gt_valid"]) * 100.0 for row in current]
+        )
+        y_values = np.asarray(
+            [float(row["final_nme_box_gt_valid"]) * 100.0 for row in current]
+        )
+        axis.scatter(
+            x_values,
+            y_values,
+            s=34,
+            alpha=0.68,
+            color=colors.get(orientation, colors["unknown"]),
+            label=orientation.replace("_", " ").title(),
+        )
+    all_values = np.asarray(
+        [
+            float(row[key]) * 100.0
+            for row in rows
+            for key in ("initial_nme_box_gt_valid", "final_nme_box_gt_valid")
+        ]
+    )
+    positive = all_values[all_values > 0]
+    lower = max(float(positive.min()) * 0.85, 1e-3)
+    upper = float(all_values.max()) * 1.1
+    axis.plot([lower, upper], [lower, upper], color="#263238", linestyle="--", linewidth=2)
+    axis.set_xscale("log")
+    axis.set_yscale("log")
+    axis.set_xlim(lower, upper)
+    axis.set_ylim(lower, upper)
+    axis.set_xlabel("NME before TTA (%; GT-valid)")
+    axis.set_ylabel("NME after TTA (%; GT-valid)")
+    axis.set_title("Per-image localization before and after TTA")
+    axis.legend(title="Orientation", bbox_to_anchor=(1.02, 1), loc="upper left")
+    axis.text(
+        0.03,
+        0.97,
+        "Below diagonal: improved\nAbove diagonal: worsened",
+        transform=axis.transAxes,
+        va="top",
+        bbox={"facecolor": "white", "alpha": 0.88, "edgecolor": "#CBD5E1"},
+    )
+    figure.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=220, bbox_inches="tight", facecolor="white")
+    plt.close(figure)
+
+
+def _save_pca_vs_nme_scatter(
+    rows: list[dict[str, Any]],
+    *,
+    correlation: float,
+    path: Path,
+) -> None:
+    if plotting is None:
+        _save_plotting_unavailable(path, "PCA loss reduction versus NME change")
+        return
+    plt = plotting
+    from matplotlib.ticker import PercentFormatter
+
+    _configure_plot_style(plt)
+    figure, axis = plt.subplots(figsize=(9.2, 6.6))
+    colors = _orientation_colors()
+    for orientation in dict.fromkeys(str(row["orientation"]) for row in rows):
+        current = [row for row in rows if str(row["orientation"]) == orientation]
+        axis.scatter(
+            [float(row["relative_loss_reduction"]) for row in current],
+            [float(row["delta_nme_box_gt_valid"]) * 100.0 for row in current],
+            s=34,
+            alpha=0.68,
+            color=colors.get(orientation, colors["unknown"]),
+            label=orientation.replace("_", " ").title(),
+        )
+    axis.axhline(0.0, color="#263238", linewidth=2, linestyle="--")
+    axis.xaxis.set_major_formatter(PercentFormatter(xmax=1.0))
+    axis.set_xlabel("Relative PCA reconstruction-loss reduction")
+    axis.set_ylabel("NME change after TTA (percentage points)")
+    axis.set_title("Does improved PCA plausibility predict improved localization?")
+    axis.legend(title="Orientation", bbox_to_anchor=(1.02, 1), loc="upper left")
+    axis.text(
+        0.03,
+        0.97,
+        f"Spearman ρ = {correlation:.3f}\nNegative ΔNME indicates improvement",
+        transform=axis.transAxes,
+        va="top",
+        bbox={"facecolor": "white", "alpha": 0.9, "edgecolor": "#CBD5E1"},
+    )
+    figure.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=220, bbox_inches="tight", facecolor="white")
+    plt.close(figure)
+
+
+def _save_orientation_nme_plot(
+    rows: list[dict[str, Any]],
+    *,
+    path: Path,
+) -> None:
+    if plotting is None:
+        _save_plotting_unavailable(path, "TTA performance by orientation")
+        return
+    plt = plotting
+
+    _configure_plot_style(plt)
+    labels = [str(row["orientation"]).replace("_", " ").title() for row in rows]
+    positions = np.arange(len(rows))
+    width = 0.36
+    before = np.asarray([float(row["mean_nme_before"]) * 100.0 for row in rows])
+    after = np.asarray([float(row["mean_nme_after"]) * 100.0 for row in rows])
+    figure, axis = plt.subplots(figsize=(11.5, 6.4))
+    axis.bar(positions - width / 2, before, width, color="#94A3B8", label="Before TTA")
+    axis.bar(positions + width / 2, after, width, color="#0A9396", label="After TTA")
+    for index, row in enumerate(rows):
+        axis.text(
+            positions[index],
+            max(before[index], after[index]) + max(after.max(), before.max()) * 0.025,
+            f"n={int(row['count'])}\n{float(row['improvement_rate']):.0%} improved",
+            ha="center",
+            va="bottom",
+            fontsize=10,
+        )
+    axis.set_xticks(positions, labels)
+    axis.set_ylabel("Mean NME (%; GT-valid)")
+    axis.set_title("TTA localization performance by face orientation")
+    axis.legend()
+    axis.set_ylim(0, max(before.max(), after.max()) * 1.25)
+    figure.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=220, bbox_inches="tight", facecolor="white")
+    plt.close(figure)
+
+
+def _save_orientation_delta_boxplot(
+    rows: list[dict[str, Any]],
+    *,
+    path: Path,
+) -> None:
+    if plotting is None:
+        _save_plotting_unavailable(path, "NME change by orientation")
+        return
+    plt = plotting
+
+    _configure_plot_style(plt)
+    order = ["left", "quarter_left", "frontal", "quarter_right", "right"]
+    present = [name for name in order if any(str(row["orientation"]) == name for row in rows)]
+    present.extend(
+        sorted(
+            {str(row["orientation"]) for row in rows}.difference(present)
+        )
+    )
+    values = [
+        [
+            float(row["delta_nme_box_gt_valid"]) * 100.0
+            for row in rows
+            if str(row["orientation"]) == orientation
+        ]
+        for orientation in present
+    ]
+    figure, axis = plt.subplots(figsize=(11.2, 6.2))
+    box = axis.boxplot(values, patch_artist=True, showfliers=False)
+    colors = _orientation_colors()
+    for patch, orientation in zip(box["boxes"], present):
+        patch.set_facecolor(colors.get(orientation, colors["unknown"]))
+        patch.set_alpha(0.72)
+    axis.axhline(0.0, color="#263238", linewidth=2, linestyle="--")
+    axis.set_xticks(
+        np.arange(1, len(present) + 1),
+        [name.replace("_", " ").title() for name in present],
+    )
+    axis.set_ylabel("NME change after TTA (percentage points)")
+    axis.set_title("Distribution of per-image TTA effect by orientation")
+    axis.text(
+        0.02,
+        0.97,
+        "Negative values indicate improvement",
+        transform=axis.transAxes,
+        va="top",
+    )
+    figure.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    figure.savefig(path, dpi=220, bbox_inches="tight", facecolor="white")
+    plt.close(figure)
+
+
+def _spearman_correlation(x_values: np.ndarray, y_values: np.ndarray) -> float:
+    """Compute Spearman correlation with average ranks for tied values."""
+    if len(x_values) < 2 or len(y_values) != len(x_values):
+        return math.nan
+    x_rank = _average_ranks(np.asarray(x_values, dtype=np.float64))
+    y_rank = _average_ranks(np.asarray(y_values, dtype=np.float64))
+    if np.std(x_rank) <= 0 or np.std(y_rank) <= 0:
+        return math.nan
+    return float(np.corrcoef(x_rank, y_rank)[0, 1])
+
+
+def _average_ranks(values: np.ndarray) -> np.ndarray:
+    order = np.argsort(values, kind="mergesort")
+    ranks = np.empty(len(values), dtype=np.float64)
+    start = 0
+    while start < len(values):
+        end = start + 1
+        while end < len(values) and values[order[end]] == values[order[start]]:
+            end += 1
+        ranks[order[start:end]] = (start + end - 1) / 2.0
+        start = end
+    return ranks
 
 
 def _tensor_to_rgb(
@@ -777,7 +1369,17 @@ loss is used.
 - Source normalizer and optimizer state are reset before every image.
 - `trajectories.csv` contains one row per image and adaptation step.
 - `image_summary.csv` contains one row per image.
-- `aggregate_curves.csv` and `figures/` summarize the loss distribution.
+- `image_summary.csv` additionally contains before/after GT-valid NME and
+  Hausdorff diagnostics when the dataset evaluator provides ground truth after
+  adaptation. These values never participate in optimization.
+- `aggregate_curves.csv` and `figures/` summarize absolute loss, relative loss
+  reduction, landmark drift, and the distribution of final adaptation effects.
+- `orientation_tta_summary.csv` and `evaluation_analysis.json` summarize NME
+  before/after, improvement rates, and the Spearman association between PCA-loss
+  reduction and NME change.
+- `figures/nme_before_after_scatter.png`,
+  `figures/pca_loss_reduction_vs_nme_change.png`, and the orientation figures
+  are generated only when post-hoc ground truth metrics are available.
 - `probes/` shows crop-space normalizer and landmark evolution. Final evaluator
   predictions are independently reprojected from crop coordinates to the
   original image by the existing BabyLand/InfAnFace pipeline.

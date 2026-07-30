@@ -164,6 +164,22 @@ def evaluate_natural_checkpoint(
                 softmax_temperature=wasserstein_softmax_temperature,
             ).cpu()
 
+            baseline_landmarks_batch = None
+            baseline_visibility_batch = None
+            if tta_adapter is not None:
+                baseline_landmarks_batch = decode_heatmaps_to_image_coords(
+                    heatmaps=outputs["tta_baseline_heatmaps"],
+                    image_height=images.shape[2],
+                    image_width=images.shape[3],
+                    use_subpixel=True,
+                    decoder=coordinate_decoder,
+                    softmax_temperature=wasserstein_softmax_temperature,
+                ).cpu()
+                baseline_visibility_batch = (
+                    torch.sigmoid(outputs["tta_baseline_visibility_logits"].cpu())
+                    >= visibility_threshold
+                ).to(torch.int64)
+
             predicted_visibility_logits = outputs["visibility_logits"].cpu()
             predicted_visibility_scores = torch.sigmoid(predicted_visibility_logits)
             predicted_visibility_batch = (
@@ -217,6 +233,24 @@ def evaluate_natural_checkpoint(
                     landmarks=predicted_landmarks_crop,
                     transform_matrix=transform_crop_to_orig,
                 )
+                baseline_landmarks_original = None
+                baseline_visibility = None
+                if baseline_landmarks_batch is not None:
+                    baseline_landmarks_crop = project_landmarks_between_sizes(
+                        landmarks=baseline_landmarks_batch[sample_index],
+                        source_size=network_input_size,
+                        target_size=crop_size,
+                    )
+                    baseline_landmarks_original = apply_homogeneous_transform(
+                        landmarks=baseline_landmarks_crop,
+                        transform_matrix=transform_crop_to_orig,
+                    )
+                    assert baseline_visibility_batch is not None
+                    baseline_visibility = (
+                        baseline_visibility_batch[sample_index]
+                        .numpy()
+                        .astype(np.int64)
+                    )
 
                 target_landmarks_original = (
                     target_landmarks_batch[sample_index].numpy().astype(np.float32)
@@ -291,6 +325,23 @@ def evaluate_natural_checkpoint(
                     normalization_fn=compute_box_normalization_factor,
                     inclusion_mode="gt_valid",
                 )
+                baseline_mean_box_nme_gt_valid = None
+                baseline_hausdorff_box_gt_valid = None
+                if baseline_landmarks_original is not None:
+                    assert baseline_visibility is not None
+                    (
+                        _,
+                        _,
+                        baseline_mean_box_nme_gt_valid,
+                        _,
+                    ) = compute_masked_natural_per_landmark_nme(
+                        predicted_landmarks=baseline_landmarks_original,
+                        target_landmarks=target_landmarks_original,
+                        target_visibility=target_visibility,
+                        predicted_visibility=baseline_visibility,
+                        normalization_fn=compute_box_normalization_factor,
+                        inclusion_mode="gt_valid",
+                    )
                 gt_valid_mask = compute_natural_valid_landmark_mask(
                     landmarks=target_landmarks_original,
                     visibility=target_visibility,
@@ -315,6 +366,24 @@ def evaluate_natural_checkpoint(
                     valid_mask=gt_valid_mask,
                     normalization_landmarks=normalization_landmarks,
                 )
+                if baseline_landmarks_original is not None:
+                    _, baseline_hausdorff_box_gt_valid = (
+                        compute_normalized_hausdorff_distance(
+                            predicted_landmarks=baseline_landmarks_original,
+                            target_landmarks=target_landmarks_original,
+                            valid_mask=gt_valid_mask,
+                            normalization_landmarks=normalization_landmarks,
+                        )
+                    )
+                    tta_adapter.record_evaluation_metrics(
+                        sample_id=sample_id,
+                        orientation=orientation,
+                        initial_nme_box_gt_valid=baseline_mean_box_nme_gt_valid,
+                        final_nme_box_gt_valid=mean_box_nme_gt_valid,
+                        initial_hausdorff_box_gt_valid=baseline_hausdorff_box_gt_valid,
+                        final_hausdorff_box_gt_valid=hausdorff_box_gt_valid,
+                        number_of_valid_landmarks=int(gt_valid_mask.sum()),
+                    )
                 if np.isfinite(hausdorff_box_visible):
                     visible_image_hausdorff_values.append(hausdorff_box_visible)
                     orientation_to_hausdorff_visible_values[orientation].append(
@@ -420,6 +489,19 @@ def evaluate_natural_checkpoint(
                         "mean_nme_box_point_to_line_gt_valid": mean_box_nme_point_to_line_gt_valid,
                         "hausdorff_pixel_gt_valid": hausdorff_pixel_gt_valid,
                         "hausdorff_box_gt_valid": hausdorff_box_gt_valid,
+                        "tta_initial_nme_box_gt_valid": baseline_mean_box_nme_gt_valid,
+                        "tta_delta_nme_box_gt_valid": (
+                            mean_box_nme_gt_valid - baseline_mean_box_nme_gt_valid
+                            if mean_box_nme_gt_valid is not None
+                            and baseline_mean_box_nme_gt_valid is not None
+                            else None
+                        ),
+                        "tta_initial_hausdorff_box_gt_valid": baseline_hausdorff_box_gt_valid,
+                        "tta_delta_hausdorff_box_gt_valid": (
+                            hausdorff_box_gt_valid - baseline_hausdorff_box_gt_valid
+                            if baseline_hausdorff_box_gt_valid is not None
+                            else None
+                        ),
                         "mean_nme_interocular": None,
                     }
                 )
