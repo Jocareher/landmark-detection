@@ -44,7 +44,9 @@ class PCATTAConfig:
         if self.difference_display_max <= 0:
             raise ValueError("difference_display_max must be positive.")
         if len(self.normalization_mean) != 3 or len(self.normalization_std) != 3:
-            raise ValueError("PCA TTA visualization expects three-channel normalization.")
+            raise ValueError(
+                "PCA TTA visualization expects three-channel normalization."
+            )
 
 
 class PCAGuidedTTA:
@@ -424,9 +426,7 @@ class PCAGuidedTTA:
                 difference_magnitude,
                 display_max=self.config.difference_display_max,
             )
-            enhanced_display_max = _robust_difference_display_max(
-                difference_magnitude
-            )
+            enhanced_display_max = _robust_difference_display_max(difference_magnitude)
             enhanced_difference_rgb = _colorize_difference(
                 difference_magnitude,
                 display_max=enhanced_display_max,
@@ -521,11 +521,15 @@ class PCAGuidedTTA:
                 )
             if self.summary_rows:
                 columns = list(self.summary_rows[0].keys())
-                data = [[row[column] for column in columns] for row in self.summary_rows]
+                data = [
+                    [row[column] for column in columns] for row in self.summary_rows
+                ]
                 self.wandb.log(
                     {"tta/image_summary": self.wandb.Table(columns=columns, data=data)}
                 )
-            probe_grids = sorted((self.output_dir / "probes").glob("*/adaptation_grid.png"))
+            probe_grids = sorted(
+                (self.output_dir / "probes").glob("*/adaptation_grid.png")
+            )
             if probe_grids:
                 self.wandb.log(
                     {
@@ -641,12 +645,8 @@ def _aggregate_trajectories(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "p90": float(np.percentile(values, 90)),
                 "relative_reduction_mean": float(relative_reductions.mean()),
                 "relative_reduction_median": float(np.median(relative_reductions)),
-                "relative_reduction_p25": float(
-                    np.percentile(relative_reductions, 25)
-                ),
-                "relative_reduction_p75": float(
-                    np.percentile(relative_reductions, 75)
-                ),
+                "relative_reduction_p25": float(np.percentile(relative_reductions, 25)),
+                "relative_reduction_p75": float(np.percentile(relative_reductions, 75)),
                 "mean_drift_mean_px": float(mean_drifts.mean()),
                 "mean_drift_median_px": float(np.median(mean_drifts)),
                 "mean_drift_p25_px": float(np.percentile(mean_drifts, 25)),
@@ -744,7 +744,9 @@ def _save_aggregate_plot(rows: list[dict[str, Any]], path: Path) -> None:
     reduction_axis.set_ylabel("Relative PCA-loss reduction")
     reduction_axis.legend(loc="best")
 
-    figure.suptitle("PCA-guided episodic test-time adaptation", fontsize=18, weight="bold")
+    figure.suptitle(
+        "PCA-guided episodic test-time adaptation", fontsize=18, weight="bold"
+    )
     figure.tight_layout(rect=(0, 0, 1, 0.94))
     path.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(path, dpi=220, bbox_inches="tight", facecolor="white")
@@ -857,7 +859,9 @@ def _save_final_adaptation_distribution(
     )
     figure, axes = plt.subplots(1, 2, figsize=(15, 5.6))
     axes[0].hist(reductions, bins=30, color="#0A9396", alpha=0.85)
-    axes[0].axvline(np.median(reductions), color="#9B2226", linewidth=2.5, label="Median")
+    axes[0].axvline(
+        np.median(reductions), color="#9B2226", linewidth=2.5, label="Median"
+    )
     axes[0].xaxis.set_major_formatter(PercentFormatter(xmax=1.0))
     axes[0].set_title("PCA-loss reduction per image")
     axes[0].set_xlabel("Relative reduction from step 0")
@@ -925,9 +929,7 @@ def _save_evaluation_analysis(
         [float(row["relative_loss_reduction"]) for row in valid], dtype=np.float64
     )
     correlation = _spearman_correlation(pca_reduction, delta)
-    _save_nme_before_after_scatter(
-        valid, figures_dir / "nme_before_after_scatter.png"
-    )
+    _save_nme_before_after_scatter(valid, figures_dir / "nme_before_after_scatter.png")
     _save_pca_vs_nme_scatter(
         valid,
         correlation=correlation,
@@ -1042,7 +1044,9 @@ def _save_nme_before_after_scatter(rows: list[dict[str, Any]], path: Path) -> No
     positive = all_values[all_values > 0]
     lower = max(float(positive.min()) * 0.85, 1e-3)
     upper = float(all_values.max()) * 1.1
-    axis.plot([lower, upper], [lower, upper], color="#263238", linestyle="--", linewidth=2)
+    axis.plot(
+        [lower, upper], [lower, upper], color="#263238", linestyle="--", linewidth=2
+    )
     axis.set_xscale("log")
     axis.set_yscale("log")
     axis.set_xlim(lower, upper)
@@ -1161,11 +1165,11 @@ def _save_orientation_delta_boxplot(
 
     _configure_plot_style(plt)
     order = ["left", "quarter_left", "frontal", "quarter_right", "right"]
-    present = [name for name in order if any(str(row["orientation"]) == name for row in rows)]
+    present = [
+        name for name in order if any(str(row["orientation"]) == name for row in rows)
+    ]
     present.extend(
-        sorted(
-            {str(row["orientation"]) for row in rows}.difference(present)
-        )
+        sorted({str(row["orientation"]) for row in rows}.difference(present))
     )
     values = [
         [
@@ -1236,7 +1240,9 @@ def _tensor_to_rgb(
     return np.asarray(rgb.clamp(0, 1).tolist(), dtype=np.float32)
 
 
-def _draw_landmarks(image: Image.Image, landmarks: torch.Tensor, color: str) -> Image.Image:
+def _draw_landmarks(
+    image: Image.Image, landmarks: torch.Tensor, color: str
+) -> Image.Image:
     draw = ImageDraw.Draw(image)
     for x_coord, y_coord in landmarks.tolist():
         radius = 2
@@ -1353,7 +1359,10 @@ def _stack_vertically(images: list[Image.Image]) -> Image.Image:
 
 
 def _safe_name(value: str) -> str:
-    return "".join(character if character.isalnum() or character in "-_" else "_" for character in value)
+    return "".join(
+        character if character.isalnum() or character in "-_" else "_"
+        for character in value
+    )
 
 
 def _tta_readme(config: PCATTAConfig) -> str:

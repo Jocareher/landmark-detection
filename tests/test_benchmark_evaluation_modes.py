@@ -146,7 +146,9 @@ def test_normalized_hausdorff_uses_box_denominator() -> None:
     assert np.isclose(normalized, 0.5)
 
 
-def test_infanface_non_contour_hausdorff_excludes_contour_and_uses_full_denominator() -> None:
+def test_infanface_non_contour_hausdorff_excludes_contour_and_uses_full_denominator() -> (
+    None
+):
     """Non-contour Hausdorff excludes contour points but keeps the full-face denominator."""
     target = np.zeros((68, 2), dtype=np.float32)
     target[0] = [0.0, 0.0]
@@ -207,7 +209,9 @@ def test_overlay_connections_ignore_visibility_for_finite_landmarks(tmp_path) ->
 
 def test_detection_rate_uses_detected_column() -> None:
     """Detected columns are the preferred detection-rate source."""
-    raw = pd.DataFrame({"image_id": ["a", "b", "c"], "nme": [0.1, np.nan, 0.2], "detected": [1, 0, 1]})
+    raw = pd.DataFrame(
+        {"image_id": ["a", "b", "c"], "nme": [0.1, np.nan, 0.2], "detected": [1, 0, 1]}
+    )
 
     info = infer_detection_rate_info(
         raw=raw,
@@ -215,7 +219,9 @@ def test_detection_rate_uses_detected_column() -> None:
         nme_col="nme",
         detected_col="detected",
         model_config=ModelBenchmarkConfig(name="model"),
-        dataset_config=DatasetBenchmarkConfig(name="dataset", output_dir="unused", total_images=10),
+        dataset_config=DatasetBenchmarkConfig(
+            name="dataset", output_dir="unused", total_images=10
+        ),
     )
 
     assert info.detection_rate == 2 / 3
@@ -224,7 +230,9 @@ def test_detection_rate_uses_detected_column() -> None:
     assert info.n_total == 3
 
 
-def test_detection_rate_uses_dataset_total_without_defaulting_to_full_coverage() -> None:
+def test_detection_rate_uses_dataset_total_without_defaulting_to_full_coverage() -> (
+    None
+):
     """Evaluated-only CSVs use n_detected / dataset.total_images instead of assuming 100%."""
     raw = pd.DataFrame({"image_id": ["a", "b"], "nme": [0.1, 0.2]})
 
@@ -234,7 +242,9 @@ def test_detection_rate_uses_dataset_total_without_defaulting_to_full_coverage()
         nme_col="nme",
         detected_col=None,
         model_config=ModelBenchmarkConfig(name="model"),
-        dataset_config=DatasetBenchmarkConfig(name="dataset", output_dir="unused", total_images=5),
+        dataset_config=DatasetBenchmarkConfig(
+            name="dataset", output_dir="unused", total_images=5
+        ),
     )
 
     assert info.detection_rate == 0.4
@@ -306,7 +316,9 @@ def test_babyland_standard_hausdorff_prefers_gt_valid_column(tmp_path) -> None:
     )
 
     assert result.per_image is not None
-    assert result.per_image["selected_metric_column"].iloc[0] == "hausdorff_box_gt_valid"
+    assert (
+        result.per_image["selected_metric_column"].iloc[0] == "hausdorff_box_gt_valid"
+    )
     assert result.per_image["nme"].tolist() == [0.2, 0.4]
 
 
@@ -375,10 +387,15 @@ def test_babyland_analysis_uses_visibility_flag_capability() -> None:
 
     main_jobs, main_warnings = expand_models_for_analysis(
         config,
-        EvaluationProtocolConfig(name="main_comparison", display_name="Main comparison"),
+        EvaluationProtocolConfig(
+            name="main_comparison", display_name="Main comparison"
+        ),
     )
     assert main_warnings == []
-    assert [(model.name, source.name, source_name) for model, source, source_name in main_jobs] == [
+    assert [
+        (model.name, source.name, source_name)
+        for model, source, source_name in main_jobs
+    ] == [
         ("visibility_model", "gt_valid", "gt_valid"),
         ("sota_model", "standard", "standard"),
     ]

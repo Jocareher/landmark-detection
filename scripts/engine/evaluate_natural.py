@@ -247,9 +247,7 @@ def evaluate_natural_checkpoint(
                     )
                     assert baseline_visibility_batch is not None
                     baseline_visibility = (
-                        baseline_visibility_batch[sample_index]
-                        .numpy()
-                        .astype(np.int64)
+                        baseline_visibility_batch[sample_index].numpy().astype(np.int64)
                     )
 
                 target_landmarks_original = (
@@ -367,13 +365,14 @@ def evaluate_natural_checkpoint(
                     normalization_landmarks=normalization_landmarks,
                 )
                 if baseline_landmarks_original is not None:
-                    _, baseline_hausdorff_box_gt_valid = (
-                        compute_normalized_hausdorff_distance(
-                            predicted_landmarks=baseline_landmarks_original,
-                            target_landmarks=target_landmarks_original,
-                            valid_mask=gt_valid_mask,
-                            normalization_landmarks=normalization_landmarks,
-                        )
+                    (
+                        _,
+                        baseline_hausdorff_box_gt_valid,
+                    ) = compute_normalized_hausdorff_distance(
+                        predicted_landmarks=baseline_landmarks_original,
+                        target_landmarks=target_landmarks_original,
+                        valid_mask=gt_valid_mask,
+                        normalization_landmarks=normalization_landmarks,
                     )
                     tta_adapter.record_evaluation_metrics(
                         sample_id=sample_id,
