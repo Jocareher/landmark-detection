@@ -12,6 +12,12 @@ from tqdm import tqdm
 from .geometry_metrics import compute_per_landmark_point_to_line_distances
 from .metrics import decode_heatmaps_to_image_coords
 from .postprocessing import extract_batched_size, project_landmarks_to_original_size
+from .visibility_metrics import (
+    compute_visibility_analysis,
+    save_visibility_metrics_csv,
+    save_visibility_plots,
+    visibility_summary_fields,
+)
 from ..utils.predictions import save_prediction_file
 from ..utils.visualization import (
     compute_global_linear_y_limits,
@@ -352,7 +358,6 @@ def save_metrics_summary_csv(
         Evaluation summary dictionary.
     """
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
     has_explicit_visible_intersection = (
         "mean_nme_box_visible_intersection" in summary
         or "mean_nme_box_point_to_line_visible_intersection" in summary
@@ -486,76 +491,8 @@ def save_metrics_summary_csv(
             ("mean_nme_interocular", summary.get("mean_nme_interocular")),
             ("landmark_loss", summary.get("landmark_loss")),
             ("coordinate_decoder", summary.get("coordinate_decoder")),
-            (
-                "visibility_global_precision",
-                summary.get("visibility_metrics", {})
-                .get("global", {})
-                .get("precision"),
-            ),
-            (
-                "visibility_global_recall",
-                summary.get("visibility_metrics", {}).get("global", {}).get("recall"),
-            ),
-            (
-                "visibility_global_f1",
-                summary.get("visibility_metrics", {}).get("global", {}).get("f1"),
-            ),
-            (
-                "visibility_visible_precision",
-                summary.get("visibility_metrics", {})
-                .get("visible", {})
-                .get("precision"),
-            ),
-            (
-                "visibility_visible_recall",
-                summary.get("visibility_metrics", {}).get("visible", {}).get("recall"),
-            ),
-            (
-                "visibility_visible_f1",
-                summary.get("visibility_metrics", {}).get("visible", {}).get("f1"),
-            ),
-            (
-                "visibility_invisible_precision",
-                summary.get("visibility_metrics", {})
-                .get("invisible", {})
-                .get("precision"),
-            ),
-            (
-                "visibility_invisible_recall",
-                summary.get("visibility_metrics", {})
-                .get("invisible", {})
-                .get("recall"),
-            ),
-            (
-                "visibility_invisible_f1",
-                summary.get("visibility_metrics", {}).get("invisible", {}).get("f1"),
-            ),
-            ("visibility_threshold", summary.get("visibility_threshold")),
         ]
     )
-
-    confusion_matrix_raw = summary.get("confusion_matrix_raw")
-    confusion_matrix_normalized = summary.get("confusion_matrix_normalized")
-
-    if confusion_matrix_raw is not None:
-        rows.extend(
-            [
-                ("cm_raw_tn_invisible_invisible", confusion_matrix_raw[0][0]),
-                ("cm_raw_fp_invisible_visible", confusion_matrix_raw[0][1]),
-                ("cm_raw_fn_visible_invisible", confusion_matrix_raw[1][0]),
-                ("cm_raw_tp_visible_visible", confusion_matrix_raw[1][1]),
-            ]
-        )
-
-    if confusion_matrix_normalized is not None:
-        rows.extend(
-            [
-                ("cm_norm_tn_invisible_invisible", confusion_matrix_normalized[0][0]),
-                ("cm_norm_fp_invisible_visible", confusion_matrix_normalized[0][1]),
-                ("cm_norm_fn_visible_invisible", confusion_matrix_normalized[1][0]),
-                ("cm_norm_tp_visible_visible", confusion_matrix_normalized[1][1]),
-            ]
-        )
 
     yaw_sample_counts = summary.get("yaw_sample_counts")
     if yaw_sample_counts is not None:
@@ -1116,6 +1053,8 @@ def evaluate_checkpoint(
     per_image_per_landmark_nme: list[dict[str, Any]] = []
     all_visibility_targets: list[np.ndarray] = []
     all_visibility_predictions: list[np.ndarray] = []
+    all_visibility_pose_labels: list[np.ndarray] = []
+    all_visibility_landmark_indices: list[np.ndarray] = []
 
     yaw_to_errors: dict[str, list[list[float]]] = {}
     yaw_to_box_nme_values: dict[str, list[float]] = {}
@@ -1308,6 +1247,12 @@ def evaluate_checkpoint(
 
                 all_visibility_targets.append(target_visibility.reshape(-1))
                 all_visibility_predictions.append(predicted_visibility.reshape(-1))
+                all_visibility_pose_labels.append(
+                    np.repeat(yaw_key, len(target_visibility))
+                )
+                all_visibility_landmark_indices.append(
+                    np.arange(len(target_visibility), dtype=np.int64)
+                )
 
     if per_landmark_errors is None or per_landmark_point_to_line_errors is None:
         raise RuntimeError("No evaluation samples were processed.")
@@ -1445,13 +1390,30 @@ def evaluate_checkpoint(
 
     visibility_targets = np.concatenate(all_visibility_targets, axis=0)
     visibility_predictions = np.concatenate(all_visibility_predictions, axis=0)
+    visibility_pose_labels = np.concatenate(all_visibility_pose_labels, axis=0)
+    visibility_landmark_indices = np.concatenate(
+        all_visibility_landmark_indices, axis=0
+    )
 
-    confusion_matrix_raw = compute_binary_confusion_matrix(
+    visibility_analysis = compute_visibility_analysis(
         targets=visibility_targets,
         predictions=visibility_predictions,
+        pose_labels=visibility_pose_labels,
+        landmark_indices=visibility_landmark_indices,
+        pose_display_labels=yaw_display_labels,
     )
-    confusion_matrix_normalized = normalize_confusion_matrix(confusion_matrix_raw)
-    visibility_metrics = compute_visibility_classification_metrics(confusion_matrix_raw)
+    confusion_matrix_raw = np.asarray(
+        visibility_analysis["general"]["confusion_matrix_raw"], dtype=np.int64
+    )
+    confusion_matrix_normalized = np.asarray(
+        visibility_analysis["general"]["confusion_matrix_normalized"],
+        dtype=np.float64,
+    )
+    save_visibility_metrics_csv(
+        output_path=output_dir / "visibility_metrics.csv",
+        analysis=visibility_analysis,
+    )
+    save_visibility_plots(figures_dir, visibility_analysis)
 
     plot_confusion_matrix(
         matrix=confusion_matrix_raw,
@@ -1504,12 +1466,10 @@ def evaluate_checkpoint(
             "visible_intersection": "not applicable for synthetic final evaluation unless visibility masks are used",
             "gt_valid": "all finite GT landmarks",
         },
-        "visibility_metrics": visibility_metrics,
+        **visibility_summary_fields(visibility_analysis),
         "visibility_threshold": float(visibility_threshold),
         "landmark_loss": landmark_loss,
         "coordinate_decoder": coordinate_decoder,
-        "confusion_matrix_raw": confusion_matrix_raw.tolist(),
-        "confusion_matrix_normalized": confusion_matrix_normalized.tolist(),
         "predictions_dir": str(predictions_dir)
         if predictions_dir is not None
         else None,

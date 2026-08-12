@@ -21,6 +21,12 @@ from .evaluate import (
     save_per_landmark_nme_csv,
 )
 from .geometry_metrics import compute_per_landmark_point_to_line_distances
+from .visibility_metrics import (
+    compute_visibility_analysis,
+    save_visibility_metrics_csv,
+    save_visibility_plots,
+    visibility_summary_fields,
+)
 from ..utils.natural_labels import (
     NATURAL_ORIENTATION_NAMES,
     UNKNOWN_ORIENTATION,
@@ -35,6 +41,7 @@ from ..utils.synthetic_labels import (
 from ..utils.visualization import (
     compute_global_linear_y_limits,
     compute_global_log_y_limits,
+    plot_confusion_matrix,
     plot_per_landmark_boxplot,
     plot_yaw_view_boxplots,
 )
@@ -627,6 +634,10 @@ def benchmark_prediction_directory(
     gt_valid_image_point_to_line_values: list[float] = []
     visible_image_hausdorff_values: list[float] = []
     gt_valid_image_hausdorff_values: list[float] = []
+    all_visibility_targets: list[np.ndarray] = []
+    all_visibility_predictions: list[np.ndarray] = []
+    all_visibility_pose_labels: list[np.ndarray] = []
+    all_visibility_landmark_indices: list[np.ndarray] = []
 
     for sample in samples:
         sample_id = sample["sample_id"]
@@ -706,6 +717,14 @@ def benchmark_prediction_directory(
             if parsed_prediction.visibility is not None:
                 pred_visibility = parsed_prediction.visibility[:landmark_count]
                 valid_mask = gt_visible_mask & (pred_visibility == 1)
+                all_visibility_targets.append(gt_visibility.astype(np.int64))
+                all_visibility_predictions.append(pred_visibility.astype(np.int64))
+                all_visibility_pose_labels.append(
+                    np.repeat(gt_orientation, landmark_count)
+                )
+                all_visibility_landmark_indices.append(
+                    np.arange(landmark_count, dtype=np.int64)
+                )
             else:
                 pred_visibility = None
                 valid_mask = gt_visible_mask
@@ -957,6 +976,47 @@ def benchmark_prediction_directory(
         output_path=output_dir / "per_image_per_landmark_nme.csv",
     )
 
+    if all_visibility_targets:
+        visibility_analysis = compute_visibility_analysis(
+            targets=np.concatenate(all_visibility_targets),
+            predictions=np.concatenate(all_visibility_predictions),
+            pose_labels=np.concatenate(all_visibility_pose_labels),
+            landmark_indices=np.concatenate(all_visibility_landmark_indices),
+            pose_display_labels=orientation_display_labels,
+        )
+        general_visibility = visibility_analysis["general"]
+        plot_confusion_matrix(
+            matrix=np.asarray(general_visibility["confusion_matrix_raw"]),
+            output_path=figures_dir / "confusion_matrix_raw.png",
+            title="Visibility confusion matrix",
+            value_format="d",
+        )
+        plot_confusion_matrix(
+            matrix=np.asarray(general_visibility["confusion_matrix_normalized"]),
+            output_path=figures_dir / "confusion_matrix_normalized.png",
+            title="Visibility confusion matrix normalized",
+            value_format=".4f",
+        )
+    else:
+        visibility_analysis = compute_visibility_analysis(
+            targets=np.asarray([], dtype=np.int64),
+            predictions=np.asarray([], dtype=np.int64),
+            pose_labels=np.asarray([], dtype=str),
+            landmark_indices=np.asarray([], dtype=np.int64),
+        )
+        visibility_analysis["reason"] = (
+            "Prediction files do not contain visibility labels (68x2 format)."
+        )
+    save_visibility_metrics_csv(
+        output_path=output_dir / "visibility_metrics.csv",
+        analysis=visibility_analysis,
+    )
+    save_visibility_plots(
+        figures_dir,
+        visibility_analysis,
+        include_babyland_region_protocols=inferred_num_landmarks == 72,
+    )
+
     if any(values for values in selected_per_landmark_errors):
         grouped_errors = [selected_per_landmark_errors] + list(
             selected_orientation_to_errors.values()
@@ -1153,6 +1213,7 @@ def benchmark_prediction_directory(
         "images_with_invalid_prediction": int(images_with_invalid_prediction),
         "unmatched_prediction_files_count": int(len(unmatched_prediction_files)),
         "detection_rate": float(images_with_prediction / max(len(samples), 1)),
+        **visibility_summary_fields(visibility_analysis),
         "mean_nme_box_visible_intersection": (
             float(np.mean(valid_image_nme_values)) if valid_image_nme_values else None
         ),
@@ -1721,6 +1782,20 @@ def benchmark_infantface_prediction_directory(
             for orientation in orientation_names
         }
 
+    visibility_analysis = compute_visibility_analysis(
+        targets=np.asarray([], dtype=np.int64),
+        predictions=np.asarray([], dtype=np.int64),
+        pose_labels=np.asarray([], dtype=str),
+        landmark_indices=np.asarray([], dtype=np.int64),
+    )
+    visibility_analysis["reason"] = (
+        "InfantFace ground-truth files do not contain visibility labels."
+    )
+    save_visibility_metrics_csv(
+        output_path=output_dir / "visibility_metrics.csv",
+        analysis=visibility_analysis,
+    )
+
     summary = {
         "model_name": provided_prediction_root.name,
         "gt_root": str(provided_gt_root),
@@ -1734,6 +1809,7 @@ def benchmark_infantface_prediction_directory(
         "images_with_invalid_prediction": int(images_with_invalid_prediction),
         "unmatched_prediction_files_count": int(len(unmatched_prediction_files)),
         "detection_rate": float(images_with_prediction / max(len(gt_paths), 1)),
+        **visibility_summary_fields(visibility_analysis),
         "mean_nme_box": (
             float(np.mean(valid_image_nme_values)) if valid_image_nme_values else None
         ),

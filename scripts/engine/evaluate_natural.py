@@ -10,10 +10,7 @@ from tqdm import tqdm
 
 from .evaluate import (
     _build_boxplot_title,
-    compute_binary_confusion_matrix,
     compute_box_normalization_factor,
-    compute_visibility_classification_metrics,
-    normalize_confusion_matrix,
     round_metric_value,
     save_metrics_summary_csv,
     save_per_image_nme_csv,
@@ -26,6 +23,12 @@ from .postprocessing import (
     apply_homogeneous_transform,
     extract_batched_size,
     project_landmarks_between_sizes,
+)
+from .visibility_metrics import (
+    compute_visibility_analysis,
+    save_visibility_metrics_csv,
+    save_visibility_plots,
+    visibility_summary_fields,
 )
 from ..utils.predictions import save_prediction_file
 from ..utils.natural_labels import NATURAL_ORIENTATION_NAMES, UNKNOWN_ORIENTATION
@@ -109,6 +112,8 @@ def evaluate_natural_checkpoint(
     per_image_per_landmark_nme: list[dict[str, Any]] = []
     all_visibility_targets: list[np.ndarray] = []
     all_visibility_predictions: list[np.ndarray] = []
+    all_visibility_pose_labels: list[np.ndarray] = []
+    all_visibility_landmark_indices: list[np.ndarray] = []
     num_samples_with_geometric_metrics = 0
     num_visible_visible_landmarks = 0
     num_samples_with_gt_valid_metrics = 0
@@ -362,6 +367,12 @@ def evaluate_natural_checkpoint(
                 )
                 all_visibility_targets.append(target_visibility.reshape(-1))
                 all_visibility_predictions.append(predicted_visibility.reshape(-1))
+                all_visibility_pose_labels.append(
+                    np.repeat(orientation, len(target_visibility))
+                )
+                all_visibility_landmark_indices.append(
+                    np.arange(len(target_visibility), dtype=np.int64)
+                )
 
     if per_landmark_errors is None or per_landmark_point_to_line_errors is None:
         raise RuntimeError("No evaluation samples were processed.")
@@ -530,13 +541,33 @@ def evaluate_natural_checkpoint(
 
     visibility_targets = np.concatenate(all_visibility_targets, axis=0)
     visibility_predictions = np.concatenate(all_visibility_predictions, axis=0)
+    visibility_pose_labels = np.concatenate(all_visibility_pose_labels, axis=0)
+    visibility_landmark_indices = np.concatenate(
+        all_visibility_landmark_indices, axis=0
+    )
 
-    confusion_matrix_raw = compute_binary_confusion_matrix(
+    visibility_analysis = compute_visibility_analysis(
         targets=visibility_targets,
         predictions=visibility_predictions,
+        pose_labels=visibility_pose_labels,
+        landmark_indices=visibility_landmark_indices,
     )
-    confusion_matrix_normalized = normalize_confusion_matrix(confusion_matrix_raw)
-    visibility_metrics = compute_visibility_classification_metrics(confusion_matrix_raw)
+    confusion_matrix_raw = np.asarray(
+        visibility_analysis["general"]["confusion_matrix_raw"], dtype=np.int64
+    )
+    confusion_matrix_normalized = np.asarray(
+        visibility_analysis["general"]["confusion_matrix_normalized"],
+        dtype=np.float64,
+    )
+    save_visibility_metrics_csv(
+        output_path=output_dir / "visibility_metrics.csv",
+        analysis=visibility_analysis,
+    )
+    save_visibility_plots(
+        figures_dir,
+        visibility_analysis,
+        include_babyland_region_protocols=True,
+    )
 
     plot_confusion_matrix(
         matrix=confusion_matrix_raw,
@@ -615,12 +646,10 @@ def evaluate_natural_checkpoint(
             "gt_valid": "finite GT coordinates, regardless of predicted visibility",
         },
         "mean_nme_interocular": None,
-        "visibility_metrics": visibility_metrics,
+        **visibility_summary_fields(visibility_analysis),
         "visibility_threshold": float(visibility_threshold),
         "landmark_loss": landmark_loss,
         "coordinate_decoder": coordinate_decoder,
-        "confusion_matrix_raw": confusion_matrix_raw.tolist(),
-        "confusion_matrix_normalized": confusion_matrix_normalized.tolist(),
         "predictions_dir": str(predictions_dir)
         if predictions_dir is not None
         else None,
