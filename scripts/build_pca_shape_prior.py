@@ -18,6 +18,7 @@ from scripts.engine.pca_shape_prior import (
     build_global_pca_shape_prior_payload,
     flatten_landmark_shapes,
 )
+from scripts.utils.visualization import save_figure_png_and_pdf
 
 
 def parse_args() -> argparse.Namespace:
@@ -150,7 +151,9 @@ def save_pca_analysis_plots(
     axes[1].set_xlabel("Number of components")
     axes[1].set_ylabel("Cumulative ratio")
     fig.tight_layout()
-    fig.savefig(previews_dir / "pca_prior_global_explained_variance.png", dpi=150)
+    save_figure_png_and_pdf(
+        fig, previews_dir / "pca_prior_global_explained_variance.png", dpi=150
+    )
     plt.close(fig)
 
     mean_shape = prior["mean_shape"].reshape(-1, 2).cpu()
@@ -167,7 +170,9 @@ def save_pca_analysis_plots(
     axes[1].set_aspect("equal", adjustable="box")
     axes[1].set_title("PCA Mean Shape - Global PCA Prior")
     fig.tight_layout()
-    fig.savefig(previews_dir / "pca_prior_global_mean_shapes.png", dpi=150)
+    save_figure_png_and_pdf(
+        fig, previews_dir / "pca_prior_global_mean_shapes.png", dpi=150
+    )
     plt.close(fig)
 
     num_modes_to_plot = min(6, selected_k)
@@ -189,7 +194,9 @@ def save_pca_analysis_plots(
         ax.set_title(f"PC {mode_index + 1}: +/-2 std")
         ax.axis("on")
     fig.tight_layout()
-    fig.savefig(previews_dir / "pca_prior_global_shape_modes.png", dpi=150)
+    save_figure_png_and_pdf(
+        fig, previews_dir / "pca_prior_global_shape_modes.png", dpi=150
+    )
     plt.close(fig)
 
     shape_vectors = flatten_landmark_shapes(aligned_shapes)
@@ -211,7 +218,9 @@ def save_pca_analysis_plots(
     ax.set_xlabel("Number of PCA components")
     ax.set_ylabel("Mean squared projection residual")
     fig.tight_layout()
-    fig.savefig(previews_dir / "pca_prior_global_reconstruction_error.png", dpi=150)
+    save_figure_png_and_pdf(
+        fig, previews_dir / "pca_prior_global_reconstruction_error.png", dpi=150
+    )
     plt.close(fig)
 
     summary_rows = [

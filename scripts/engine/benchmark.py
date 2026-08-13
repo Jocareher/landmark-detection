@@ -1004,9 +1004,9 @@ def benchmark_prediction_directory(
             pose_labels=np.asarray([], dtype=str),
             landmark_indices=np.asarray([], dtype=np.int64),
         )
-        visibility_analysis["reason"] = (
-            "Prediction files do not contain visibility labels (68x2 format)."
-        )
+        visibility_analysis[
+            "reason"
+        ] = "Prediction files do not contain visibility labels (68x2 format)."
     save_visibility_metrics_csv(
         output_path=output_dir / "visibility_metrics.csv",
         analysis=visibility_analysis,
@@ -1788,9 +1788,9 @@ def benchmark_infantface_prediction_directory(
         pose_labels=np.asarray([], dtype=str),
         landmark_indices=np.asarray([], dtype=np.int64),
     )
-    visibility_analysis["reason"] = (
-        "InfantFace ground-truth files do not contain visibility labels."
-    )
+    visibility_analysis[
+        "reason"
+    ] = "InfantFace ground-truth files do not contain visibility labels."
     save_visibility_metrics_csv(
         output_path=output_dir / "visibility_metrics.csv",
         analysis=visibility_analysis,

@@ -2301,12 +2301,11 @@ def import_scipy_stats() -> Any | None:
 
 
 def save_figure(fig: Any, path: Path, save_pdf: bool = False, dpi: int = 300) -> None:
-    """Save a matplotlib figure as PNG and optionally PDF."""
+    """Save every matplotlib figure as matching PNG and PDF files."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()
-    fig.savefig(path, dpi=dpi)
-    if save_pdf:
-        fig.savefig(path.with_suffix(".pdf"), dpi=dpi)
+    fig.savefig(path.with_suffix(".png"), dpi=dpi)
+    fig.savefig(path.with_suffix(".pdf"), dpi=dpi)
     try:
         import_matplotlib_pyplot().close(fig)
     except ImportError:

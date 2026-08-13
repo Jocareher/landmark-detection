@@ -33,6 +33,25 @@ except Exception:  # pragma: no cover - depends on local binary deps.
     F = None
 
 
+def save_figure_png_and_pdf(
+    figure,
+    output_path: str | Path,
+    dpi: int = 180,
+    bbox_inches: str | None = "tight",
+) -> tuple[Path, Path]:
+    """Save a Matplotlib figure as matching PNG and PDF files."""
+    output_path = Path(output_path)
+    png_path = output_path.with_suffix(".png")
+    pdf_path = output_path.with_suffix(".pdf")
+    png_path.parent.mkdir(parents=True, exist_ok=True)
+    save_kwargs = {"dpi": dpi}
+    if bbox_inches is not None:
+        save_kwargs["bbox_inches"] = bbox_inches
+    figure.savefig(png_path, **save_kwargs)
+    figure.savefig(pdf_path, **save_kwargs)
+    return png_path, pdf_path
+
+
 def denormalize_image_tensor(
     image: torch.Tensor,
     mean: Sequence[float] = (0.485, 0.456, 0.406),
@@ -184,7 +203,7 @@ def visualize_predicted_heatmaps_on_train_batch(
 
     plt.tight_layout()
     save_path = output_dir / f"train_heatmaps_epoch_{epoch + 1:03d}.png"
-    plt.savefig(save_path, dpi=150, bbox_inches="tight")
+    save_figure_png_and_pdf(fig, save_path, dpi=150)
     plt.close(fig)
 
     if use_wandb:
@@ -578,7 +597,7 @@ def save_dataset_preview_grid(
 
     figure.suptitle(title, fontsize=14, fontweight="bold")
     plt.tight_layout()
-    figure.savefig(output_path, dpi=180, bbox_inches="tight")
+    save_figure_png_and_pdf(figure, output_path, dpi=180)
     plt.close(figure)
     return output_path
 
@@ -711,7 +730,7 @@ def plot_confusion_matrix(
         spine.set_linewidth(1.2)
 
     plt.tight_layout()
-    figure.savefig(output_path, dpi=180, bbox_inches="tight")
+    save_figure_png_and_pdf(figure, output_path, dpi=180)
     plt.close(figure)
 
 
@@ -852,7 +871,7 @@ def plot_per_landmark_boxplot(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
-    figure.savefig(output_path, dpi=180, bbox_inches="tight")
+    save_figure_png_and_pdf(figure, output_path, dpi=180)
     plt.close(figure)
 
 
@@ -1052,5 +1071,5 @@ def plot_grouped_nme_boxplot(
     axis.grid(True, axis="y", linestyle="--", alpha=0.35)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
-    figure.savefig(output_path, dpi=180, bbox_inches="tight")
+    save_figure_png_and_pdf(figure, output_path, dpi=180)
     plt.close(figure)

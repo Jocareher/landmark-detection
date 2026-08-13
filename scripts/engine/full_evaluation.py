@@ -41,7 +41,7 @@ def _format_metric(value: Any) -> str:
 
 
 def _print_visibility_summary(summary: dict[str, Any], dataset_name: str) -> None:
-    """Print visibility precision/recall/F1 metrics when available."""
+    """Print visibility precision, recall, and F1-Score when available."""
     metrics = summary.get("visibility_metrics")
     if not metrics:
         return
@@ -55,7 +55,7 @@ def _print_visibility_summary(summary: dict[str, Any], dataset_name: str) -> Non
             f"[INFO] {dataset_name} visibility {display_name}: "
             f"precision={current.get('precision', 0.0):.4f} "
             f"recall={current.get('recall', 0.0):.4f} "
-            f"f1={current.get('f1', 0.0):.4f}"
+            f"F1-Score={current.get('f1', 0.0):.4f}"
         )
 
 

@@ -274,14 +274,14 @@ def _safe_divide(numerator: float, denominator: float) -> float:
 
 
 def _compute_f1(precision: float, recall: float) -> float:
-    """Compute F1 from precision and recall with zero-division protection."""
+    """Compute F1-Score from precision and recall with zero-division protection."""
     return _safe_divide(2.0 * precision * recall, precision + recall)
 
 
 def compute_visibility_classification_metrics(
     confusion_matrix: np.ndarray,
 ) -> dict[str, dict[str, float]]:
-    """Compute visibility precision, recall, and F1 from a binary confusion matrix."""
+    """Compute visibility precision, recall, and F1-Score from a confusion matrix."""
     true_negative, false_positive = confusion_matrix[0]
     false_negative, true_positive = confusion_matrix[1]
 

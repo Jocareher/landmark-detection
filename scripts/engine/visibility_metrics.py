@@ -6,7 +6,10 @@ from typing import Any
 
 import numpy as np
 
-from ..utils.visualization import get_landmark_region_definitions
+from ..utils.visualization import (
+    get_landmark_region_definitions,
+    save_figure_png_and_pdf,
+)
 
 
 def compute_binary_confusion_matrix(
@@ -124,9 +127,7 @@ def compute_visibility_analysis(
             "by_pose": {},
             "by_anatomical_region": {},
         }
-    if not np.isin(targets, [0, 1]).all() or not np.isin(
-        predictions, [0, 1]
-    ).all():
+    if not np.isin(targets, [0, 1]).all() or not np.isin(predictions, [0, 1]).all():
         raise ValueError("Visibility labels must contain only 0 and 1.")
 
     pose_display_labels = pose_display_labels or {}
@@ -227,7 +228,7 @@ def _visibility_csv_rows(analysis: dict[str, Any]) -> list[dict[str, Any]]:
                         "class": class_name,
                         "precision": metrics["precision"],
                         "recall": metrics["recall"],
-                        "f1": metrics["f1"],
+                        "f1_score": metrics["f1"],
                         "support": support,
                         "num_observations": group["num_observations"],
                         "predicted_invisible": group["predicted_invisible"],
@@ -257,7 +258,7 @@ def save_visibility_metrics_csv(
         "class",
         "precision",
         "recall",
-        "f1",
+        "f1_score",
         "support",
         "num_observations",
         "predicted_invisible",
@@ -305,13 +306,13 @@ def _plot_grouped_f1(
     axis.set_xticks(x_positions)
     axis.set_xticklabels(labels, rotation=35, ha="right")
     axis.set_ylim(0.0, 1.0)
-    axis.set_ylabel("F1")
+    axis.set_ylabel("F1-Score")
     axis.set_title(title, fontweight="bold")
     axis.grid(axis="y", alpha=0.25)
     axis.legend(ncol=3)
     figure.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    figure.savefig(output_path, dpi=180, bbox_inches="tight")
+    save_figure_png_and_pdf(figure, output_path, dpi=180)
     plt.close(figure)
 
 
@@ -320,36 +321,35 @@ def save_visibility_plots(
     analysis: dict[str, Any],
     include_babyland_region_protocols: bool = False,
 ) -> None:
-    """Save compact F1 comparisons by pose and anatomical region."""
+    """Save compact F1-Score comparisons by pose and anatomical region."""
     if not analysis.get("available"):
         return
     output_dir = Path(output_dir)
     _plot_grouped_f1(
         analysis["by_pose"],
-        output_dir / "visibility_f1_by_pose.png",
-        "Visibility classification F1 by pose",
+        output_dir / "visibility_f1_score_by_pose.png",
+        "Visibility classification F1-Score by pose",
     )
     region_groups = analysis["by_anatomical_region"]
     if include_babyland_region_protocols:
         _plot_grouped_f1(
             region_groups,
-            output_dir / "visibility_f1_by_anatomical_region_72.png",
-            "Visibility classification F1 by anatomical region (72 landmarks)",
+            output_dir / "visibility_f1_score_by_anatomical_region_72.png",
+            "Visibility classification F1-Score by anatomical region (72 landmarks)",
         )
         common68_groups = {
             key: group
             for key, group in region_groups.items()
-            if group.get("landmark_indices")
-            and max(group["landmark_indices"]) < 68
+            if group.get("landmark_indices") and max(group["landmark_indices"]) < 68
         }
         _plot_grouped_f1(
             common68_groups,
-            output_dir / "visibility_f1_by_anatomical_region_common68.png",
-            "Visibility classification F1 by anatomical region (common 68 landmarks)",
+            output_dir / "visibility_f1_score_by_anatomical_region_common68.png",
+            "Visibility classification F1-Score by anatomical region (common 68 landmarks)",
         )
     else:
         _plot_grouped_f1(
             region_groups,
-            output_dir / "visibility_f1_by_anatomical_region.png",
-            "Visibility classification F1 by anatomical region",
+            output_dir / "visibility_f1_score_by_anatomical_region.png",
+            "Visibility classification F1-Score by anatomical region",
         )

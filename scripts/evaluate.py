@@ -222,7 +222,7 @@ def build_model(config: ExperimentConfig) -> HRNetLandmarkVisibility:
 
 
 def print_visibility_metrics(summary: dict) -> None:
-    """Print visibility precision, recall, and F1 metrics."""
+    """Print visibility precision, recall, and F1-Score metrics."""
     metrics = summary.get("visibility_metrics", {})
     for label, display_name in (
         ("global", "Global"),
@@ -234,7 +234,7 @@ def print_visibility_metrics(summary: dict) -> None:
             f"[INFO] Visibility {display_name}: "
             f"precision={current.get('precision', 0.0):.4f} "
             f"recall={current.get('recall', 0.0):.4f} "
-            f"f1={current.get('f1', 0.0):.4f}"
+            f"F1-Score={current.get('f1', 0.0):.4f}"
         )
 
 

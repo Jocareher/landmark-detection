@@ -7,11 +7,60 @@ import numpy as np
 
 from scripts.engine.evaluate import save_metrics_summary_csv
 from scripts.engine.visibility_metrics import (
+    _plot_grouped_f1,
     compute_visibility_analysis,
     save_visibility_metrics_csv,
     save_visibility_plots,
     visibility_summary_fields,
 )
+
+
+class _FakeAxis:
+    def bar(self, *args, **kwargs):
+        return None
+
+    def set_xticks(self, *args, **kwargs):
+        return None
+
+    def set_xticklabels(self, *args, **kwargs):
+        return None
+
+    def set_ylim(self, *args, **kwargs):
+        return None
+
+    def set_ylabel(self, *args, **kwargs):
+        return None
+
+    def set_title(self, *args, **kwargs):
+        return None
+
+    def grid(self, *args, **kwargs):
+        return None
+
+    def legend(self, *args, **kwargs):
+        return None
+
+
+class _FakeFigure:
+    def __init__(self, saved_paths: list[Path]) -> None:
+        self.saved_paths = saved_paths
+
+    def tight_layout(self):
+        return None
+
+    def savefig(self, output_path, **kwargs):
+        self.saved_paths.append(Path(output_path))
+
+
+class _FakePyplot:
+    def __init__(self) -> None:
+        self.saved_paths: list[Path] = []
+
+    def subplots(self, **kwargs):
+        return _FakeFigure(self.saved_paths), _FakeAxis()
+
+    def close(self, figure):
+        return None
 
 
 def test_visibility_analysis_aggregates_general_pose_and_anatomy() -> None:
@@ -62,6 +111,8 @@ def test_visibility_csv_contains_all_scopes(tmp_path) -> None:
         "anatomical_region",
     }
     assert {row["class"] for row in rows} == {"global", "visible", "invisible"}
+    assert "f1_score" in rows[0]
+    assert "f1" not in rows[0]
 
 
 def test_unavailable_visibility_is_explicit_and_summary_safe(tmp_path) -> None:
@@ -130,10 +181,37 @@ def test_babyland_region_plots_split_72_and_common68(monkeypatch, tmp_path) -> N
     )
 
     calls_by_name = {path.name: groups for path, groups in calls}
-    assert "visibility_f1_by_anatomical_region_72.png" in calls_by_name
-    assert "visibility_f1_by_anatomical_region_common68.png" in calls_by_name
-    assert "under_lip" in calls_by_name["visibility_f1_by_anatomical_region_72.png"]
+    assert "visibility_f1_score_by_anatomical_region_72.png" in calls_by_name
+    assert "visibility_f1_score_by_anatomical_region_common68.png" in calls_by_name
+    assert "under_lip" in calls_by_name[
+        "visibility_f1_score_by_anatomical_region_72.png"
+    ]
     assert (
         "under_lip"
-        not in calls_by_name["visibility_f1_by_anatomical_region_common68.png"]
+        not in calls_by_name[
+            "visibility_f1_score_by_anatomical_region_common68.png"
+        ]
     )
+
+
+def test_f1_score_plot_is_saved_as_png_and_pdf(monkeypatch, tmp_path) -> None:
+    fake_pyplot = _FakePyplot()
+    monkeypatch.setattr("scripts.utils.visualization.plt", fake_pyplot)
+    groups = {
+        "frontal": {
+            "display_label": "Frontal",
+            "metrics": {
+                "global": {"f1": 0.8},
+                "visible": {"f1": 0.9},
+                "invisible": {"f1": 0.7},
+            },
+        }
+    }
+
+    _plot_grouped_f1(
+        groups,
+        tmp_path / "visibility_f1_score_by_pose.png",
+        "Visibility classification F1-Score by pose",
+    )
+
+    assert [path.suffix for path in fake_pyplot.saved_paths] == [".png", ".pdf"]
