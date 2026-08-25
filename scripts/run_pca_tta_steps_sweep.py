@@ -55,6 +55,54 @@ def parse_args() -> argparse.Namespace:
         help="Number of images with detailed TTA probe grids in every run.",
     )
     parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=None,
+        help="Override pca_tta_learning_rate from the base YAML for every run.",
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=None,
+        help="Override pca_tta_weight_decay from the base YAML for every run.",
+    )
+    parser.add_argument(
+        "--adam-beta1",
+        type=float,
+        default=None,
+        help="Override pca_tta_adam_beta1 from the base YAML for every run.",
+    )
+    parser.add_argument(
+        "--adam-beta2",
+        type=float,
+        default=None,
+        help="Override pca_tta_adam_beta2 from the base YAML for every run.",
+    )
+    parser.add_argument(
+        "--adam-epsilon",
+        type=float,
+        default=None,
+        help="Override pca_tta_adam_epsilon from the base YAML for every run.",
+    )
+    parser.add_argument(
+        "--max-gradient-norm",
+        type=float,
+        default=None,
+        help="Override TTA gradient clipping; zero disables clipping.",
+    )
+    parser.add_argument(
+        "--lr-scheduler",
+        choices=("constant", "cosine"),
+        default=None,
+        help="Override the per-image TTA learning-rate schedule.",
+    )
+    parser.add_argument(
+        "--min-learning-rate",
+        type=float,
+        default=None,
+        help="Override the final learning rate of the cosine schedule.",
+    )
+    parser.add_argument(
         "--output-root",
         type=Path,
         default=None,
@@ -101,6 +149,26 @@ def validate_sweep_arguments(
         raise ValueError("Monitor steps cannot be negative.")
     if args.probe_count < 0:
         raise ValueError("--probe-count cannot be negative.")
+    if getattr(args, "learning_rate", None) is not None and args.learning_rate <= 0:
+        raise ValueError("--learning-rate must be positive.")
+    if getattr(args, "weight_decay", None) is not None and args.weight_decay < 0:
+        raise ValueError("--weight-decay cannot be negative.")
+    for name in ("adam_beta1", "adam_beta2"):
+        value = getattr(args, name, None)
+        if value is not None and not 0 <= value < 1:
+            raise ValueError(f"--{name.replace('_', '-')} must be in [0, 1).")
+    if getattr(args, "adam_epsilon", None) is not None and args.adam_epsilon <= 0:
+        raise ValueError("--adam-epsilon must be positive.")
+    if (
+        getattr(args, "max_gradient_norm", None) is not None
+        and args.max_gradient_norm < 0
+    ):
+        raise ValueError("--max-gradient-norm cannot be negative.")
+    if (
+        getattr(args, "min_learning_rate", None) is not None
+        and args.min_learning_rate < 0
+    ):
+        raise ValueError("--min-learning-rate cannot be negative.")
     if base_arguments.get("checkpoint") is None:
         raise ValueError("The base evaluation YAML must define checkpoint.")
     if base_arguments.get("output_dir") is None and args.output_root is None:
@@ -116,10 +184,18 @@ def build_evaluation_command(
     steps: int,
     monitor_steps: Sequence[int],
     probe_count: int,
+    learning_rate: float | None = None,
+    weight_decay: float | None = None,
+    adam_beta1: float | None = None,
+    adam_beta2: float | None = None,
+    adam_epsilon: float | None = None,
+    max_gradient_norm: float | None = None,
+    lr_scheduler: str | None = None,
+    min_learning_rate: float | None = None,
 ) -> list[str]:
     """Build one independent evaluator command for a fixed episode length."""
     run_name = f"tta-{steps}"
-    return [
+    command = [
         sys.executable,
         str(Path(__file__).resolve().with_name("evaluate.py")),
         "--config",
@@ -136,6 +212,20 @@ def build_evaluation_command(
         "--wandb-run-name",
         run_name,
     ]
+    optional_overrides = (
+        ("--pca-tta-learning-rate", learning_rate),
+        ("--pca-tta-weight-decay", weight_decay),
+        ("--pca-tta-adam-beta1", adam_beta1),
+        ("--pca-tta-adam-beta2", adam_beta2),
+        ("--pca-tta-adam-epsilon", adam_epsilon),
+        ("--pca-tta-max-gradient-norm", max_gradient_norm),
+        ("--pca-tta-lr-scheduler", lr_scheduler),
+        ("--pca-tta-min-learning-rate", min_learning_rate),
+    )
+    for option, value in optional_overrides:
+        if value is not None:
+            command.extend((option, str(value)))
+    return command
 
 
 def collect_run_result(steps: int, run_output_dir: Path) -> dict[str, Any]:
@@ -409,6 +499,7 @@ def write_sweep_readme(
     steps: Sequence[int],
     monitor_steps: Sequence[int],
     probe_count: int,
+    optimizer_overrides: dict[str, Any] | None = None,
 ) -> None:
     """Document the fixed-step comparison and its output layout."""
     (output_root / "README.md").write_text(
@@ -419,6 +510,7 @@ def write_sweep_readme(
                 f"Evaluated episode lengths: `{list(steps)}`.",
                 f"Requested monitor steps: `{list(monitor_steps)}`.",
                 f"Probe images per run: `{probe_count}`.",
+                f"Optimizer overrides: `{optimizer_overrides or {}}`.",
                 "",
                 "Each `tta-<steps>/` directory is a complete independent evaluation. ",
                 "The normalizer is reset from the same source checkpoint for every image and run.",
@@ -447,11 +539,26 @@ def main() -> None:
         else Path(base_arguments["output_dir"])
     ).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
+    optimizer_overrides = {
+        name: getattr(args, name)
+        for name in (
+            "learning_rate",
+            "weight_decay",
+            "adam_beta1",
+            "adam_beta2",
+            "adam_epsilon",
+            "max_gradient_norm",
+            "lr_scheduler",
+            "min_learning_rate",
+        )
+        if getattr(args, name) is not None
+    }
     write_sweep_readme(
         output_root,
         steps=args.steps,
         monitor_steps=args.monitor_steps,
         probe_count=args.probe_count,
+        optimizer_overrides=optimizer_overrides,
     )
 
     result_rows: list[dict[str, Any]] = []
@@ -469,6 +576,14 @@ def main() -> None:
             steps=steps,
             monitor_steps=args.monitor_steps,
             probe_count=args.probe_count,
+            learning_rate=args.learning_rate,
+            weight_decay=args.weight_decay,
+            adam_beta1=args.adam_beta1,
+            adam_beta2=args.adam_beta2,
+            adam_epsilon=args.adam_epsilon,
+            max_gradient_norm=args.max_gradient_norm,
+            lr_scheduler=args.lr_scheduler,
+            min_learning_rate=args.min_learning_rate,
         )
         print(f"\n[SWEEP] Starting {run_name}")
         print(f"[SWEEP] Command: {shlex.join(command)}")

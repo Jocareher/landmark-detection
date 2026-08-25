@@ -232,6 +232,37 @@ def test_negative_pca_tta_steps_are_rejected() -> None:
         PCATTAConfig(steps=-1).validate()
 
 
+def test_cosine_schedule_and_gradient_clipping_are_recorded(tmp_path: Path) -> None:
+    model = NormalizedLandmarker(
+        landmarker=TinyLandmarker(),
+        normalizer=ResidualImageNormalizer(hidden_channels=4, num_layers=2),
+    )
+    adapter = PCAGuidedTTA(
+        model=model,
+        pca_prior=_pca_prior(),
+        device=torch.device("cpu"),
+        output_dir=tmp_path,
+        config=PCATTAConfig(
+            steps=2,
+            learning_rate=1e-3,
+            min_learning_rate=1e-5,
+            lr_scheduler="cosine",
+            max_gradient_norm=1e-6,
+            monitor_steps=(0, 2),
+            probe_count=0,
+        ),
+    )
+
+    adapter.adapt_batch(torch.randn(1, 3, 10, 10), ["scheduled"])
+
+    rows = adapter.trajectory_rows
+    assert [row["learning_rate"] for row in rows] == pytest.approx(
+        [1e-3, 5.05e-4, 1e-5]
+    )
+    assert rows[0]["gradient_norm"] <= 1.1e-6
+    assert np.isfinite(rows[0]["gradient_norm_before_clipping"])
+
+
 def test_enhanced_difference_view_exposes_small_nonzero_changes() -> None:
     difference = np.zeros((8, 8), dtype=np.float32)
     difference[2:6, 2:6] = 0.001

@@ -27,6 +27,13 @@ class PCATTAConfig:
 
     steps: int = 20
     learning_rate: float = 1e-4
+    weight_decay: float = 0.0
+    adam_beta1: float = 0.9
+    adam_beta2: float = 0.999
+    adam_epsilon: float = 1e-8
+    max_gradient_norm: float = 0.0
+    lr_scheduler: str = "constant"
+    min_learning_rate: float = 0.0
     monitor_steps: tuple[int, ...] = (0, 1, 5, 10, 20)
     probe_count: int = 4
     difference_display_max: float = 0.15
@@ -39,6 +46,24 @@ class PCATTAConfig:
             raise ValueError("PCA TTA adaptation steps cannot be negative.")
         if self.learning_rate <= 0:
             raise ValueError("PCA TTA learning_rate must be positive.")
+        if self.weight_decay < 0:
+            raise ValueError("PCA TTA weight_decay cannot be negative.")
+        if not 0 <= self.adam_beta1 < 1 or not 0 <= self.adam_beta2 < 1:
+            raise ValueError("PCA TTA Adam beta values must be in [0, 1).")
+        if self.adam_epsilon <= 0:
+            raise ValueError("PCA TTA Adam epsilon must be positive.")
+        if self.max_gradient_norm < 0:
+            raise ValueError("PCA TTA max_gradient_norm cannot be negative.")
+        if self.lr_scheduler not in {"constant", "cosine"}:
+            raise ValueError(
+                "PCA TTA lr_scheduler must be either 'constant' or 'cosine'."
+            )
+        if self.min_learning_rate < 0:
+            raise ValueError("PCA TTA min_learning_rate cannot be negative.")
+        if self.min_learning_rate > self.learning_rate:
+            raise ValueError(
+                "PCA TTA min_learning_rate cannot exceed learning_rate."
+            )
         if self.probe_count < 0:
             raise ValueError("PCA TTA probe_count cannot be negative.")
         if self.difference_display_max <= 0:
@@ -153,8 +178,17 @@ class PCAGuidedTTA:
         optimizer = torch.optim.Adam(
             self.model.normalizer.parameters(),
             lr=self.config.learning_rate,
-            weight_decay=0.0,
+            betas=(self.config.adam_beta1, self.config.adam_beta2),
+            eps=self.config.adam_epsilon,
+            weight_decay=self.config.weight_decay,
         )
+        scheduler = None
+        if self.config.lr_scheduler == "cosine" and self.config.steps > 0:
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=self.config.steps,
+                eta_min=self.config.min_learning_rate,
+            )
         episode_number = self.processed_samples + 1
         print(
             f"[PCA-TTA][episode={episode_number:06d}] sample={sample_id} | "
@@ -204,7 +238,9 @@ class PCAGuidedTTA:
                         reconstruction_loss.detach().item()
                     ),
                     "total_tta_loss": float(reconstruction_loss.detach().item()),
+                    "learning_rate": float(optimizer.param_groups[0]["lr"]),
                     "gradient_norm": math.nan,
+                    "gradient_norm_before_clipping": math.nan,
                     "mean_landmark_drift_px": float(drift.mean().item()),
                     "max_landmark_drift_px": float(drift.max().item()),
                     "mean_absolute_normalizer_change": float(image_change.item()),
@@ -230,6 +266,21 @@ class PCAGuidedTTA:
 
                 optimizer.zero_grad(set_to_none=True)
                 reconstruction_loss.backward()
+                gradient_norm_before_clipping = _gradient_norm(
+                    self.model.normalizer.parameters()
+                )
+                sample_rows[-1]["gradient_norm_before_clipping"] = (
+                    gradient_norm_before_clipping
+                )
+                if not math.isfinite(gradient_norm_before_clipping):
+                    raise FloatingPointError(
+                        f"Non-finite normalizer gradient at step {step}."
+                    )
+                if self.config.max_gradient_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.normalizer.parameters(),
+                        max_norm=self.config.max_gradient_norm,
+                    )
                 gradient_norm = _gradient_norm(self.model.normalizer.parameters())
                 sample_rows[-1]["gradient_norm"] = gradient_norm
                 if not math.isfinite(gradient_norm):
@@ -237,6 +288,8 @@ class PCAGuidedTTA:
                         f"Non-finite normalizer gradient at step {step}."
                     )
                 optimizer.step()
+                if scheduler is not None:
+                    scheduler.step()
         except Exception as error:
             failed = True
             failure_message = str(error)
@@ -265,7 +318,9 @@ class PCAGuidedTTA:
                         "step": 0,
                         "pca_reconstruction_loss": math.nan,
                         "total_tta_loss": math.nan,
+                        "learning_rate": self.config.learning_rate,
                         "gradient_norm": math.nan,
+                        "gradient_norm_before_clipping": math.nan,
                         "mean_landmark_drift_px": 0.0,
                         "max_landmark_drift_px": 0.0,
                         "mean_absolute_normalizer_change": math.nan,
@@ -494,6 +549,12 @@ class PCAGuidedTTA:
             "loss": "pca_reconstruction_loss_only",
             "steps": self.config.steps,
             "learning_rate": self.config.learning_rate,
+            "weight_decay": self.config.weight_decay,
+            "adam_betas": [self.config.adam_beta1, self.config.adam_beta2],
+            "adam_epsilon": self.config.adam_epsilon,
+            "max_gradient_norm": self.config.max_gradient_norm,
+            "lr_scheduler": self.config.lr_scheduler,
+            "min_learning_rate": self.config.min_learning_rate,
             "processed_samples": self.processed_samples,
             "failed_samples": self.failed_samples,
             "trajectory_csv": str(trajectory_path),
@@ -1375,6 +1436,12 @@ loss is used.
 
 - Adaptation steps per image: `{config.steps}`
 - Adam learning rate: `{config.learning_rate}`
+- Adam weight decay: `{config.weight_decay}`
+- Adam betas: `({config.adam_beta1}, {config.adam_beta2})`
+- Adam epsilon: `{config.adam_epsilon}`
+- LR scheduler: `{config.lr_scheduler}`
+- Minimum learning rate: `{config.min_learning_rate}`
+- Maximum gradient norm: `{config.max_gradient_norm}` (`0` disables clipping)
 - Source normalizer and optimizer state are reset before every image.
 - `trajectories.csv` contains one row per image and adaptation step.
 - `image_summary.csv` contains one row per image.

@@ -52,6 +52,27 @@ def test_command_sets_independent_output_and_wandb_name(tmp_path: Path) -> None:
     )
 
 
+def test_command_forwards_optional_optimizer_overrides(tmp_path: Path) -> None:
+    command = sweep.build_evaluation_command(
+        config_path=tmp_path / "base.yaml",
+        run_output_dir=tmp_path / "runs" / "tta-1250",
+        steps=1250,
+        monitor_steps=(0, 1250),
+        probe_count=2,
+        learning_rate=1e-3,
+        weight_decay=1e-5,
+        max_gradient_norm=1.0,
+        lr_scheduler="cosine",
+        min_learning_rate=1e-5,
+    )
+
+    assert command[command.index("--pca-tta-learning-rate") + 1] == "0.001"
+    assert command[command.index("--pca-tta-weight-decay") + 1] == "1e-05"
+    assert command[command.index("--pca-tta-max-gradient-norm") + 1] == "1.0"
+    assert command[command.index("--pca-tta-lr-scheduler") + 1] == "cosine"
+    assert command[command.index("--pca-tta-min-learning-rate") + 1] == "1e-05"
+
+
 def test_collect_run_result_uses_gt_valid_official_metrics(tmp_path: Path) -> None:
     run_dir = tmp_path / "tta-20"
     run_dir.mkdir()

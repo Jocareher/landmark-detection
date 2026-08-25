@@ -78,6 +78,14 @@ def test_pca_tta_cli_options_are_resolved(monkeypatch) -> None:
             "7",
             "--pca-tta-learning-rate",
             "0.00002",
+            "--pca-tta-weight-decay",
+            "0.0001",
+            "--pca-tta-max-gradient-norm",
+            "1.0",
+            "--pca-tta-lr-scheduler",
+            "cosine",
+            "--pca-tta-min-learning-rate",
+            "0.000001",
             "--pca-tta-monitor-steps",
             "0",
             "1",
@@ -92,6 +100,10 @@ def test_pca_tta_cli_options_are_resolved(monkeypatch) -> None:
     assert config.pca_prior_path == Path("prior.pt")
     assert config.pca_tta_steps == 7
     assert config.pca_tta_learning_rate == 0.00002
+    assert config.pca_tta_weight_decay == 0.0001
+    assert config.pca_tta_max_gradient_norm == 1.0
+    assert config.pca_tta_lr_scheduler == "cosine"
+    assert config.pca_tta_min_learning_rate == 0.000001
     assert config.pca_tta_monitor_steps == (0, 1, 7)
 
 

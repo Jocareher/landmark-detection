@@ -235,6 +235,48 @@ def parse_args() -> argparse.Namespace:
         help="Adam learning rate used for the normalizer during each TTA episode.",
     )
     parser.add_argument(
+        "--pca-tta-weight-decay",
+        type=float,
+        default=defaults.pca_tta_weight_decay,
+        help="Adam weight decay used during each independent TTA episode.",
+    )
+    parser.add_argument(
+        "--pca-tta-adam-beta1",
+        type=float,
+        default=defaults.pca_tta_adam_beta1,
+        help="First Adam momentum coefficient used during TTA.",
+    )
+    parser.add_argument(
+        "--pca-tta-adam-beta2",
+        type=float,
+        default=defaults.pca_tta_adam_beta2,
+        help="Second Adam momentum coefficient used during TTA.",
+    )
+    parser.add_argument(
+        "--pca-tta-adam-epsilon",
+        type=float,
+        default=defaults.pca_tta_adam_epsilon,
+        help="Numerical stability epsilon used by the TTA Adam optimizer.",
+    )
+    parser.add_argument(
+        "--pca-tta-max-gradient-norm",
+        type=float,
+        default=defaults.pca_tta_max_gradient_norm,
+        help="Clip the normalizer gradient to this norm; zero disables clipping.",
+    )
+    parser.add_argument(
+        "--pca-tta-lr-scheduler",
+        choices=("constant", "cosine"),
+        default=defaults.pca_tta_lr_scheduler,
+        help="Per-image TTA learning-rate schedule.",
+    )
+    parser.add_argument(
+        "--pca-tta-min-learning-rate",
+        type=float,
+        default=defaults.pca_tta_min_learning_rate,
+        help="Final learning rate for the optional cosine TTA scheduler.",
+    )
+    parser.add_argument(
         "--pca-tta-monitor-steps",
         type=int,
         nargs="+",
@@ -377,6 +419,13 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.pca_prior_path = args.pca_prior_path
     config.pca_tta_steps = args.pca_tta_steps
     config.pca_tta_learning_rate = args.pca_tta_learning_rate
+    config.pca_tta_weight_decay = args.pca_tta_weight_decay
+    config.pca_tta_adam_beta1 = args.pca_tta_adam_beta1
+    config.pca_tta_adam_beta2 = args.pca_tta_adam_beta2
+    config.pca_tta_adam_epsilon = args.pca_tta_adam_epsilon
+    config.pca_tta_max_gradient_norm = args.pca_tta_max_gradient_norm
+    config.pca_tta_lr_scheduler = args.pca_tta_lr_scheduler
+    config.pca_tta_min_learning_rate = args.pca_tta_min_learning_rate
     config.pca_tta_monitor_steps = tuple(args.pca_tta_monitor_steps)
     config.pca_tta_probe_count = args.pca_tta_probe_count
     config.pca_tta_difference_display_max = args.pca_tta_difference_display_max
@@ -532,6 +581,13 @@ def main() -> None:
             config=PCATTAConfig(
                 steps=config.pca_tta_steps,
                 learning_rate=config.pca_tta_learning_rate,
+                weight_decay=config.pca_tta_weight_decay,
+                adam_beta1=config.pca_tta_adam_beta1,
+                adam_beta2=config.pca_tta_adam_beta2,
+                adam_epsilon=config.pca_tta_adam_epsilon,
+                max_gradient_norm=config.pca_tta_max_gradient_norm,
+                lr_scheduler=config.pca_tta_lr_scheduler,
+                min_learning_rate=config.pca_tta_min_learning_rate,
                 monitor_steps=tuple(config.pca_tta_monitor_steps),
                 probe_count=config.pca_tta_probe_count,
                 difference_display_max=config.pca_tta_difference_display_max,
@@ -544,6 +600,8 @@ def main() -> None:
             "[INFO] PCA-guided episodic TTA enabled | "
             f"steps={config.pca_tta_steps} "
             f"lr={config.pca_tta_learning_rate:g} "
+            f"scheduler={config.pca_tta_lr_scheduler} "
+            f"grad_clip={config.pca_tta_max_gradient_norm:g} "
             f"prior={config.pca_prior_path}"
         )
 

@@ -153,7 +153,14 @@ PCA_PRIOR_PATH = None
 LAMBDA_PCA_PROJECTION = 0.0
 PCA_TTA_ENABLED = False
 PCA_TTA_STEPS = 20
-PCA_TTA_LEARNING_RATE = 1e-4
+PCA_TTA_LEARNING_RATE = LEARNING_RATE
+PCA_TTA_WEIGHT_DECAY = WEIGHT_DECAY
+PCA_TTA_ADAM_BETA1 = 0.9
+PCA_TTA_ADAM_BETA2 = 0.999
+PCA_TTA_ADAM_EPSILON = 1e-8
+PCA_TTA_MAX_GRADIENT_NORM = 0.0
+PCA_TTA_LR_SCHEDULER = "constant"
+PCA_TTA_MIN_LEARNING_RATE = 0.0
 PCA_TTA_MONITOR_STEPS = (0, 1, 5, 10, 20)
 PCA_TTA_PROBE_COUNT = 4
 PCA_TTA_DIFFERENCE_DISPLAY_MAX = 0.15
@@ -322,6 +329,13 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "pca_tta_enabled": PCA_TTA_ENABLED,
     "pca_tta_steps": PCA_TTA_STEPS,
     "pca_tta_learning_rate": PCA_TTA_LEARNING_RATE,
+    "pca_tta_weight_decay": PCA_TTA_WEIGHT_DECAY,
+    "pca_tta_adam_beta1": PCA_TTA_ADAM_BETA1,
+    "pca_tta_adam_beta2": PCA_TTA_ADAM_BETA2,
+    "pca_tta_adam_epsilon": PCA_TTA_ADAM_EPSILON,
+    "pca_tta_max_gradient_norm": PCA_TTA_MAX_GRADIENT_NORM,
+    "pca_tta_lr_scheduler": PCA_TTA_LR_SCHEDULER,
+    "pca_tta_min_learning_rate": PCA_TTA_MIN_LEARNING_RATE,
     "pca_tta_monitor_steps": PCA_TTA_MONITOR_STEPS,
     "pca_tta_probe_count": PCA_TTA_PROBE_COUNT,
     "pca_tta_difference_display_max": PCA_TTA_DIFFERENCE_DISPLAY_MAX,
