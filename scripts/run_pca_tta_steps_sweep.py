@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -112,6 +113,14 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--run-suffix",
+        default="",
+        help=(
+            "Suffix appended to every local run directory and W&B run name. "
+            "For example, 'lr-1e-3' produces tta-1250-lr-1e-3."
+        ),
+    )
+    parser.add_argument(
         "--continue-on-error",
         action="store_true",
         help="Continue with later step counts if one evaluation fails.",
@@ -149,6 +158,7 @@ def validate_sweep_arguments(
         raise ValueError("Monitor steps cannot be negative.")
     if args.probe_count < 0:
         raise ValueError("--probe-count cannot be negative.")
+    normalize_run_suffix(getattr(args, "run_suffix", ""))
     if getattr(args, "learning_rate", None) is not None and args.learning_rate <= 0:
         raise ValueError("--learning-rate must be positive.")
     if getattr(args, "weight_decay", None) is not None and args.weight_decay < 0:
@@ -192,9 +202,10 @@ def build_evaluation_command(
     max_gradient_norm: float | None = None,
     lr_scheduler: str | None = None,
     min_learning_rate: float | None = None,
+    run_suffix: str = "",
 ) -> list[str]:
     """Build one independent evaluator command for a fixed episode length."""
-    run_name = f"tta-{steps}"
+    run_name = build_run_name(steps, run_suffix)
     command = [
         sys.executable,
         str(Path(__file__).resolve().with_name("evaluate.py")),
@@ -228,7 +239,30 @@ def build_evaluation_command(
     return command
 
 
-def collect_run_result(steps: int, run_output_dir: Path) -> dict[str, Any]:
+def normalize_run_suffix(value: str | None) -> str:
+    """Return one path-safe suffix without leading separators."""
+    suffix = str(value or "").strip().lstrip("-_")
+    if not suffix:
+        return ""
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", suffix) is None:
+        raise ValueError(
+            "--run-suffix may contain only letters, digits, dots, underscores, "
+            "and hyphens, and must start with a letter or digit."
+        )
+    return suffix
+
+
+def build_run_name(steps: int, run_suffix: str = "") -> str:
+    """Build the shared local-directory and W&B name for one run."""
+    suffix = normalize_run_suffix(run_suffix)
+    return f"tta-{steps}" if not suffix else f"tta-{steps}-{suffix}"
+
+
+def collect_run_result(
+    steps: int,
+    run_output_dir: Path,
+    run_suffix: str = "",
+) -> dict[str, Any]:
     """Collect official final metrics from one completed fixed-step run."""
     summary_path = run_output_dir / "summary.json"
     if not summary_path.exists():
@@ -240,7 +274,7 @@ def collect_run_result(steps: int, run_output_dir: Path) -> dict[str, Any]:
 
     row = {
         "steps": int(steps),
-        "run_name": f"tta-{steps}",
+        "run_name": build_run_name(steps, run_suffix),
         "output_dir": str(run_output_dir),
         "num_samples": metrics.get("num_samples"),
         "mean_nme": _first_available(
@@ -276,6 +310,7 @@ def collect_run_result(steps: int, run_output_dir: Path) -> dict[str, Any]:
 def collect_orientation_results(
     steps: int,
     run_output_dir: Path,
+    run_suffix: str = "",
 ) -> list[dict[str, Any]]:
     """Collect orientation-specific NME and Hausdorff from one run."""
     summary_path = run_output_dir / "summary.json"
@@ -290,7 +325,7 @@ def collect_orientation_results(
         rows.append(
             {
                 "steps": int(steps),
-                "run_name": f"tta-{steps}",
+                "run_name": build_run_name(steps, run_suffix),
                 "orientation": orientation,
                 "num_samples": orientation_counts.get(orientation),
                 "mean_nme": _first_available(
@@ -500,9 +535,12 @@ def write_sweep_readme(
     monitor_steps: Sequence[int],
     probe_count: int,
     optimizer_overrides: dict[str, Any] | None = None,
+    run_suffix: str = "",
 ) -> None:
     """Document the fixed-step comparison and its output layout."""
-    (output_root / "README.md").write_text(
+    suffix = normalize_run_suffix(run_suffix)
+    artifact_suffix = f"_{suffix}" if suffix else ""
+    (output_root / f"README{artifact_suffix}.md").write_text(
         "\n".join(
             [
                 "# PCA-TTA fixed-step sweep",
@@ -511,21 +549,27 @@ def write_sweep_readme(
                 f"Requested monitor steps: `{list(monitor_steps)}`.",
                 f"Probe images per run: `{probe_count}`.",
                 f"Optimizer overrides: `{optimizer_overrides or {}}`.",
+                f"Run suffix: `{suffix or '(none)'}`.",
                 "",
-                "Each `tta-<steps>/` directory is a complete independent evaluation. ",
+                "Each `tta-<steps>[-<suffix>]/` directory is a complete independent evaluation. ",
                 "The normalizer is reset from the same source checkpoint for every image and run.",
                 "",
-                "`sweep_results.csv` compares final NME and Hausdorff at each fixed ",
+                f"`sweep_results{artifact_suffix}.csv` compares final NME and Hausdorff at each fixed ",
                 "episode length. No run is selected using PCA reconstruction loss, ",
                 "and no automatic best-step selection is performed.",
                 "",
-                "`sweep_orientation_results.csv` contains the same comparison by head orientation.",
-                "The `figures/` directory contains meeting-ready plots derived from these tables.",
+                f"`sweep_orientation_results{artifact_suffix}.csv` contains the same comparison by head orientation.",
+                f"The `{figures_dir_name(suffix)}` directory contains meeting-ready plots derived from these tables.",
                 "",
             ]
         ),
         encoding="utf-8",
     )
+
+
+def figures_dir_name(run_suffix: str) -> str:
+    """Describe the suffix-specific figure directory in generated documentation."""
+    return "figures/" if not run_suffix else f"figures/{run_suffix}/"
 
 
 def main() -> None:
@@ -539,6 +583,15 @@ def main() -> None:
         else Path(base_arguments["output_dir"])
     ).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
+    run_suffix = normalize_run_suffix(args.run_suffix)
+    artifact_suffix = f"_{run_suffix}" if run_suffix else ""
+    results_path = output_root / f"sweep_results{artifact_suffix}.csv"
+    orientation_results_path = (
+        output_root / f"sweep_orientation_results{artifact_suffix}.csv"
+    )
+    figures_dir = output_root / "figures"
+    if run_suffix:
+        figures_dir = figures_dir / run_suffix
     optimizer_overrides = {
         name: getattr(args, name)
         for name in (
@@ -559,16 +612,18 @@ def main() -> None:
         monitor_steps=args.monitor_steps,
         probe_count=args.probe_count,
         optimizer_overrides=optimizer_overrides,
+        run_suffix=run_suffix,
     )
 
     result_rows: list[dict[str, Any]] = []
     orientation_rows: list[dict[str, Any]] = []
     print(f"[SWEEP] Output root: {output_root}")
     print(f"[SWEEP] Fixed episode lengths: {args.steps}")
+    print(f"[SWEEP] Run suffix: {run_suffix or '(none)'}")
     print("[SWEEP] No PCA-loss-based best-step selection will be performed.")
 
     for steps in args.steps:
-        run_name = f"tta-{steps}"
+        run_name = build_run_name(steps, run_suffix)
         run_output_dir = output_root / run_name
         command = build_evaluation_command(
             config_path=args.config,
@@ -584,6 +639,7 @@ def main() -> None:
             max_gradient_norm=args.max_gradient_norm,
             lr_scheduler=args.lr_scheduler,
             min_learning_rate=args.min_learning_rate,
+            run_suffix=run_suffix,
         )
         print(f"\n[SWEEP] Starting {run_name}")
         print(f"[SWEEP] Command: {shlex.join(command)}")
@@ -591,8 +647,16 @@ def main() -> None:
             continue
         try:
             subprocess.run(command, check=True)
-            result_rows.append(collect_run_result(steps, run_output_dir))
-            orientation_rows.extend(collect_orientation_results(steps, run_output_dir))
+            result_rows.append(
+                collect_run_result(steps, run_output_dir, run_suffix=run_suffix)
+            )
+            orientation_rows.extend(
+                collect_orientation_results(
+                    steps,
+                    run_output_dir,
+                    run_suffix=run_suffix,
+                )
+            )
             print(f"[SWEEP] Completed {run_name}")
         except (subprocess.CalledProcessError, OSError, ValueError) as error:
             result_rows.append(
@@ -605,26 +669,26 @@ def main() -> None:
                 }
             )
             print(f"[SWEEP] Failed {run_name}: {error}", file=sys.stderr)
-            write_csv(output_root / "sweep_results.csv", result_rows)
+            write_csv(results_path, result_rows)
             if not args.continue_on_error:
                 raise
 
-        write_csv(output_root / "sweep_results.csv", result_rows)
+        write_csv(results_path, result_rows)
         write_csv(
-            output_root / "sweep_orientation_results.csv",
+            orientation_results_path,
             orientation_rows,
         )
         save_comparison_plots(
             result_rows,
             orientation_rows,
-            output_root / "figures",
+            figures_dir,
         )
 
     if args.dry_run:
         print("\n[SWEEP] Dry run complete; no evaluation was executed.")
         return
-    print(f"\n[SWEEP] Finished. Comparison: {output_root / 'sweep_results.csv'}")
-    print(f"[SWEEP] Figures: {output_root / 'figures'}")
+    print(f"\n[SWEEP] Finished. Comparison: {results_path}")
+    print(f"[SWEEP] Figures: {figures_dir}")
 
 
 if __name__ == "__main__":

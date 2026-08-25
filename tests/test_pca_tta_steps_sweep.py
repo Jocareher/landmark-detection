@@ -64,6 +64,7 @@ def test_command_forwards_optional_optimizer_overrides(tmp_path: Path) -> None:
         max_gradient_norm=1.0,
         lr_scheduler="cosine",
         min_learning_rate=1e-5,
+        run_suffix="lr-1e-3",
     )
 
     assert command[command.index("--pca-tta-learning-rate") + 1] == "0.001"
@@ -71,6 +72,15 @@ def test_command_forwards_optional_optimizer_overrides(tmp_path: Path) -> None:
     assert command[command.index("--pca-tta-max-gradient-norm") + 1] == "1.0"
     assert command[command.index("--pca-tta-lr-scheduler") + 1] == "cosine"
     assert command[command.index("--pca-tta-min-learning-rate") + 1] == "1e-05"
+    assert command[command.index("--wandb-run-name") + 1] == "tta-1250-lr-1e-3"
+
+
+def test_run_suffix_is_shared_by_directory_and_wandb_naming() -> None:
+    assert sweep.build_run_name(1250, "lr-1e-3") == "tta-1250-lr-1e-3"
+    assert sweep.build_run_name(1250, "-lr-1e-3") == "tta-1250-lr-1e-3"
+
+    with pytest.raises(ValueError, match="run-suffix"):
+        sweep.build_run_name(1250, "lr/1e-3")
 
 
 def test_collect_run_result_uses_gt_valid_official_metrics(tmp_path: Path) -> None:
