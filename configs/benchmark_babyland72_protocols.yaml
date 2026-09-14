@@ -1,0 +1,87 @@
+# Example multi-protocol benchmark configuration for BabyLand-72.
+
+dataset:
+  name: "BabyLand-72"
+  dataset_type: "babyland72"
+  output_dir: "/Users/jocareher/Documents/babyland72_benchmark_output"
+  total_images: 622
+  primary_model: "BabyLand-72"
+  reference_models: ["infanface", "vggheads", "dslpt", "mediapipe", "dlib"]
+  model_order: ["BabyLand-72", "infanface", "vggheads", "dslpt", "mediapipe", "dlib"]
+  model_display_names:
+    "BabyLand-72": "BabyLand-72"
+    "infanface": "InfAnFace"
+    "vggheads": "VGGHeads"
+    "dslpt": "DSLPT"
+    "mediapipe": "MediaPipe"
+    "dlib": "Dlib"
+  orientation_order: ["left", "quarter_left", "frontal", "quarter_right", "right"]
+  include_unknown_orientations: false
+  landmark_count: 72
+  landmark_index_base: "auto"
+  image_id_strip_regexes: ["__det_\\d+$"]
+  orientation_mapping:
+    0: "left"
+    1: "quarter_left"
+    2: "frontal"
+    3: "quarter_right"
+    4: "right"
+
+evaluation_protocols:
+  - name: "main_comparison"
+    display_name: "Main SOTA comparison"
+    description: "Uses GT-valid metrics for visibility-aware models and standard valid-landmark metrics for models without predicted visibility."
+  - name: "visibility_protocol_analysis"
+    display_name: "Visibility protocol analysis"
+    description: "Compares visibility_intersection and gt_valid for models that explicitly predict visibility."
+
+metrics:
+  - name: "point_to_point"
+    display_name: "point-to-point"
+  - name: "point_to_line"
+    display_name: "point-to-line"
+  - name: "hausdorff"
+    display_name: "Hausdorff"
+
+models:
+  - name: "dlib"
+    predicts_visibility: false
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dlib/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dlib/per_image_per_landmark_nme.csv"
+    landmark_format: "68"
+  - name: "infanface"
+    predicts_visibility: false
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/infanface/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/infanface/per_image_per_landmark_nme.csv"
+    landmark_format: "68"
+  - name: "mediapipe"
+    predicts_visibility: false
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/mediapipe/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/mediapipe/per_image_per_landmark_nme.csv"
+    landmark_format: "68"
+  - name: "vggheads"
+    predicts_visibility: false
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/vggheads/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/vggheads/per_image_per_landmark_nme.csv"
+    landmark_format: "68"
+  - name: "dslpt"
+    predicts_visibility: false
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dslpt/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/dslpt/per_image_per_landmark_nme.csv"
+    landmark_format: "68"
+  - name: "BabyLand-72"
+    predicts_visibility: true
+    per_image_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/babyland72/per_image_nme.csv"
+    per_landmark_csv: "/Users/jocareher/Documents/sota_lmks_eval/babyland72/babyland72/per_image_per_landmark_nme.csv"
+    landmark_format: "72"
+
+plotting:
+  generate_log_scale_variants: true
+  log_scale_epsilon: 1.0e-8
+  ced_zoom_max_nme: 0.40
+  save_pdf: True 
+  plot_dpi: 300
+
+drop_invalid_nme: false
+bootstrap_iterations: 2000
+random_seed: 12345

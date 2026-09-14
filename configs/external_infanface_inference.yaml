@@ -1,0 +1,31 @@
+# Example config for exporting predictions from the external InfAnFace HRNet model.
+
+external_model:
+  name: "infanface_hrnet_r90jt"
+  external_repo_root: "external_repos/Infant-Facial-Landmark-Detection-and-Tracking"
+  external_config_path: "experiments/300w/hrnet-r90jt.yaml"
+  checkpoint_path: "infantface_pretrained/hrnet-r90jt.pth"
+
+data:
+  crop_images_dir: "/path/to/detector_export/images"
+  crop_metadata_dir: "/path/to/detector_export/metadata"
+  original_images_dir: "/path/to/original_images"
+
+output:
+  output_dir: "/path/to/benchmark_predictions/infanface_hrnet_r90jt/babyland72"
+
+runtime:
+  device: "auto"
+  batch_size: 8
+  num_workers: 0
+  # The adapter treats each detector crop as the external HRNet face box.
+  # Use 1.25 only if you intentionally want the extra context used by the
+  # external repo's CSV-driven training/evaluation pipeline.
+  crop_scale_multiplier: 1.0
+
+visualization:
+  save_overlays: true
+  show_indices: false
+  point_radius: 4
+  line_width: 2
+  line_color: "#00FF00"

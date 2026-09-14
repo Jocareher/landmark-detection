@@ -1,0 +1,19 @@
+path: /home/jocareher/Documents/synthetic_lmks_vis_dataset
+
+train: train/images
+val: val/images
+test: test/images
+
+# Keypoints
+kpt_shape: [72, 3] # number of keypoints, number of dims (2 for x,y or 3 for x,y,visible)
+#flip_idx: [3, 4, 2, 0, 1, 9, 8, 7, 6, 5, 10, 15, 14, 13, 12, 11, 16, 17, 18, 21, 22, 19, 20, 35, 34, 33, 32, 31, 30, 29, 28, 27, 26, 25, 24, 23, 45, 44, 43, 42, 41, 40, 39, 38, 37, 36, 46, 47, 52, 53, 54, 55, 48, 49, 50, 51, 57, 56, 61, 60, 59, 58, 66, 65, 64, 63, 62, 69, 68, 67, 71, 70]
+
+
+
+# Classes dictionary
+names:
+    0: quarter_left
+    1: quarter_right
+    2: frontal
+    3: left
+    4: right
