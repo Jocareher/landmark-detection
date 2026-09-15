@@ -435,7 +435,8 @@ def compute_pca_regularization_terms(
     q = D_M^2 / K uses retained PCA variances with a relative eigenvalue floor.
     The Mahalanobis loss is relu(q / limit - 1)^2, so its gradient is zero
     throughout the accepted region. The subspace term is squared residual
-    length divided by total retained variance; it does not shrink coefficients.
+    length divided by 2N coordinates (144 for 72 landmarks), matching the
+    original projection MSE; it does not shrink coefficients.
     The limit is a tunable tolerance, not a calibrated probability percentile.
     """
     if not math.isfinite(mahalanobis_limit) or mahalanobis_limit <= 0:
@@ -504,7 +505,7 @@ def compute_pca_regularization_terms(
 
     residuals_tensor = torch.stack(residuals)
     distances_tensor = torch.stack(distances)
-    subspace_loss = (residuals_tensor / safe_variances.sum()).mean()
+    subspace_loss = residuals_tensor.mean() / (2 * expected_landmarks)
     mahalanobis_loss = F.relu(distances_tensor / mahalanobis_limit - 1).square().mean()
     return {
         "pca_loss": subspace_loss + mahalanobis_loss,
@@ -512,7 +513,7 @@ def compute_pca_regularization_terms(
         "pca_mahalanobis_loss": mahalanobis_loss,
         "pca_mahalanobis_sq_per_component": distances_tensor.mean(),
         "pca_outside_fraction": (distances_tensor > mahalanobis_limit).float().mean(),
-        "pca_projection_mse": residuals_tensor.mean() / (2 * expected_landmarks),
+        "pca_projection_mse": subspace_loss,
     }
 
 

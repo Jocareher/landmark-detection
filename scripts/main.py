@@ -143,7 +143,13 @@ def parse_args() -> argparse.Namespace:
         "--lambda-pca-projection",
         type=float,
         default=defaults.lambda_pca_projection,
-        help="Weight of global PCA subspace and bounded Mahalanobis regularization.",
+        help="Weight of PCA projection MSE, normalized by 2N coordinates (144 for 72 landmarks).",
+    )
+    parser.add_argument(
+        "--lambda-pca-mahalanobis",
+        type=float,
+        default=defaults.lambda_pca_mahalanobis,
+        help="Independent weight of the bounded Mahalanobis penalty; zero disables its contribution.",
     )
     parser.add_argument(
         "--pca-mahalanobis-limit",
@@ -431,6 +437,7 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.wasserstein_epsilon = args.wasserstein_epsilon
     config.pca_prior_path = args.pca_prior_path
     config.lambda_pca_projection = args.lambda_pca_projection
+    config.lambda_pca_mahalanobis = args.lambda_pca_mahalanobis
     config.pca_mahalanobis_limit = args.pca_mahalanobis_limit
     config.pca_variance_floor = args.pca_variance_floor
     config.seed = args.seed
@@ -674,6 +681,7 @@ def main() -> None:
             f"landmark_loss={config.landmark_loss} "
             f"coordinate_decoder={config.coordinate_decoder} "
             f"lambda_pca_projection={config.lambda_pca_projection} "
+            f"lambda_pca_mahalanobis={config.lambda_pca_mahalanobis} "
             f"pca_mahalanobis_limit={config.pca_mahalanobis_limit} "
             f"pca_variance_floor={config.pca_variance_floor} "
             f"pca_prior_path={config.pca_prior_path} "
@@ -707,6 +715,7 @@ def main() -> None:
                 lambda_lmk_vis=config.lambda_lmk_vis,
                 lambda_lmk_full=config.lambda_lmk_full,
                 lambda_pca_projection=config.lambda_pca_projection,
+                lambda_pca_mahalanobis=config.lambda_pca_mahalanobis,
                 pca_mahalanobis_limit=config.pca_mahalanobis_limit,
                 pca_variance_floor=config.pca_variance_floor,
                 pca_prior_path=config.pca_prior_path,
@@ -730,6 +739,7 @@ def main() -> None:
             lambda_lmk_vis=config.lambda_lmk_vis,
             lambda_lmk_full=config.lambda_lmk_full,
             lambda_pca_projection=config.lambda_pca_projection,
+            lambda_pca_mahalanobis=config.lambda_pca_mahalanobis,
             pca_mahalanobis_limit=config.pca_mahalanobis_limit,
             pca_variance_floor=config.pca_variance_floor,
             pca_prior_path=config.pca_prior_path,

@@ -56,9 +56,9 @@ b = (s - mu) @ U.T
 v_safe[j] = max(v[j], pca_variance_floor * max(v))
 q = mean(b[j]^2 / v_safe[j])                 # squared Mahalanobis distance / K
 L_mahalanobis = max(q / pca_mahalanobis_limit - 1, 0)^2
-L_subspace = sum((s - (mu + b @ U))^2) / sum(v_safe)
-L_pca = L_subspace + L_mahalanobis
-L_total = L_supervised + lambda_pca_projection * L_pca
+L_subspace = sum((s - (mu + b @ U))^2) / (2 * N)  # /144 for 72 landmarks
+L_pca = lambda_pca_projection * L_subspace + lambda_pca_mahalanobis * L_mahalanobis
+L_total = L_supervised + L_pca
 ```
 
 The Mahalanobis term has exactly zero gradient throughout the accepted region,
@@ -75,20 +75,31 @@ as well as overall accuracy. A global prior can still disfavor underrepresented
 poses. The relative variance floor defaults to `1e-4` to stabilize nearly zero
 eigenvalues.
 
-The historical `--lambda-pca-projection` flag now weights this combined loss.
-Its scale differs from the old unnormalized projection MSE, so previous weights
-should be retuned. For example, append these options to your training command,
+`--lambda-pca-projection` weights only the projection MSE, restoring its original
+normalization by the number of coordinates (144 for 72 landmarks). It is no
+longer divided by total retained PCA variance. `--lambda-pca-mahalanobis` is an
+independent weight for the bounded Mahalanobis penalty. Both default to zero;
+either positive weight requires a valid prior path. To use both, explicitly set
+both weights. Setting the Mahalanobis weight to zero gives the original residual
+normalization (with the current decoder and stable alignment).
+
+For example, append these options to your Wasserstein training command,
 substituting the path to your existing prior:
 
 ```bash
+--landmark-loss wasserstein \
 --pca-prior-path /path/to/existing_global_prior.pt \
---lambda-pca-projection 0.01 \
+--lambda-pca-projection 1.0 \
+--lambda-pca-mahalanobis 0.0001 \
 --pca-mahalanobis-limit 2.0 \
 --pca-variance-floor 1e-4
 ```
 
-The weight `0.01` is an example starting value, not a validated optimum. The
-default weight remains zero; a positive weight requires a valid prior path.
+These weights illustrate independent control; they are not validated optima.
+Reuse your previously validated residual weight where available. Mahalanobis
+can still have large gradients at initialization. Restoring the residual scale
+does not fix Procrustes scale invariance or guarantee absence of collapse.
+No automatic warm-up is enabled by this change.
 
 ### Coordinates and gradients
 
@@ -109,14 +120,21 @@ clamped scale and identity rotation when the rotation is undefined.
 
 Training/validation history, new `results.csv` files and W&B include:
 
-- `pca_loss`: combined, unweighted regularizer.
-- `pca_subspace_loss`: variance-normalized residual outside the subspace.
+- `pca_loss`: actual weighted contribution to `total_loss`,
+  `lambda_pca_projection * pca_subspace_loss + lambda_pca_mahalanobis * pca_mahalanobis_loss`.
+- `pca_subspace_loss`: unweighted projection MSE, divided by 2N coordinates.
 - `pca_mahalanobis_loss`: penalty only beyond the tolerance.
 - `pca_mahalanobis_sq_per_component`: mean `q` before thresholding.
 - `pca_outside_fraction`: fraction of shapes exceeding the Mahalanobis limit.
-- `pca_projection_mse`: original projection MSE for scale comparison.
+- `pca_projection_mse`: alias of `pca_subspace_loss`, retained for CSV compatibility.
 
-These diagnostics are zero when regularization is disabled. Existing CSV
+The subspace and Mahalanobis diagnostics are unweighted; both are computed
+when either weight is positive, even if the other term has weight zero.
+All diagnostics are zero when both weights are zero.
+
+**CSV migration:** older runs logged an unweighted `pca_loss` and a
+variance-normalized `pca_subspace_loss`. Do not directly compare those columns
+with this version. Use a new run directory for the new formulation. Existing CSV
 headers are respected when appending to older result files; the extra columns
-are included in new files. The resolved configuration records the two new
-parameters when using `--save-config`.
+are included in new files. The resolved configuration records both weights and the tolerance parameters
+when using `--save-config`.

@@ -75,6 +75,7 @@ def test_variance_weights_and_floor(shapes_and_prior):
         relaxed["pca_mahalanobis_sq_per_component"],
         original["pca_mahalanobis_sq_per_component"] / 4,
     )
+    torch.testing.assert_close(relaxed["pca_subspace_loss"], original["pca_subspace_loss"])
     prior["global_prior"]["explained_variance"][-1] = 0
     prediction = shapes[:1].clone().requires_grad_()
     terms = compute_pca_regularization_terms(prediction, prior)
@@ -152,6 +153,59 @@ def test_existing_prior_format_loads_without_rebuilding(shapes_and_prior, tmp_pa
     assert torch.isfinite(compute_pca_regularization_terms(shapes, loaded)["pca_loss"])
 
 
+def test_72_landmark_residual_is_original_mse_divided_by_144():
+    generator = torch.Generator().manual_seed(17)
+    shapes = torch.randn(8, 72, 2, generator=generator)
+    prior, _ = build_global_pca_shape_prior_payload(shapes, num_components=3)
+    predictions = torch.randn(2, 72, 2, generator=generator, requires_grad=True)
+    global_prior = prior["global_prior"]
+    aligned = torch.stack([
+        align_shape_to_reference_torch(shape, global_prior["reference_shape"])
+        for shape in predictions
+    ]).flatten(1)
+    centered = aligned - global_prior["mean_shape"]
+    reconstruction = global_prior["mean_shape"] + (centered @ global_prior["components"].T) @ global_prior["components"]
+    expected = (aligned - reconstruction).square().sum(dim=1).mean() / 144
+    actual = compute_pca_regularization_terms(predictions, prior)["pca_subspace_loss"]
+    torch.testing.assert_close(actual, expected)
+    expected_grad = torch.autograd.grad(expected, predictions)[0]
+    actual_grad = torch.autograd.grad(actual, predictions)[0]
+    torch.testing.assert_close(actual_grad, expected_grad, atol=1e-7, rtol=1e-4)
+
+
+@pytest.mark.parametrize("alpha,beta", [(1., 0.), (0., 0.1), (0.3, 0.002), (0., 0.)])
+def test_independent_weights_and_logged_contribution(shapes_and_prior, alpha, beta):
+    _, prior = shapes_and_prior
+    heatmaps = torch.randn(1, 6, 8, 8, generator=torch.Generator().manual_seed(8), requires_grad=True)
+    coords = decode_landmarks_for_shape_loss(heatmaps, 64, 64, decoder="barycenter")
+    terms = compute_pca_regularization_terms(coords, prior)
+    result = compute_multitask_loss(
+        outputs={"heatmaps": heatmaps, "visible_heatmaps": heatmaps, "visibility_logits": torch.zeros(1, 6)},
+        batch={"heatmaps": torch.zeros_like(heatmaps), "visibility": torch.ones(1, 6)},
+        heatmap_loss_fn=MeanSquaredHeatmapLoss(), visibility_loss_fn=torch.nn.BCEWithLogitsLoss(),
+        lambda_vis=0, lambda_lmk_vis=0, lambda_lmk_full=0,
+        lambda_pca_projection=alpha, lambda_pca_mahalanobis=beta,
+        pca_shape_prior=prior if alpha or beta else None,
+        image_height=64, image_width=64, coordinate_decoder="barycenter",
+    )
+    expected = alpha * terms["pca_subspace_loss"] + beta * terms["pca_mahalanobis_loss"]
+    torch.testing.assert_close(result["total_loss"], expected)
+    torch.testing.assert_close(result["pca_loss"], expected)
+    expected_grad = torch.autograd.grad(expected, heatmaps, retain_graph=True)[0]
+    actual_grad = torch.autograd.grad(result["total_loss"], heatmaps)[0]
+    torch.testing.assert_close(actual_grad, expected_grad)
+
+
+def test_mahalanobis_only_requires_prior():
+    with pytest.raises(ValueError, match="requires a PCA prior"):
+        compute_multitask_loss(
+            outputs={"heatmaps": torch.zeros(1, 6, 8, 8), "visible_heatmaps": torch.zeros(1, 6, 8, 8), "visibility_logits": torch.zeros(1, 6)},
+            batch={"heatmaps": torch.zeros(1, 6, 8, 8), "visibility": torch.ones(1, 6)},
+            heatmap_loss_fn=MeanSquaredHeatmapLoss(), visibility_loss_fn=torch.nn.BCEWithLogitsLoss(),
+            lambda_pca_mahalanobis=0.1,
+        )
+
+
 @pytest.mark.parametrize("options", [
     {"mahalanobis_limit": 0}, {"mahalanobis_limit": float("nan")},
     {"variance_floor": 0}, {"variance_floor": 2},
@@ -192,12 +246,12 @@ def test_training_wires_tolerances_and_logs_metrics_without_pca_at_inference(sha
         scheduler=torch.optim.lr_scheduler.StepLR(optimizer, step_size=1),
         heatmap_loss_fn=MeanSquaredHeatmapLoss(), visibility_loss_fn=torch.nn.BCEWithLogitsLoss(),
         device=torch.device("cpu"), num_epochs=1, output_dir=tmp_path / "run",
-        lambda_pca_projection=0.01, pca_prior_path=prior_path,
+        lambda_pca_projection=0.01, lambda_pca_mahalanobis=0.003, pca_prior_path=prior_path,
         pca_mahalanobis_limit=0.3, pca_variance_floor=0.01,
         coordinate_decoder="barycenter", wasserstein_softmax_temperature=0.7,
         use_wandb=False, use_amp=False, visualize_every_n_epochs=0,
     )
-    assert summary["history"]["train"][0]["pca_loss"] == pytest.approx(expected["pca_loss"].item())
+    assert summary["history"]["train"][0]["pca_loss"] == pytest.approx(0.01 * expected["pca_subspace_loss"].item() + 0.003 * expected["pca_mahalanobis_loss"].item())
     with open(summary["results_csv"], newline="") as file:
         rows = list(csv.DictReader(file))
     assert len(rows) == 2

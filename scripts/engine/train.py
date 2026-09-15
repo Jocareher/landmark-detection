@@ -45,6 +45,7 @@ def run_epoch(
     progress_desc: str | None = None,
     pca_mahalanobis_limit: float = 2.0,
     pca_variance_floor: float = 1e-4,
+    lambda_pca_mahalanobis: float = 0.0,
 ) -> dict[str, float]:
     """Run one full training or validation epoch and aggregate split metrics."""
     if training and optimizer is None:
@@ -96,6 +97,7 @@ def run_epoch(
                     lambda_lmk_vis=lambda_lmk_vis,
                     lambda_lmk_full=lambda_lmk_full,
                     lambda_pca_projection=lambda_pca_projection,
+                    lambda_pca_mahalanobis=lambda_pca_mahalanobis,
                     pca_mahalanobis_limit=pca_mahalanobis_limit,
                     pca_variance_floor=pca_variance_floor,
                     pca_shape_prior=pca_shape_prior,
@@ -129,6 +131,7 @@ def run_epoch(
                         lambda_lmk_vis=lambda_lmk_vis,
                         lambda_lmk_full=lambda_lmk_full,
                         lambda_pca_projection=lambda_pca_projection,
+                        lambda_pca_mahalanobis=lambda_pca_mahalanobis,
                         pca_mahalanobis_limit=pca_mahalanobis_limit,
                         pca_variance_floor=pca_variance_floor,
                         pca_shape_prior=pca_shape_prior,
@@ -335,6 +338,7 @@ def train_model(
     num_visualization_images: int = 4,
     pca_mahalanobis_limit: float = 2.0,
     pca_variance_floor: float = 1e-4,
+    lambda_pca_mahalanobis: float = 0.0,
 ) -> dict[str, Any]:
     """Execute the full training pipeline, including validation and checkpointing."""
     wandb = None
@@ -365,8 +369,8 @@ def train_model(
         if not pca_prior_path.exists():
             raise FileNotFoundError(f"PCA prior file not found: {pca_prior_path}")
         pca_shape_prior = load_pca_shape_prior(pca_prior_path, device=device)
-    if lambda_pca_projection > 0.0 and pca_shape_prior is None:
-        raise ValueError("lambda_pca_projection > 0 requires a valid pca_prior_path.")
+    if (lambda_pca_projection > 0.0 or lambda_pca_mahalanobis > 0.0) and pca_shape_prior is None:
+        raise ValueError("A positive PCA projection or Mahalanobis weight requires a valid pca_prior_path.")
 
     best_val_loss = float("inf")
     best_epoch = -1
@@ -388,6 +392,7 @@ def train_model(
             lambda_lmk_vis=lambda_lmk_vis,
             lambda_lmk_full=lambda_lmk_full,
             lambda_pca_projection=lambda_pca_projection,
+            lambda_pca_mahalanobis=lambda_pca_mahalanobis,
             pca_mahalanobis_limit=pca_mahalanobis_limit,
             pca_variance_floor=pca_variance_floor,
             pca_shape_prior=pca_shape_prior,
@@ -410,6 +415,7 @@ def train_model(
             lambda_lmk_vis=lambda_lmk_vis,
             lambda_lmk_full=lambda_lmk_full,
             lambda_pca_projection=lambda_pca_projection,
+            lambda_pca_mahalanobis=lambda_pca_mahalanobis,
             pca_mahalanobis_limit=pca_mahalanobis_limit,
             pca_variance_floor=pca_variance_floor,
             pca_shape_prior=pca_shape_prior,
@@ -539,6 +545,7 @@ def smoke_test_single_batch(
     wasserstein_softmax_temperature: float = 1.0,
     pca_mahalanobis_limit: float = 2.0,
     pca_variance_floor: float = 1e-4,
+    lambda_pca_mahalanobis: float = 0.0,
 ) -> None:
     """Run a single optimization step to validate the end-to-end training path."""
     model.train()
@@ -550,8 +557,8 @@ def smoke_test_single_batch(
     pca_shape_prior = None
     if pca_prior_path is not None:
         pca_shape_prior = load_pca_shape_prior(pca_prior_path, device=device)
-    if lambda_pca_projection > 0.0 and pca_shape_prior is None:
-        raise ValueError("lambda_pca_projection > 0 requires a valid pca_prior_path.")
+    if (lambda_pca_projection > 0.0 or lambda_pca_mahalanobis > 0.0) and pca_shape_prior is None:
+        raise ValueError("A positive PCA projection or Mahalanobis weight requires a valid pca_prior_path.")
     outputs = model(images)
     loss_dict = compute_multitask_loss(
         outputs=outputs,
@@ -565,6 +572,7 @@ def smoke_test_single_batch(
         lambda_lmk_vis=lambda_lmk_vis,
         lambda_lmk_full=lambda_lmk_full,
         lambda_pca_projection=lambda_pca_projection,
+        lambda_pca_mahalanobis=lambda_pca_mahalanobis,
         pca_mahalanobis_limit=pca_mahalanobis_limit,
         pca_variance_floor=pca_variance_floor,
         pca_shape_prior=pca_shape_prior,

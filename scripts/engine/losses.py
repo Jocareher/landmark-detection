@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
@@ -27,8 +28,13 @@ def compute_multitask_loss(
     pca_variance_floor: float = 1e-4,
     coordinate_decoder: str = "argmax_subpixel",
     wasserstein_softmax_temperature: float = 1.0,
+    lambda_pca_mahalanobis: float = 0.0,
 ) -> dict[str, torch.Tensor]:
     """Compute the experiment loss for visibility, visible landmarks, and full landmarks."""
+    for name, weight in (("lambda_pca_projection", lambda_pca_projection),
+                         ("lambda_pca_mahalanobis", lambda_pca_mahalanobis)):
+        if not math.isfinite(weight) or weight < 0:
+            raise ValueError(f"{name} must be finite and nonnegative.")
     predicted_full_heatmaps = outputs["heatmaps"]
     predicted_visible_heatmaps = outputs["visible_heatmaps"]
     predicted_visibility_logits = outputs["visibility_logits"]
@@ -56,9 +62,9 @@ def compute_multitask_loss(
             "pca_projection_mse",
         )
     }
-    if lambda_pca_projection > 0.0:
+    if lambda_pca_projection > 0.0 or lambda_pca_mahalanobis > 0.0:
         if pca_shape_prior is None:
-            raise ValueError("lambda_pca_projection > 0 requires a PCA prior.")
+            raise ValueError("A positive PCA projection or Mahalanobis weight requires a PCA prior.")
         if image_height is None or image_width is None:
             raise ValueError(
                 "image_height and image_width are required for PCA regularization."
@@ -78,11 +84,16 @@ def compute_multitask_loss(
                 mahalanobis_limit=pca_mahalanobis_limit,
                 variance_floor=pca_variance_floor,
             )
+    # The logged PCA loss is the actual weighted contribution to the objective.
+    pca_terms["pca_loss"] = (
+        lambda_pca_projection * pca_terms["pca_subspace_loss"]
+        + lambda_pca_mahalanobis * pca_terms["pca_mahalanobis_loss"]
+    )
     total_loss = (
         lambda_vis * visibility_loss
         + lambda_lmk_vis * visible_landmark_loss
         + lambda_lmk_full * full_landmark_loss
-        + lambda_pca_projection * pca_terms["pca_loss"]
+        + pca_terms["pca_loss"]
     )
     return {
         "total_loss": total_loss,

@@ -85,7 +85,8 @@ WASSERSTEIN_SOFTMAX_TEMPERATURE = 1.0
 WASSERSTEIN_EPSILON = 1e-8
 WASSERSTEIN_VALIDATE_NORMALIZATION = False
 PCA_PRIOR_PATH = None
-LAMBDA_PCA_PROJECTION = 0.0  # Weight of the combined global shape regularizer.
+LAMBDA_PCA_PROJECTION = 0.0  # Weight of the original projection MSE (residual / 2N).
+LAMBDA_PCA_MAHALANOBIS = 0.0  # Independent weight of bounded Mahalanobis loss.
 PCA_MAHALANOBIS_LIMIT = 2.0  # Maximum unpenalized D_M^2 / num_components.
 PCA_VARIANCE_FLOOR = 1e-4  # Relative to the largest retained eigenvalue.
 PATIENCE = 15
@@ -210,6 +211,7 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "wasserstein_validate_normalization": WASSERSTEIN_VALIDATE_NORMALIZATION,
     "pca_prior_path": PCA_PRIOR_PATH,
     "lambda_pca_projection": LAMBDA_PCA_PROJECTION,
+    "lambda_pca_mahalanobis": LAMBDA_PCA_MAHALANOBIS,
     "pca_mahalanobis_limit": PCA_MAHALANOBIS_LIMIT,
     "pca_variance_floor": PCA_VARIANCE_FLOOR,
     "patience": PATIENCE,
