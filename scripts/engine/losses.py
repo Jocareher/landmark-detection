@@ -29,12 +29,18 @@ def compute_multitask_loss(
     coordinate_decoder: str = "argmax_subpixel",
     wasserstein_softmax_temperature: float = 1.0,
     lambda_pca_mahalanobis: float = 0.0,
+    pca_regularization: str = "bounded_reconstruction",
+    pca_coefficient_alpha: float = 3.0,
 ) -> dict[str, torch.Tensor]:
     """Compute the experiment loss for visibility, visible landmarks, and full landmarks."""
     for name, weight in (("lambda_pca_projection", lambda_pca_projection),
                          ("lambda_pca_mahalanobis", lambda_pca_mahalanobis)):
         if not math.isfinite(weight) or weight < 0:
             raise ValueError(f"{name} must be finite and nonnegative.")
+    if pca_regularization not in {"bounded_reconstruction", "mahalanobis"}:
+        raise ValueError(f"Unknown PCA regularization: {pca_regularization}")
+    if pca_regularization == "bounded_reconstruction" and lambda_pca_mahalanobis != 0:
+        raise ValueError("bounded_reconstruction requires lambda_pca_mahalanobis=0; use pca_regularization='mahalanobis' for the previous loss.")
     predicted_full_heatmaps = outputs["heatmaps"]
     predicted_visible_heatmaps = outputs["visible_heatmaps"]
     predicted_visibility_logits = outputs["visibility_logits"]
@@ -59,7 +65,7 @@ def compute_multitask_loss(
         for key in (
             "pca_loss", "pca_subspace_loss", "pca_mahalanobis_loss",
             "pca_mahalanobis_sq_per_component", "pca_outside_fraction",
-            "pca_projection_mse",
+            "pca_projection_mse", "pca_bounded_loss", "pca_coefficient_loss", "pca_clipped_fraction",
         )
     }
     if lambda_pca_projection > 0.0 or lambda_pca_mahalanobis > 0.0:
@@ -78,15 +84,16 @@ def compute_multitask_loss(
                 decoder=coordinate_decoder,
                 temperature=wasserstein_softmax_temperature,
             )
-            pca_terms = compute_pca_regularization_terms(
+            pca_terms.update(compute_pca_regularization_terms(
                 predicted_landmarks=predicted_landmarks,
                 pca_prior=pca_shape_prior,
                 mahalanobis_limit=pca_mahalanobis_limit,
                 variance_floor=pca_variance_floor,
-            )
+                coefficient_alpha=pca_coefficient_alpha if pca_regularization == "bounded_reconstruction" else None,
+            ))
     # The logged PCA loss is the actual weighted contribution to the objective.
     pca_terms["pca_loss"] = (
-        lambda_pca_projection * pca_terms["pca_subspace_loss"]
+        lambda_pca_projection * pca_terms["pca_bounded_loss" if pca_regularization == "bounded_reconstruction" else "pca_subspace_loss"]
         + lambda_pca_mahalanobis * pca_terms["pca_mahalanobis_loss"]
     )
     total_loss = (

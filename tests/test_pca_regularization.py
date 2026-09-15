@@ -120,6 +120,7 @@ def test_regularizer_alone_backpropagates_through_heatmaps(shapes_and_prior, dec
     _, prior = shapes_and_prior
     heatmaps = torch.randn(2, 6, 8, 8, generator=torch.Generator().manual_seed(12), requires_grad=True)
     result = compute_multitask_loss(
+        pca_regularization="mahalanobis",
         outputs={"heatmaps": heatmaps, "visible_heatmaps": heatmaps, "visibility_logits": torch.zeros(2, 6)},
         batch={"heatmaps": torch.zeros_like(heatmaps), "visibility": torch.ones(2, 6)},
         heatmap_loss_fn=MeanSquaredHeatmapLoss(), visibility_loss_fn=torch.nn.BCEWithLogitsLoss(),
@@ -180,6 +181,7 @@ def test_independent_weights_and_logged_contribution(shapes_and_prior, alpha, be
     coords = decode_landmarks_for_shape_loss(heatmaps, 64, 64, decoder="barycenter")
     terms = compute_pca_regularization_terms(coords, prior)
     result = compute_multitask_loss(
+        pca_regularization="mahalanobis",
         outputs={"heatmaps": heatmaps, "visible_heatmaps": heatmaps, "visibility_logits": torch.zeros(1, 6)},
         batch={"heatmaps": torch.zeros_like(heatmaps), "visibility": torch.ones(1, 6)},
         heatmap_loss_fn=MeanSquaredHeatmapLoss(), visibility_loss_fn=torch.nn.BCEWithLogitsLoss(),
@@ -199,6 +201,7 @@ def test_independent_weights_and_logged_contribution(shapes_and_prior, alpha, be
 def test_mahalanobis_only_requires_prior():
     with pytest.raises(ValueError, match="requires a PCA prior"):
         compute_multitask_loss(
+        pca_regularization="mahalanobis",
             outputs={"heatmaps": torch.zeros(1, 6, 8, 8), "visible_heatmaps": torch.zeros(1, 6, 8, 8), "visibility_logits": torch.zeros(1, 6)},
             batch={"heatmaps": torch.zeros(1, 6, 8, 8), "visibility": torch.ones(1, 6)},
             heatmap_loss_fn=MeanSquaredHeatmapLoss(), visibility_loss_fn=torch.nn.BCEWithLogitsLoss(),
@@ -216,7 +219,8 @@ def test_invalid_tolerances_are_rejected(shapes_and_prior, options):
         compute_pca_regularization_terms(shapes, prior, **options)
 
 
-def test_training_wires_tolerances_and_logs_metrics_without_pca_at_inference(shapes_and_prior, tmp_path):
+@pytest.mark.parametrize("mode", ["mahalanobis", "bounded_reconstruction"])
+def test_training_wires_tolerances_and_logs_metrics_without_pca_at_inference(shapes_and_prior, tmp_path, mode):
     from scripts.engine.inference import run_inference
     from scripts.engine.train import train_model
 
@@ -239,19 +243,20 @@ def test_training_wires_tolerances_and_logs_metrics_without_pca_at_inference(sha
     model = HeatmapModel()
     batch = {"image": torch.zeros(1, 3, 64, 64), "heatmaps": torch.zeros(1, 6, 8, 8), "visibility": torch.ones(1, 6)}
     coords = decode_landmarks_for_shape_loss(model.heatmaps, 64, 64, decoder="barycenter", temperature=0.7)
-    expected = compute_pca_regularization_terms(coords, prior, mahalanobis_limit=0.3, variance_floor=0.01)
+    expected = compute_pca_regularization_terms(coords, prior, mahalanobis_limit=0.3, variance_floor=0.01, coefficient_alpha=0.2 if mode == "bounded_reconstruction" else None)
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-7)
     summary = train_model(
+        pca_regularization=mode, pca_coefficient_alpha=0.2,
         model=model, train_loader=[batch], val_loader=[batch], optimizer=optimizer,
         scheduler=torch.optim.lr_scheduler.StepLR(optimizer, step_size=1),
         heatmap_loss_fn=MeanSquaredHeatmapLoss(), visibility_loss_fn=torch.nn.BCEWithLogitsLoss(),
         device=torch.device("cpu"), num_epochs=1, output_dir=tmp_path / "run",
-        lambda_pca_projection=0.01, lambda_pca_mahalanobis=0.003, pca_prior_path=prior_path,
+        lambda_pca_projection=0.01, lambda_pca_mahalanobis=0.003 if mode == "mahalanobis" else 0, pca_prior_path=prior_path,
         pca_mahalanobis_limit=0.3, pca_variance_floor=0.01,
         coordinate_decoder="barycenter", wasserstein_softmax_temperature=0.7,
         use_wandb=False, use_amp=False, visualize_every_n_epochs=0,
     )
-    assert summary["history"]["train"][0]["pca_loss"] == pytest.approx(0.01 * expected["pca_subspace_loss"].item() + 0.003 * expected["pca_mahalanobis_loss"].item())
+    assert summary["history"]["train"][0]["pca_loss"] == pytest.approx(0.01 * (expected["pca_bounded_loss"] if mode == "bounded_reconstruction" else expected["pca_subspace_loss"]).item() + 0.003 * expected["pca_mahalanobis_loss"].item())
     with open(summary["results_csv"], newline="") as file:
         rows = list(csv.DictReader(file))
     assert len(rows) == 2
@@ -262,3 +267,54 @@ def test_training_wires_tolerances_and_logs_metrics_without_pca_at_inference(sha
         predictions["predictions"],
         decode_heatmaps_to_image_coords(model.heatmaps.detach(), 64, 64, decoder="barycenter", softmax_temperature=0.7),
     )
+
+
+def test_bounded_loss_decomposes_and_does_not_shrink_accepted_coefficients(shapes_and_prior):
+    shapes, prior = shapes_and_prior
+    prediction = shapes[:1].clone().requires_grad_()
+    inside = compute_pca_regularization_terms(prediction, prior, coefficient_alpha=1000)
+    assert inside['pca_coefficient_loss'] == 0
+    assert inside['pca_clipped_fraction'] == 0
+    torch.testing.assert_close(inside['pca_bounded_loss'], inside['pca_projection_mse'])
+    grad = torch.autograd.grad(inside['pca_coefficient_loss'], prediction)[0]
+    assert torch.count_nonzero(grad) == 0
+    outside = compute_pca_regularization_terms(prediction, prior, coefficient_alpha=0.01)
+    assert outside['pca_coefficient_loss'] > 0
+    assert outside['pca_outside_fraction'] == 1
+    torch.testing.assert_close(outside['pca_bounded_loss'], outside['pca_subspace_loss'] + outside['pca_coefficient_loss'])
+    assert outside['pca_mahalanobis_loss'] == 0
+    outside['pca_loss'].backward()
+    assert torch.isfinite(prediction.grad).all()
+
+
+def test_bounded_loss_matches_explicit_clipped_reconstruction(shapes_and_prior):
+    shapes, prior = shapes_and_prior
+    prediction = shapes[:2].clone().requires_grad_()
+    g = prior['global_prior']
+    s = torch.stack([align_shape_for_regularization(x, g['reference_shape']) for x in prediction]).flatten(1)
+    b = (s - g['mean_shape']) @ g['components'].T
+    bounds = 0.2 * g['explained_variance'].sqrt()
+    clipped = b.maximum(-bounds).minimum(bounds)
+    target = g['mean_shape'] + clipped @ g['components']
+    expected = (s - target).square().mean()
+    actual = compute_pca_regularization_terms(prediction, prior, coefficient_alpha=0.2)['pca_bounded_loss']
+    torch.testing.assert_close(actual, expected)
+    torch.testing.assert_close(torch.autograd.grad(actual, prediction)[0], torch.autograd.grad(expected, prediction)[0])
+
+
+@pytest.mark.parametrize('alpha', [0, -1, float('nan'), float('inf')])
+def test_bounded_invalid_alpha(shapes_and_prior, alpha):
+    shapes, prior = shapes_and_prior
+    with pytest.raises(ValueError, match='coefficient_alpha'):
+        compute_pca_regularization_terms(shapes, prior, coefficient_alpha=alpha)
+
+
+def test_bounded_flat_heatmaps_and_zero_variance_have_finite_gradients(shapes_and_prior):
+    _, prior = shapes_and_prior
+    prior['global_prior']['explained_variance'][-1] = 0
+    heatmaps = torch.zeros(1, 6, 8, 8, requires_grad=True)
+    c = decode_landmarks_for_shape_loss(heatmaps, 64, 64, decoder='barycenter')
+    loss = compute_pca_regularization_terms(c, prior, coefficient_alpha=3)['pca_bounded_loss']
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert torch.isfinite(heatmaps.grad).all()

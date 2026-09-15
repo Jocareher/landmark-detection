@@ -40,101 +40,99 @@ This is a separable 2D Wasserstein-style approximation chosen to avoid dense
 The visibility BCE branch and optional global PCA shape regularizer remain part of
 the multitask objective for every loss regime.
 
-## Global PCA regularization during training
+## PCA reconstruction with bounded coefficients (default)
 
-The existing global Procrustes PCA prior is reused without rebuilding it or
-conditioning it on yaw. Inference, evaluation and export use the network's
-decoded heatmaps directly; they do not load or apply PCA. Learning this behavior
-requires training or fine-tuning with the regularizer enabled. It is a soft
-training constraint, not a guarantee that every unseen prediction is plausible.
+`--pca-regularization bounded_reconstruction` reuses the existing global PCA
+prior and limits each shape coefficient to a configurable number of standard
+deviations. It is a training loss; inference still decodes network heatmaps
+without PCA. No prior rebuilding or yaw-specific prior is required.
 
-For each prediction, let `s` be its Procrustes-aligned shape, `mu` the prior mean,
-`U` the retained components as rows, and `v` their explained variances:
+For each decoded prediction aligned by Procrustes, with `U` storing components
+as rows and `v` the original explained variances:
 
 ```text
 b = (s - mu) @ U.T
-v_safe[j] = max(v[j], pca_variance_floor * max(v))
-q = mean(b[j]^2 / v_safe[j])                 # squared Mahalanobis distance / K
-L_mahalanobis = max(q / pca_mahalanobis_limit - 1, 0)^2
-L_subspace = sum((s - (mu + b @ U))^2) / (2 * N)  # /144 for 72 landmarks
-L_pca = lambda_pca_projection * L_subspace + lambda_pca_mahalanobis * L_mahalanobis
-L_total = L_supervised + L_pca
+bounds = pca_coefficient_alpha * sqrt(v)
+b_star = clip(b, -bounds, bounds)
+s_star = mu + b_star @ U
+L_bounded = mean((s - s_star)^2)             # /144 for 72 landmarks
+L_total = L_supervised + lambda_pca_projection * L_bounded
 ```
 
-The Mahalanobis term has exactly zero gradient throughout the accepted region,
-including nonmean shapes. Outside it, the penalty grows smoothly from zero.
-The supervised heatmap losses continue to anchor predictions to the image's
-ground truth. The residual term detects deviations outside the retained
-subspace, which coefficient-space Mahalanobis cannot see. It penalizes those
-deviations without directly shrinking the retained coefficients.
+`--pca-coefficient-alpha` defaults to 3: each coefficient can vary within
++/-3 of its own standard deviations. Alpha is not the loss weight. Accepted
+coefficients are unchanged, so there is no continuous attraction to the mean.
+Zero-variance components have a zero-width interval. No variance inversion or
+variance floor is used to define these bounds.
 
-The default limit is `q <= 2.0`, equivalent to `D_M^2 <= 2K`, not `D_M <= 2`.
-This is an initial tunable tolerance, **not** a calibrated confidence level.
-Tune it and the regularizer weight on validation data, tracking accuracy by yaw
-as well as overall accuracy. A global prior can still disfavor underrepresented
-poses. The relative variance floor defaults to `1e-4` to stabilize nearly zero
-eigenvalues.
+The squared distance consists of the original projection MSE plus the squared
+coefficient clipping residual divided by 2N. Gradients flow through Procrustes,
+projection, clipping and reconstruction; the target is not detached. With
+orthonormal PCA components this is the squared distance to the coefficient-box
+constrained PCA set in aligned coordinates, differentiable also at its boundary.
 
-`--lambda-pca-projection` weights only the projection MSE, restoring its original
-normalization by the number of coordinates (144 for 72 landmarks). It is no
-longer divided by total retained PCA variance. `--lambda-pca-mahalanobis` is an
-independent weight for the bounded Mahalanobis penalty. Both default to zero;
-either positive weight requires a valid prior path. To use both, explicitly set
-both weights. Setting the Mahalanobis weight to zero gives the original residual
-normalization (with the current decoder and stable alignment).
-
-For example, append these options to your Wasserstein training command,
-substituting the path to your existing prior:
+To enable it, add the following options to your usual training command:
 
 ```bash
 --landmark-loss wasserstein \
 --pca-prior-path /path/to/existing_global_prior.pt \
---lambda-pca-projection 1.0 \
---lambda-pca-mahalanobis 0.0001 \
---pca-mahalanobis-limit 2.0 \
---pca-variance-floor 1e-4
+--pca-regularization bounded_reconstruction \
+--pca-coefficient-alpha 3.0 \
+--lambda-pca-projection 1.0
 ```
 
-These weights illustrate independent control; they are not validated optima.
-Reuse your previously validated residual weight where available. Mahalanobis
-can still have large gradients at initialization. Restoring the residual scale
-does not fix Procrustes scale invariance or guarantee absence of collapse.
-No automatic warm-up is enabled by this change.
+The weight 1.0 is illustrative; reuse a previously validated projection weight
+where possible and validate the new constraint. Regularization remains disabled
+by default (`lambda_pca_projection=0`). No automatic warm-up is added. Setting
+`lambda_pca_mahalanobis` nonzero in this mode is rejected rather than silently
+adding the previous Mahalanobis penalty.
 
-### Coordinates and gradients
+### Decoding and limitations
 
-The regularizer's forward pass uses the same coordinates as inference:
-argmax with subpixel refinement for MSE/Adaptive Wing, or the barycenter at the
-configured softmax temperature for Wasserstein. For argmax, backpropagation uses
-a **straight-through soft-argmax surrogate** because argmax has no useful
-coordinate gradient. This gradient is an approximation; the forward coordinates
-are the actual argmax predictions. Barycenter uses its exact differentiable
-decoder. No reconstructed PCA coordinates replace the model outputs.
+Wasserstein uses the differentiable barycenter at the configured temperature.
+MSE/Adaptive Wing use the inference argmax/subpixel coordinates with a
+straight-through soft-argmax gradient approximation. Inference is unchanged.
+The shape loss uses float32 under AMP and stable analytic 2D alignment.
 
-The shape loss stays in float32 under AMP. The training alignment uses an
-analytic 2D rotation, matching the prior alignment on nondegenerate shapes and
-avoiding SVD-gradient singularities. Initially collapsed predictions use a
-clamped scale and identity rotation when the rotation is undefined.
+This is a soft training constraint, not a hard inference projection. Procrustes
+removes scale and position; the loss alone cannot prevent spatial collapse or
+ensure correct landmark localization. Independently bounded coefficients also
+do not guarantee every joint combination is a real face. Validate NME and
+visualizations, including different yaw views, against the no-PCA baseline.
 
-### Diagnostics
+### Metrics
 
-Training/validation history, new `results.csv` files and W&B include:
+- `pca_loss`: weighted contribution actually added to the training objective.
+- `pca_bounded_loss`: unweighted MSE to the bounded reconstruction.
+- `pca_subspace_loss`: original unbounded projection MSE.
+- `pca_coefficient_loss`: excess coefficient squared distance divided by 2N.
+- `pca_clipped_fraction`: fraction of all coefficients that exceeded their bounds.
+- `pca_outside_fraction`: fraction of shapes with at least one clipped coefficient.
+- `pca_projection_mse`: compatibility alias of `pca_subspace_loss`.
 
-- `pca_loss`: actual weighted contribution to `total_loss`,
-  `lambda_pca_projection * pca_subspace_loss + lambda_pca_mahalanobis * pca_mahalanobis_loss`.
-- `pca_subspace_loss`: unweighted projection MSE, divided by 2N coordinates.
-- `pca_mahalanobis_loss`: penalty only beyond the tolerance.
-- `pca_mahalanobis_sq_per_component`: mean `q` before thresholding.
-- `pca_outside_fraction`: fraction of shapes exceeding the Mahalanobis limit.
-- `pca_projection_mse`: alias of `pca_subspace_loss`, retained for CSV compatibility.
+In bounded mode the historical Mahalanobis metrics are zero (not measured).
+All PCA diagnostics are zero when regularization is disabled. In the console,
+`clipped` refers to coefficients and `outside` refers to whole shapes.
 
-The subspace and Mahalanobis diagnostics are unweighted; both are computed
-when either weight is positive, even if the other term has weight zero.
-All diagnostics are zero when both weights are zero.
+Use a new run directory: historical `outside` referred to the Mahalanobis
+ellipsoid, and the oldest `pca_loss` values were unweighted. Existing CSV headers
+are respected; new files include the new metrics. `--save-config` records the
+selected mode, alpha and weights.
 
-**CSV migration:** older runs logged an unweighted `pca_loss` and a
-variance-normalized `pca_subspace_loss`. Do not directly compare those columns
-with this version. Use a new run directory for the new formulation. Existing CSV
-headers are respected when appending to older result files; the extra columns
-are included in new files. The resolved configuration records both weights and the tolerance parameters
-when using `--save-config`.
+### Previous Mahalanobis mode for comparison
+
+Use `--pca-regularization mahalanobis` explicitly to reproduce the previous
+combination (projection MSE /2N plus a separately weighted squared hinge):
+
+```text
+v_safe[j] = max(v[j], pca_variance_floor * max(v))
+q = mean(b[j]^2 / v_safe[j])
+L_mahalanobis = max(q / pca_mahalanobis_limit - 1, 0)^2
+L_pca = lambda_pca_projection * L_subspace + lambda_pca_mahalanobis * L_mahalanobis
+```
+
+Both weights default to zero. The limit defaults to 2.0 and the relative floor
+to 1e-4. Bounded-reconstruction metrics are zero in this legacy mode. The
+Mahalanobis distance per component and outside fraction retain their previous
+meanings. These limits are tunable tolerances, not guarantees of anatomical
+validity or calibrated confidence levels.

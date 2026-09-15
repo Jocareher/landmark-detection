@@ -143,7 +143,16 @@ def parse_args() -> argparse.Namespace:
         "--lambda-pca-projection",
         type=float,
         default=defaults.lambda_pca_projection,
-        help="Weight of PCA projection MSE, normalized by 2N coordinates (144 for 72 landmarks).",
+        help="Weight of PCA reconstruction MSE (bounded by default), divided by 2N coordinates.",
+    )
+    parser.add_argument(
+        "--pca-regularization", choices=["bounded_reconstruction", "mahalanobis"],
+        default=defaults.pca_regularization,
+        help="PCA training loss: bounded reconstruction (default) or previous Mahalanobis combination.",
+    )
+    parser.add_argument(
+        "--pca-coefficient-alpha", type=float, default=defaults.pca_coefficient_alpha,
+        help="Allowed standard deviations per PCA coefficient in bounded reconstruction.",
     )
     parser.add_argument(
         "--lambda-pca-mahalanobis",
@@ -438,6 +447,8 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.pca_prior_path = args.pca_prior_path
     config.lambda_pca_projection = args.lambda_pca_projection
     config.lambda_pca_mahalanobis = args.lambda_pca_mahalanobis
+    config.pca_regularization = args.pca_regularization
+    config.pca_coefficient_alpha = args.pca_coefficient_alpha
     config.pca_mahalanobis_limit = args.pca_mahalanobis_limit
     config.pca_variance_floor = args.pca_variance_floor
     config.seed = args.seed
@@ -680,6 +691,8 @@ def main() -> None:
             f"lambda_lmk_full={config.lambda_lmk_full} "
             f"landmark_loss={config.landmark_loss} "
             f"coordinate_decoder={config.coordinate_decoder} "
+            f"pca_regularization={config.pca_regularization} "
+            f"pca_coefficient_alpha={config.pca_coefficient_alpha} "
             f"lambda_pca_projection={config.lambda_pca_projection} "
             f"lambda_pca_mahalanobis={config.lambda_pca_mahalanobis} "
             f"pca_mahalanobis_limit={config.pca_mahalanobis_limit} "
@@ -716,6 +729,8 @@ def main() -> None:
                 lambda_lmk_full=config.lambda_lmk_full,
                 lambda_pca_projection=config.lambda_pca_projection,
                 lambda_pca_mahalanobis=config.lambda_pca_mahalanobis,
+                pca_regularization=config.pca_regularization,
+                pca_coefficient_alpha=config.pca_coefficient_alpha,
                 pca_mahalanobis_limit=config.pca_mahalanobis_limit,
                 pca_variance_floor=config.pca_variance_floor,
                 pca_prior_path=config.pca_prior_path,
@@ -740,6 +755,8 @@ def main() -> None:
             lambda_lmk_full=config.lambda_lmk_full,
             lambda_pca_projection=config.lambda_pca_projection,
             lambda_pca_mahalanobis=config.lambda_pca_mahalanobis,
+            pca_regularization=config.pca_regularization,
+            pca_coefficient_alpha=config.pca_coefficient_alpha,
             pca_mahalanobis_limit=config.pca_mahalanobis_limit,
             pca_variance_floor=config.pca_variance_floor,
             pca_prior_path=config.pca_prior_path,

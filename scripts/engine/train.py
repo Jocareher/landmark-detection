@@ -20,7 +20,7 @@ from ..utils.visualization import visualize_predicted_heatmaps_on_train_batch
 PCA_DIAGNOSTICS = (
     "pca_subspace_loss", "pca_mahalanobis_loss",
     "pca_mahalanobis_sq_per_component", "pca_outside_fraction",
-    "pca_projection_mse",
+    "pca_projection_mse", "pca_bounded_loss", "pca_coefficient_loss", "pca_clipped_fraction",
 )
 
 
@@ -46,6 +46,8 @@ def run_epoch(
     pca_mahalanobis_limit: float = 2.0,
     pca_variance_floor: float = 1e-4,
     lambda_pca_mahalanobis: float = 0.0,
+    pca_regularization: str = "bounded_reconstruction",
+    pca_coefficient_alpha: float = 3.0,
 ) -> dict[str, float]:
     """Run one full training or validation epoch and aggregate split metrics."""
     if training and optimizer is None:
@@ -98,6 +100,8 @@ def run_epoch(
                     lambda_lmk_full=lambda_lmk_full,
                     lambda_pca_projection=lambda_pca_projection,
                     lambda_pca_mahalanobis=lambda_pca_mahalanobis,
+                    pca_regularization=pca_regularization,
+                    pca_coefficient_alpha=pca_coefficient_alpha,
                     pca_mahalanobis_limit=pca_mahalanobis_limit,
                     pca_variance_floor=pca_variance_floor,
                     pca_shape_prior=pca_shape_prior,
@@ -132,6 +136,8 @@ def run_epoch(
                         lambda_lmk_full=lambda_lmk_full,
                         lambda_pca_projection=lambda_pca_projection,
                         lambda_pca_mahalanobis=lambda_pca_mahalanobis,
+                        pca_regularization=pca_regularization,
+                        pca_coefficient_alpha=pca_coefficient_alpha,
                         pca_mahalanobis_limit=pca_mahalanobis_limit,
                         pca_variance_floor=pca_variance_floor,
                         pca_shape_prior=pca_shape_prior,
@@ -235,7 +241,7 @@ def print_epoch_summary(
         f"visible: {train_metrics['visible_landmark_loss']:.6f} | "
         f"vis: {train_metrics['visibility_loss']:.6f} | "
         f"pca: {train_metrics['pca_loss']:.6f} | "
-        f"M²/K: {train_metrics['pca_mahalanobis_sq_per_component']:.3f} | "
+        f"clipped: {train_metrics['pca_clipped_fraction']:.1%} | "
         f"outside: {train_metrics['pca_outside_fraction']:.1%} | "
         f"NME: {train_metrics['nme']:.6f}"
     )
@@ -245,7 +251,7 @@ def print_epoch_summary(
         f"visible: {val_metrics['visible_landmark_loss']:.6f} | "
         f"vis: {val_metrics['visibility_loss']:.6f} | "
         f"pca: {val_metrics['pca_loss']:.6f} | "
-        f"M²/K: {val_metrics['pca_mahalanobis_sq_per_component']:.3f} | "
+        f"clipped: {val_metrics['pca_clipped_fraction']:.1%} | "
         f"outside: {val_metrics['pca_outside_fraction']:.1%} | "
         f"NME: {val_metrics['nme']:.6f}"
     )
@@ -339,6 +345,8 @@ def train_model(
     pca_mahalanobis_limit: float = 2.0,
     pca_variance_floor: float = 1e-4,
     lambda_pca_mahalanobis: float = 0.0,
+    pca_regularization: str = "bounded_reconstruction",
+    pca_coefficient_alpha: float = 3.0,
 ) -> dict[str, Any]:
     """Execute the full training pipeline, including validation and checkpointing."""
     wandb = None
@@ -393,6 +401,8 @@ def train_model(
             lambda_lmk_full=lambda_lmk_full,
             lambda_pca_projection=lambda_pca_projection,
             lambda_pca_mahalanobis=lambda_pca_mahalanobis,
+            pca_regularization=pca_regularization,
+            pca_coefficient_alpha=pca_coefficient_alpha,
             pca_mahalanobis_limit=pca_mahalanobis_limit,
             pca_variance_floor=pca_variance_floor,
             pca_shape_prior=pca_shape_prior,
@@ -416,6 +426,8 @@ def train_model(
             lambda_lmk_full=lambda_lmk_full,
             lambda_pca_projection=lambda_pca_projection,
             lambda_pca_mahalanobis=lambda_pca_mahalanobis,
+            pca_regularization=pca_regularization,
+            pca_coefficient_alpha=pca_coefficient_alpha,
             pca_mahalanobis_limit=pca_mahalanobis_limit,
             pca_variance_floor=pca_variance_floor,
             pca_shape_prior=pca_shape_prior,
@@ -546,6 +558,8 @@ def smoke_test_single_batch(
     pca_mahalanobis_limit: float = 2.0,
     pca_variance_floor: float = 1e-4,
     lambda_pca_mahalanobis: float = 0.0,
+    pca_regularization: str = "bounded_reconstruction",
+    pca_coefficient_alpha: float = 3.0,
 ) -> None:
     """Run a single optimization step to validate the end-to-end training path."""
     model.train()
@@ -573,6 +587,8 @@ def smoke_test_single_batch(
         lambda_lmk_full=lambda_lmk_full,
         lambda_pca_projection=lambda_pca_projection,
         lambda_pca_mahalanobis=lambda_pca_mahalanobis,
+        pca_regularization=pca_regularization,
+        pca_coefficient_alpha=pca_coefficient_alpha,
         pca_mahalanobis_limit=pca_mahalanobis_limit,
         pca_variance_floor=pca_variance_floor,
         pca_shape_prior=pca_shape_prior,
