@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 
 from .geometry_metrics import compute_per_landmark_point_to_line_distances
+from ..utils.natural_labels import compute_natural_valid_landmark_mask
 
 
 def compute_masked_natural_per_landmark_nme(
@@ -14,21 +15,28 @@ def compute_masked_natural_per_landmark_nme(
     inclusion_mode: str = "visible_intersection",
     eps: float = 1e-6,
 ) -> tuple[dict[int, float], dict[int, float], float | None, float | None]:
-    """Compute natural-image NME under one landmark inclusion mode."""
-    finite_target_mask = np.isfinite(target_landmarks[:, 0]) & np.isfinite(
-        target_landmarks[:, 1]
+    """Compute natural-image NME under one landmark inclusion mode.
+
+    ``gt_valid`` means an observable GT landmark (positive GT visibility and
+    finite GT coordinates); predicted visibility never controls this mode.
+    This distinction matters because the natural dataset stores missing GT
+    coordinates as finite ``(0, 0)`` placeholders after loading.
+    """
+    gt_valid_mask = compute_natural_valid_landmark_mask(
+        landmarks=target_landmarks,
+        visibility=target_visibility,
     )
     finite_prediction_mask = np.isfinite(predicted_landmarks[:, 0]) & np.isfinite(
         predicted_landmarks[:, 1]
     )
     if inclusion_mode == "visible_intersection":
-        normalization_mask = (target_visibility == 1) & finite_target_mask
+        normalization_mask = gt_valid_mask
         valid_mask = (
             normalization_mask & (predicted_visibility == 1) & finite_prediction_mask
         )
     elif inclusion_mode == "gt_valid":
-        normalization_mask = finite_target_mask
-        valid_mask = finite_target_mask & finite_prediction_mask
+        normalization_mask = gt_valid_mask
+        valid_mask = gt_valid_mask & finite_prediction_mask
     else:
         raise ValueError(f"Unsupported natural evaluation mode: {inclusion_mode}")
 

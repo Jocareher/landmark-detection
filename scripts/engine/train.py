@@ -20,6 +20,7 @@ from ..utils.visualization import visualize_predicted_heatmaps_on_train_batch
 PCA_DIAGNOSTICS = (
     "pca_subspace_loss", "pca_mahalanobis_loss",
     "pca_mahalanobis_sq_per_component", "pca_outside_fraction",
+    "pca_restricted_mahalanobis_sq_per_component",
     "pca_projection_mse", "pca_bounded_loss", "pca_coefficient_loss", "pca_clipped_fraction",
 )
 

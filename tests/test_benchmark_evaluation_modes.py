@@ -44,12 +44,18 @@ def test_orientation_class_labels_are_normalized() -> None:
     assert normalize_orientation_label("yaw_plus_4deg") == "right"
 
 
-def test_gt_valid_includes_predicted_invisible_and_excludes_nan_gt() -> None:
-    """The gt_valid mode ignores predicted visibility but excludes missing GT."""
-    predicted = np.asarray([[0.0, 0.0], [1.0, 1.0], [3.0, 3.0]], dtype=np.float32)
-    target = np.asarray([[0.0, 0.0], [2.0, 1.0], [np.nan, np.nan]], dtype=np.float32)
-    target_visibility = np.asarray([1, 1, 0], dtype=np.int64)
-    predicted_visibility = np.asarray([1, 0, 1], dtype=np.int64)
+def test_gt_valid_uses_gt_visibility_and_ignores_predicted_visibility() -> None:
+    """GT-valid excludes invisible finite placeholders but not hidden predictions."""
+    predicted = np.asarray(
+        [[0.0, 0.0], [1.0, 1.0], [30.0, 30.0], [3.0, 3.0]],
+        dtype=np.float32,
+    )
+    target = np.asarray(
+        [[0.0, 0.0], [2.0, 1.0], [0.0, 0.0], [np.nan, np.nan]],
+        dtype=np.float32,
+    )
+    target_visibility = np.asarray([1, 1, 0, 0], dtype=np.int64)
+    predicted_visibility = np.asarray([1, 0, 1, 1], dtype=np.int64)
 
     visible_errors, _, _, _ = compute_masked_natural_per_landmark_nme(
         predicted,
@@ -70,6 +76,26 @@ def test_gt_valid_includes_predicted_invisible_and_excludes_nan_gt() -> None:
 
     assert set(visible_errors) == {0}
     assert set(gt_valid_errors) == {0, 1}
+
+
+def test_gt_valid_normalization_uses_only_actual_valid_gt_landmarks() -> None:
+    """Invisible (0, 0) placeholders cannot alter the NME or its denominator."""
+    predicted = np.asarray([[11.0, 10.0], [20.0, 21.0], [100.0, 100.0]], dtype=np.float32)
+    target = np.asarray([[10.0, 10.0], [20.0, 20.0], [0.0, 0.0]], dtype=np.float32)
+    target_visibility = np.asarray([1, 1, 0], dtype=np.int64)
+    predicted_visibility = np.asarray([1, 1, 1], dtype=np.int64)
+
+    errors, _, mean_nme, _ = compute_masked_natural_per_landmark_nme(
+        predicted,
+        target,
+        target_visibility,
+        predicted_visibility,
+        normalization_fn=simple_box_normalization,
+        inclusion_mode="gt_valid",
+    )
+
+    assert set(errors) == {0, 1}
+    assert np.isclose(mean_nme, 0.1)
 
 
 def test_symmetric_hausdorff_distance_handles_basic_cases() -> None:
@@ -370,3 +396,20 @@ def test_babyland_standard_keeps_sota_rows_with_empty_inclusion_column() -> None
     )
 
     assert mask.tolist() == [True, True, True]
+
+
+def test_hausdorff_summary_exports_both_protocols_and_empty_values(tmp_path):
+    from scripts.engine.evaluate import summarize_metric_distribution, save_metrics_summary_csv
+    summary = {"mean_nme_box_visible_intersection": 0.1}
+    for protocol in ("visible_intersection", "gt_valid"):
+        summary.update(summarize_metric_distribution(f"hausdorff_box_{protocol}", [0.2, 0.4, np.nan]))
+    summary["orientation_metrics"] = {"frontal": dict(summary)}
+    path = tmp_path / "metrics_summary.csv"
+    save_metrics_summary_csv(path, summary)
+    rows = pd.read_csv(path)
+    values = dict(rows.itertuples(index=False, name=None))
+    for protocol in ("visible_intersection", "gt_valid"):
+        assert np.isclose(float(values[f"mean_hausdorff_box_{protocol}"]), 0.3)
+        assert np.isclose(float(values[f"p95_hausdorff_box_{protocol}"]), 0.39)
+        assert np.isclose(float(values[f"mean_hausdorff_box_{protocol}_frontal"]), 0.3)
+    assert all(value is None for value in summarize_metric_distribution("empty", [np.nan]).values())

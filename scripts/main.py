@@ -146,9 +146,9 @@ def parse_args() -> argparse.Namespace:
         help="Weight of PCA reconstruction MSE (bounded by default), divided by 2N coordinates.",
     )
     parser.add_argument(
-        "--pca-regularization", choices=["bounded_reconstruction", "mahalanobis"],
+        "--pca-regularization", choices=["bounded_reconstruction", "mahalanobis_reconstruction", "mahalanobis"],
         default=defaults.pca_regularization,
-        help="PCA training loss: bounded reconstruction (default) or previous Mahalanobis combination.",
+        help="PCA loss: coefficient-box reconstruction (default), Mahalanobis-restricted reconstruction, or legacy Mahalanobis penalty.",
     )
     parser.add_argument(
         "--pca-coefficient-alpha", type=float, default=defaults.pca_coefficient_alpha,

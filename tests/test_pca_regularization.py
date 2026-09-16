@@ -17,6 +17,7 @@ from scripts.engine.pca_shape_prior import (
     compute_pca_regularization_terms,
     decode_landmarks_for_shape_loss,
     load_pca_shape_prior,
+    restrict_coefficients_mahalanobis,
 )
 
 
@@ -219,7 +220,7 @@ def test_invalid_tolerances_are_rejected(shapes_and_prior, options):
         compute_pca_regularization_terms(shapes, prior, **options)
 
 
-@pytest.mark.parametrize("mode", ["mahalanobis", "bounded_reconstruction"])
+@pytest.mark.parametrize("mode", ["mahalanobis", "bounded_reconstruction", "mahalanobis_reconstruction"])
 def test_training_wires_tolerances_and_logs_metrics_without_pca_at_inference(shapes_and_prior, tmp_path, mode):
     from scripts.engine.inference import run_inference
     from scripts.engine.train import train_model
@@ -243,7 +244,7 @@ def test_training_wires_tolerances_and_logs_metrics_without_pca_at_inference(sha
     model = HeatmapModel()
     batch = {"image": torch.zeros(1, 3, 64, 64), "heatmaps": torch.zeros(1, 6, 8, 8), "visibility": torch.ones(1, 6)}
     coords = decode_landmarks_for_shape_loss(model.heatmaps, 64, 64, decoder="barycenter", temperature=0.7)
-    expected = compute_pca_regularization_terms(coords, prior, mahalanobis_limit=0.3, variance_floor=0.01, coefficient_alpha=0.2 if mode == "bounded_reconstruction" else None)
+    expected = compute_pca_regularization_terms(coords, prior, mahalanobis_limit=0.3, variance_floor=0.01, coefficient_alpha=0.2 if mode == "bounded_reconstruction" else None, mahalanobis_reconstruction=mode == "mahalanobis_reconstruction")
     optimizer = torch.optim.SGD(model.parameters(), lr=1e-7)
     summary = train_model(
         pca_regularization=mode, pca_coefficient_alpha=0.2,
@@ -256,7 +257,7 @@ def test_training_wires_tolerances_and_logs_metrics_without_pca_at_inference(sha
         coordinate_decoder="barycenter", wasserstein_softmax_temperature=0.7,
         use_wandb=False, use_amp=False, visualize_every_n_epochs=0,
     )
-    assert summary["history"]["train"][0]["pca_loss"] == pytest.approx(0.01 * (expected["pca_bounded_loss"] if mode == "bounded_reconstruction" else expected["pca_subspace_loss"]).item() + 0.003 * expected["pca_mahalanobis_loss"].item())
+    assert summary["history"]["train"][0]["pca_loss"] == pytest.approx(0.01 * (expected["pca_bounded_loss"] if mode != "mahalanobis" else expected["pca_subspace_loss"]).item() + 0.003 * expected["pca_mahalanobis_loss"].item())
     with open(summary["results_csv"], newline="") as file:
         rows = list(csv.DictReader(file))
     assert len(rows) == 2
@@ -318,3 +319,62 @@ def test_bounded_flat_heatmaps_and_zero_variance_have_finite_gradients(shapes_an
     loss.backward()
     assert torch.isfinite(loss)
     assert torch.isfinite(heatmaps.grad).all()
+
+
+def test_radial_mahalanobis_restriction_preserves_inside_and_bounds_outside():
+    b = torch.tensor([[0., 0.], [0.2, -0.3], [10., -12.]], dtype=torch.float64, requires_grad=True)
+    v = torch.tensor([1., 4.], dtype=torch.float64)
+    restricted, before, after = restrict_coefficients_mahalanobis(b, v, limit=2.)
+    torch.testing.assert_close(restricted[:2], b[:2], rtol=0, atol=0)
+    assert before[-1] > 2
+    torch.testing.assert_close(after[-1], torch.tensor(2., dtype=torch.float64))
+    assert (after <= 2. + 1e-12).all()
+    ratios = restricted[-1] / b[-1]
+    torch.testing.assert_close(ratios[0], ratios[1])
+    grad = torch.autograd.grad((b[:2] - restricted[:2]).square().sum(), b)[0]
+    assert torch.count_nonzero(grad) == 0
+
+
+def test_radial_reconstruction_gradient_matches_finite_differences():
+    b = torch.tensor([[4., -3.]], dtype=torch.float64, requires_grad=True)
+    v = torch.tensor([1., 0.1], dtype=torch.float64)
+    def loss(coefficients):
+        restricted, _, _ = restrict_coefficients_mahalanobis(coefficients, v, 2.)
+        return (coefficients - restricted).square().mean()
+    assert torch.autograd.gradcheck(loss, (b,))
+
+
+def test_mahalanobis_reconstruction_matches_reference_and_decomposes(shapes_and_prior):
+    shapes, prior = shapes_and_prior
+    prediction = shapes[:2].clone().requires_grad_()
+    g = prior['global_prior']
+    aligned = torch.stack([align_shape_for_regularization(x, g['reference_shape']) for x in prediction]).flatten(1)
+    b = (aligned - g['mean_shape']) @ g['components'].T
+    v = g['explained_variance'].clamp_min(g['explained_variance'].max() * 1e-4)
+    q = (b.square() / v).mean(-1, keepdim=True)
+    restricted = b * torch.sqrt(0.01 / q.clamp_min(0.01))
+    expected = (aligned - (g['mean_shape'] + restricted @ g['components'])).square().mean()
+    terms = compute_pca_regularization_terms(prediction, prior, mahalanobis_limit=0.01, mahalanobis_reconstruction=True)
+    torch.testing.assert_close(terms['pca_bounded_loss'], expected)
+    torch.testing.assert_close(terms['pca_bounded_loss'], terms['pca_subspace_loss'] + terms['pca_coefficient_loss'])
+    assert terms['pca_mahalanobis_loss'] == 0
+    assert terms['pca_restricted_mahalanobis_sq_per_component'] <= 0.010001
+    terms['pca_loss'].backward()
+    assert torch.isfinite(prediction.grad).all()
+
+
+def test_mahalanobis_reconstruction_flat_heatmaps_and_zero_variance(shapes_and_prior):
+    _, prior = shapes_and_prior
+    prior['global_prior']['explained_variance'][-1] = 0
+    heatmaps = torch.zeros(1, 6, 8, 8, requires_grad=True)
+    coords = decode_landmarks_for_shape_loss(heatmaps, 64, 64, decoder='barycenter')
+    terms = compute_pca_regularization_terms(coords, prior, mahalanobis_reconstruction=True)
+    terms['pca_loss'].backward()
+    assert all(torch.isfinite(x) for x in terms.values())
+    assert torch.isfinite(heatmaps.grad).all()
+
+
+def test_cannot_mix_box_and_ellipsoid_restrictions(shapes_and_prior):
+    shapes, prior = shapes_and_prior
+    with pytest.raises(ValueError, match='not both'):
+        compute_pca_regularization_terms(shapes, prior, coefficient_alpha=3, mahalanobis_reconstruction=True)

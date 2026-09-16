@@ -37,10 +37,10 @@ def compute_multitask_loss(
                          ("lambda_pca_mahalanobis", lambda_pca_mahalanobis)):
         if not math.isfinite(weight) or weight < 0:
             raise ValueError(f"{name} must be finite and nonnegative.")
-    if pca_regularization not in {"bounded_reconstruction", "mahalanobis"}:
+    if pca_regularization not in {"bounded_reconstruction", "mahalanobis_reconstruction", "mahalanobis"}:
         raise ValueError(f"Unknown PCA regularization: {pca_regularization}")
-    if pca_regularization == "bounded_reconstruction" and lambda_pca_mahalanobis != 0:
-        raise ValueError("bounded_reconstruction requires lambda_pca_mahalanobis=0; use pca_regularization='mahalanobis' for the previous loss.")
+    if pca_regularization != "mahalanobis" and lambda_pca_mahalanobis != 0:
+        raise ValueError("Reconstruction modes require lambda_pca_mahalanobis=0; use pca_regularization='mahalanobis' for the previous loss.")
     predicted_full_heatmaps = outputs["heatmaps"]
     predicted_visible_heatmaps = outputs["visible_heatmaps"]
     predicted_visibility_logits = outputs["visibility_logits"]
@@ -65,6 +65,7 @@ def compute_multitask_loss(
         for key in (
             "pca_loss", "pca_subspace_loss", "pca_mahalanobis_loss",
             "pca_mahalanobis_sq_per_component", "pca_outside_fraction",
+            "pca_restricted_mahalanobis_sq_per_component",
             "pca_projection_mse", "pca_bounded_loss", "pca_coefficient_loss", "pca_clipped_fraction",
         )
     }
@@ -90,10 +91,11 @@ def compute_multitask_loss(
                 mahalanobis_limit=pca_mahalanobis_limit,
                 variance_floor=pca_variance_floor,
                 coefficient_alpha=pca_coefficient_alpha if pca_regularization == "bounded_reconstruction" else None,
+                mahalanobis_reconstruction=pca_regularization == "mahalanobis_reconstruction",
             ))
     # The logged PCA loss is the actual weighted contribution to the objective.
     pca_terms["pca_loss"] = (
-        lambda_pca_projection * pca_terms["pca_bounded_loss" if pca_regularization == "bounded_reconstruction" else "pca_subspace_loss"]
+        lambda_pca_projection * pca_terms["pca_bounded_loss" if pca_regularization != "mahalanobis" else "pca_subspace_loss"]
         + lambda_pca_mahalanobis * pca_terms["pca_mahalanobis_loss"]
     )
     total_loss = (

@@ -110,7 +110,7 @@ visualizations, including different yaw views, against the no-PCA baseline.
 - `pca_outside_fraction`: fraction of shapes with at least one clipped coefficient.
 - `pca_projection_mse`: compatibility alias of `pca_subspace_loss`.
 
-In bounded mode the historical Mahalanobis metrics are zero (not measured).
+In coefficient-box mode the historical Mahalanobis metrics are zero (not measured).
 All PCA diagnostics are zero when regularization is disabled. In the console,
 `clipped` refers to coefficients and `outside` refers to whole shapes.
 
@@ -118,6 +118,55 @@ Use a new run directory: historical `outside` referred to the Mahalanobis
 ellipsoid, and the oldest `pca_loss` values were unweighted. Existing CSV headers
 are respected; new files include the new metrics. `--save-config` records the
 selected mode, alpha and weights.
+
+### Mahalanobis-restricted reconstruction
+
+Select `--pca-regularization mahalanobis_reconstruction` to constrain the
+coefficients jointly to an ellipsoid instead of clipping each independently.
+The default remains `bounded_reconstruction` for existing commands.
+
+```text
+v_safe[j] = max(v[j], pca_variance_floor * max(v), numerical_epsilon)
+q = D_M^2 / K = mean(b[j]^2 / v_safe[j])
+factor = sqrt(limit / max(q, limit))
+b_star = factor * b
+s_star = mu + b_star @ U
+L_bounded = mean((s - s_star)^2)             # /144 for 72 landmarks
+L_total = L_supervised + lambda_pca_projection * L_bounded
+```
+
+Inside the ellipsoid, coefficients are unchanged. Outside, all coefficients
+are scaled proportionally to its boundary. This is a radial projection in
+standardized PCA coordinates, not the nearest Euclidean point on an anisotropic
+ellipsoid. Gradients flow through the scaling and reconstruction. The loss
+still decomposes into the subspace residual plus coefficient correction /2N.
+It adds no separate Mahalanobis penalty and does not pull accepted coefficients
+toward zero. Alignment and the inference limitations described above still apply:
+the network output is encouraged, not guaranteed, to satisfy the constraint.
+
+Add these options to the usual training command with the existing global prior:
+
+```bash
+--pca-regularization mahalanobis_reconstruction \
+--pca-mahalanobis-limit 2.0 \
+--pca-variance-floor 0.0001 \
+--lambda-pca-projection 1.0 \
+--lambda-pca-mahalanobis 0.0
+```
+
+The weight 1.0 is illustrative, not validated by a training experiment.
+Wasserstein remains supported. `pca_coefficient_alpha` is unused in this mode;
+a nonzero `lambda_pca_mahalanobis` is rejected. The limit applies to **D_M^2/K**,
+so with K=32 and limit=2 the Mahalanobis radius is 8, not 2. This is a tunable
+tolerance rather than a calibrated confidence level.
+
+`pca_mahalanobis_sq_per_component` records mean q before restriction;
+`pca_restricted_mahalanobis_sq_per_component` records it afterward and should
+not exceed the limit beyond numerical tolerance. `pca_outside_fraction` counts
+shapes corrected and `pca_clipped_fraction` counts coefficients changed by the
+joint scaling. `pca_bounded_loss` is the reconstruction MSE and `pca_loss` its
+weighted contribution. `pca_mahalanobis_loss` is zero because no hinge penalty
+is used. Use a new run directory to include the new diagnostic column.
 
 ### Previous Mahalanobis mode for comparison
 

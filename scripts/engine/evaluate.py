@@ -187,6 +187,30 @@ def compute_normalized_hausdorff_distance(
     return pixel_distance, float(pixel_distance / normalization)
 
 
+def summarize_metric_distribution(
+    metric_name: str,
+    values: list[float],
+) -> dict[str, float | None]:
+    """Summarize finite image-level metric values for final reports."""
+    finite_values = np.asarray(values, dtype=np.float64)
+    finite_values = finite_values[np.isfinite(finite_values)]
+    if finite_values.size == 0:
+        return {
+            f"mean_{metric_name}": None,
+            f"median_{metric_name}": None,
+            f"p90_{metric_name}": None,
+            f"p95_{metric_name}": None,
+            f"p99_{metric_name}": None,
+        }
+    return {
+        f"mean_{metric_name}": float(np.mean(finite_values)),
+        f"median_{metric_name}": float(np.median(finite_values)),
+        f"p90_{metric_name}": float(np.percentile(finite_values, 90)),
+        f"p95_{metric_name}": float(np.percentile(finite_values, 95)),
+        f"p99_{metric_name}": float(np.percentile(finite_values, 99)),
+    }
+
+
 def compute_interocular_normalization_factor(
     target_landmarks: np.ndarray,
     left_eye_corner_index: int = 36,

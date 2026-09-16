@@ -11,6 +11,8 @@ from tqdm import tqdm
 from .evaluate import (
     _build_boxplot_title,
     compute_box_normalization_factor,
+    compute_normalized_hausdorff_distance,
+    summarize_metric_distribution,
     round_metric_value,
     save_metrics_summary_csv,
     save_per_image_nme_csv,
@@ -31,7 +33,11 @@ from .visibility_metrics import (
     visibility_summary_fields,
 )
 from ..utils.predictions import save_prediction_file
-from ..utils.natural_labels import NATURAL_ORIENTATION_NAMES, UNKNOWN_ORIENTATION
+from ..utils.natural_labels import (
+    NATURAL_ORIENTATION_NAMES,
+    UNKNOWN_ORIENTATION,
+    compute_natural_valid_landmark_mask,
+)
 from ..utils.visualization import (
     compute_global_linear_y_limits,
     compute_global_log_y_limits,
@@ -118,6 +124,8 @@ def evaluate_natural_checkpoint(
     num_visible_visible_landmarks = 0
     num_samples_with_gt_valid_metrics = 0
     num_gt_valid_landmarks = 0
+    visible_image_hausdorff_values: list[float] = []
+    gt_valid_image_hausdorff_values: list[float] = []
     orientation_names = [*NATURAL_ORIENTATION_NAMES, UNKNOWN_ORIENTATION]
     orientation_to_errors: dict[str, list[list[float]]] = {}
     orientation_to_box_nme_values: dict[str, list[float]] = {
@@ -130,6 +138,12 @@ def evaluate_natural_checkpoint(
         orientation: [] for orientation in orientation_names
     }
     orientation_to_box_nme_point_to_line_gt_valid_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
+    orientation_to_hausdorff_visible_values: dict[str, list[float]] = {
+        orientation: [] for orientation in orientation_names
+    }
+    orientation_to_hausdorff_gt_valid_values: dict[str, list[float]] = {
         orientation: [] for orientation in orientation_names
     }
     orientation_sample_counts = {orientation: 0 for orientation in orientation_names}
@@ -276,6 +290,40 @@ def evaluate_natural_checkpoint(
                     normalization_fn=compute_box_normalization_factor,
                     inclusion_mode="gt_valid",
                 )
+                gt_valid_mask = compute_natural_valid_landmark_mask(
+                    landmarks=target_landmarks_original,
+                    visibility=target_visibility,
+                )
+                visible_intersection_mask = gt_valid_mask & (predicted_visibility == 1)
+                normalization_landmarks = target_landmarks_original[gt_valid_mask]
+                (
+                    hausdorff_pixel_visible,
+                    hausdorff_box_visible,
+                ) = compute_normalized_hausdorff_distance(
+                    predicted_landmarks=predicted_landmarks_original,
+                    target_landmarks=target_landmarks_original,
+                    valid_mask=visible_intersection_mask,
+                    normalization_landmarks=normalization_landmarks,
+                )
+                (
+                    hausdorff_pixel_gt_valid,
+                    hausdorff_box_gt_valid,
+                ) = compute_normalized_hausdorff_distance(
+                    predicted_landmarks=predicted_landmarks_original,
+                    target_landmarks=target_landmarks_original,
+                    valid_mask=gt_valid_mask,
+                    normalization_landmarks=normalization_landmarks,
+                )
+                if np.isfinite(hausdorff_box_visible):
+                    visible_image_hausdorff_values.append(hausdorff_box_visible)
+                    orientation_to_hausdorff_visible_values[orientation].append(
+                        hausdorff_box_visible
+                    )
+                if np.isfinite(hausdorff_box_gt_valid):
+                    gt_valid_image_hausdorff_values.append(hausdorff_box_gt_valid)
+                    orientation_to_hausdorff_gt_valid_values[orientation].append(
+                        hausdorff_box_gt_valid
+                    )
                 if mean_box_nme_gt_valid is not None:
                     num_samples_with_gt_valid_metrics += 1
                     num_gt_valid_landmarks += len(gt_valid_errors)
@@ -360,6 +408,12 @@ def evaluate_natural_checkpoint(
                         "orientation": orientation,
                         "mean_nme_box": mean_box_nme,
                         "mean_nme_box_point_to_line": mean_box_nme_point_to_line,
+                        "hausdorff_pixel": hausdorff_pixel_visible,
+                        "hausdorff_box": hausdorff_box_visible,
+                        "hausdorff_pixel_visible_intersection": hausdorff_pixel_visible,
+                        "hausdorff_box_visible_intersection": hausdorff_box_visible,
+                        "hausdorff_pixel_gt_valid": hausdorff_pixel_gt_valid,
+                        "hausdorff_box_gt_valid": hausdorff_box_gt_valid,
                         "mean_nme_box_gt_valid": mean_box_nme_gt_valid,
                         "mean_nme_box_point_to_line_gt_valid": mean_box_nme_point_to_line_gt_valid,
                         "mean_nme_interocular": None,
@@ -467,6 +521,13 @@ def evaluate_natural_checkpoint(
                     if orientation_to_box_nme_point_to_line_values[orientation]
                     else None
                 ),
+                **summarize_metric_distribution(
+                    "hausdorff_box_visible_intersection",
+                    orientation_to_hausdorff_visible_values[orientation],
+                ),
+                "num_hausdorff_samples_visible_intersection": len(
+                    orientation_to_hausdorff_visible_values[orientation]
+                ),
                 "mean_nme_box_gt_valid": (
                     float(np.mean(orientation_to_box_nme_gt_valid_values[orientation]))
                     if orientation_to_box_nme_gt_valid_values[orientation]
@@ -501,6 +562,13 @@ def evaluate_natural_checkpoint(
                     if orientation_to_box_nme_point_to_line_gt_valid_values[orientation]
                     else None
                 ),
+                **summarize_metric_distribution(
+                    "hausdorff_box_gt_valid",
+                    orientation_to_hausdorff_gt_valid_values[orientation],
+                ),
+                "num_hausdorff_samples_gt_valid": len(
+                    orientation_to_hausdorff_gt_valid_values[orientation]
+                ),
                 "mean_nme_interocular": None,
             }
             for orientation, values in orientation_to_box_nme_values.items()
@@ -530,10 +598,16 @@ def evaluate_natural_checkpoint(
                 "median_nme_box_visible_intersection": None,
                 "mean_nme_box_point_to_line_visible_intersection": None,
                 "median_nme_box_point_to_line_visible_intersection": None,
+                **summarize_metric_distribution(
+                    "hausdorff_box_visible_intersection", []
+                ),
+                "num_hausdorff_samples_visible_intersection": 0,
                 "mean_nme_box_gt_valid": None,
                 "median_nme_box_gt_valid": None,
                 "mean_nme_box_point_to_line_gt_valid": None,
                 "median_nme_box_point_to_line_gt_valid": None,
+                **summarize_metric_distribution("hausdorff_box_gt_valid", []),
+                "num_hausdorff_samples_gt_valid": 0,
                 "mean_nme_interocular": None,
             }
             for orientation in orientation_names
@@ -621,6 +695,10 @@ def evaluate_natural_checkpoint(
             if valid_image_point_to_line_values
             else None
         ),
+        **summarize_metric_distribution(
+            "hausdorff_box_visible_intersection",
+            visible_image_hausdorff_values,
+        ),
         "mean_nme_box_gt_valid": (
             float(np.mean(valid_image_gt_valid_values))
             if valid_image_gt_valid_values
@@ -641,9 +719,13 @@ def evaluate_natural_checkpoint(
             if valid_image_point_to_line_gt_valid_values
             else None
         ),
+        **summarize_metric_distribution(
+            "hausdorff_box_gt_valid",
+            gt_valid_image_hausdorff_values,
+        ),
         "evaluation_modes": {
             "visible_intersection": "gt_visibility == 1 and pred_visibility == 1",
-            "gt_valid": "finite GT coordinates, regardless of predicted visibility",
+            "gt_valid": "GT visibility > 0 and finite GT coordinates, regardless of predicted visibility",
         },
         "mean_nme_interocular": None,
         **visibility_summary_fields(visibility_analysis),

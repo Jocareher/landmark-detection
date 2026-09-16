@@ -424,12 +424,35 @@ def align_shape_for_regularization(
     return aligned * target_scale + target_center
 
 
+def restrict_coefficients_mahalanobis(
+    coefficients: torch.Tensor,
+    variances: torch.Tensor,
+    limit: float,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Radially restrict b to D_M^2/K <= limit in whitened PCA coordinates.
+
+    This is nearest-point projection in the whitened metric, not Euclidean
+    projection onto an anisotropic ellipsoid. Inside coefficients are unchanged.
+    The caller supplies positive, stabilized variances. No gradient is detached.
+    """
+    if not math.isfinite(limit) or limit <= 0:
+        raise ValueError("limit must be finite and positive.")
+    radius = math.sqrt(coefficients.shape[-1] * limit)
+    distance = torch.linalg.vector_norm(coefficients / variances.sqrt(), dim=-1, keepdim=True)
+    factor = radius / distance.clamp_min(radius)
+    restricted = coefficients * factor
+    before = distance.squeeze(-1).square() / coefficients.shape[-1]
+    after = (restricted.square() / variances).mean(dim=-1)
+    return restricted, before, after
+
+
 def compute_pca_regularization_terms(
     predicted_landmarks: torch.Tensor,
     pca_prior: dict[str, Any],
     mahalanobis_limit: float = 2.0,
     variance_floor: float = 1e-4,
     coefficient_alpha: float | None = None,
+    mahalanobis_reconstruction: bool = False,
 ) -> dict[str, torch.Tensor]:
     """Penalize off-subspace residuals and only excessive Mahalanobis distance.
 
@@ -441,8 +464,12 @@ def compute_pca_regularization_terms(
     With coefficient_alpha set, instead return the MSE to the PCA reconstruction
     clipped to +/- alpha times each original standard deviation. Gradients flow
     through alignment, projection and clipping; no moving target is detached.
+    With mahalanobis_reconstruction=True, radially restrict coefficients to
+    D_M^2/K <= limit and use only MSE to that reconstruction, without a hinge.
     The limit is a tunable tolerance, not a calibrated probability percentile.
     """
+    if mahalanobis_reconstruction and coefficient_alpha is not None:
+        raise ValueError("Choose coefficient clipping or Mahalanobis reconstruction, not both.")
     if coefficient_alpha is not None and (not math.isfinite(coefficient_alpha) or coefficient_alpha <= 0):
         raise ValueError("coefficient_alpha must be finite and positive.")
     if not math.isfinite(mahalanobis_limit) or mahalanobis_limit <= 0:
@@ -480,6 +507,7 @@ def compute_pca_regularization_terms(
     coefficient_residuals = []
     clipped_fractions = []
     clipped_shapes = []
+    restricted_distances = []
     for sample_index in range(predicted_landmarks.shape[0]):
         current_shape = predicted_landmarks[sample_index]
         if current_shape.shape[0] != expected_landmarks:
@@ -510,15 +538,21 @@ def compute_pca_regularization_terms(
         centered = shape_vector - mean_shape
         coefficients = centered @ components.T
         reconstructed = mean_shape + coefficients @ components
-        if coefficient_alpha is not None:
-            # Variances are not inverted here: use the actual prior standard
-            # deviations, including zero-width bounds for zero-variance modes.
-            bounds = coefficient_alpha * variances.sqrt()
-            bounded_coefficients = torch.clamp(coefficients, min=-bounds, max=bounds)
+        if coefficient_alpha is not None or mahalanobis_reconstruction:
+            if mahalanobis_reconstruction:
+                bounded_coefficients, _, after = restrict_coefficients_mahalanobis(
+                    coefficients, safe_variances, mahalanobis_limit,
+                )
+                restricted_distances.append(after.mean())
+                clipped = coefficients != bounded_coefficients
+            else:
+                # Box bounds use original variances, including zero-width modes.
+                bounds = coefficient_alpha * variances.sqrt()
+                bounded_coefficients = torch.clamp(coefficients, min=-bounds, max=bounds)
+                clipped = coefficients.abs() > bounds
             bounded_shape = mean_shape + bounded_coefficients @ components
             bounded_residuals.append((shape_vector - bounded_shape).square().mean())
             coefficient_residuals.append((coefficients - bounded_coefficients).square().sum() / (2 * expected_landmarks))
-            clipped = coefficients.abs() > bounds
             clipped_fractions.append(clipped.float().mean())
             clipped_shapes.append(clipped.any().float())
         residuals.append((shape_vector - reconstructed).square().sum())
@@ -527,7 +561,7 @@ def compute_pca_regularization_terms(
     residuals_tensor = torch.stack(residuals)
     distances_tensor = torch.stack(distances)
     subspace_loss = residuals_tensor.mean() / (2 * expected_landmarks)
-    if coefficient_alpha is not None:
+    if coefficient_alpha is not None or mahalanobis_reconstruction:
         bounded_loss = torch.stack(bounded_residuals).mean()
         zero = bounded_loss.new_zeros(())
         return {
@@ -539,7 +573,8 @@ def compute_pca_regularization_terms(
             "pca_subspace_loss": subspace_loss,
             "pca_projection_mse": subspace_loss,
             "pca_mahalanobis_loss": zero,
-            "pca_mahalanobis_sq_per_component": zero,
+            "pca_mahalanobis_sq_per_component": distances_tensor.mean() if mahalanobis_reconstruction else zero,
+            "pca_restricted_mahalanobis_sq_per_component": torch.stack(restricted_distances).mean() if mahalanobis_reconstruction else zero,
         }
     mahalanobis_loss = F.relu(distances_tensor / mahalanobis_limit - 1).square().mean()
     return {
