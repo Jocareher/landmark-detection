@@ -582,6 +582,9 @@ class PCAGuidedTTA:
                                         if hasattr(self.model.landmarker, "architecture_config") else {}),
             "normalizer_architecture": self.model.normalizer.architecture_config(),
             "loss": "pca_reconstruction_loss_only",
+            "pca_loss_space": "input_image_pixels",
+            "pca_loss_reduction": "mean_squared_error",
+            "pca_alignment_gradient": "full",
             "steps": self.config.steps,
             "learning_rate": self.config.learning_rate,
             "weight_decay": self.config.weight_decay,
@@ -1470,6 +1473,13 @@ and `normalizer_heads` updates all task-head parameters. The backbone and PCA
 prior remain frozen. Head modules stay in eval mode (including any legacy BN). The sole optimization objective is PCA reconstruction loss; no
 target ground truth, image regularizer, parameter regularizer, or consistency
 loss is used.
+
+PCA reconstruction is mapped back with the inverse of the same similarity
+transform used to align the prediction. The sole loss is MSE between the original
+prediction and this reconstruction in input-crop pixel coordinates (pixel^2).
+Gradients flow through the complete alignment and inverse, including scale;
+neither the reconstruction nor the transform is detached. No additional aligned
+loss or image-size normalization is applied.
 
 - Adaptation steps per image: `{config.steps}`
 - Adam learning rate: `{config.learning_rate}`

@@ -90,6 +90,16 @@ def apply_similarity_transform_torch(
     return (scale * (coords @ rotation)) + translation
 
 
+def invert_similarity_transform_torch(
+    coords: torch.Tensor,
+    rotation: torch.Tensor,
+    scale: torch.Tensor,
+    translation: torch.Tensor,
+) -> torch.Tensor:
+    """Undo the same row-vector similarity transform, retaining all gradients."""
+    return ((coords - translation) @ rotation.T) / scale
+
+
 def align_shape_to_reference_torch(
     coords: torch.Tensor,
     reference_shape: torch.Tensor,
@@ -363,7 +373,15 @@ def compute_pca_projection_loss(
     predicted_landmarks: torch.Tensor,
     pca_prior: dict[str, Any],
 ) -> torch.Tensor:
-    """Penalize projection residuals using the global PCA subspace."""
+    """Measure PCA reconstruction MSE in the input landmark coordinate space.
+
+    Align X with T(X), reconstruct in PCA space, then compare X against
+    T^{-1}(PCA(T(X))). The inverse reuses the exact forward transform.
+    Gradients flow through alignment, reconstruction, and the inverse,
+    including prediction-dependent scale. Only the mean over coordinates,
+    landmarks, and samples is applied; there is no size normalization or
+    additional aligned-space loss. Image-coordinate inputs yield pixel^2.
+    """
     if predicted_landmarks.ndim != 3 or predicted_landmarks.shape[-1] != 2:
         raise ValueError(
             "Expected predicted_landmarks with shape (B, N, 2), "
@@ -391,11 +409,14 @@ def compute_pca_projection_loss(
             device=current_shape.device,
             dtype=current_shape.dtype,
         )
-        aligned_shape = align_shape_to_reference_torch(
-            coords=current_shape,
-            reference_shape=reference_shape,
+        rotation, scale, translation = estimate_similarity_transform_torch(
+            source=current_shape,
+            target=reference_shape,
             allow_reflection=allow_reflection,
             eps=eps,
+        )
+        aligned_shape = apply_similarity_transform_torch(
+            current_shape, rotation, scale, translation
         )
         shape_vector = aligned_shape.reshape(1, -1)
         mean_shape = global_prior["mean_shape"].to(
@@ -409,6 +430,9 @@ def compute_pca_projection_loss(
         centered = shape_vector - mean_shape
         coefficients = centered @ components.T
         reconstructed = mean_shape + coefficients @ components
-        sample_losses.append(F.mse_loss(shape_vector, reconstructed))
+        reconstructed_image_shape = invert_similarity_transform_torch(
+            reconstructed.reshape_as(current_shape), rotation, scale, translation
+        )
+        sample_losses.append(F.mse_loss(current_shape, reconstructed_image_shape))
 
     return torch.stack(sample_losses).mean()

@@ -131,3 +131,37 @@ classifier therefore receive no gradient even in the full-head scope. The
 shared visibility features can still change through the full-landmark path.
 Reduced PCA error alone does not establish improved landmark accuracy: compare
 post-hoc NME and Hausdorff metrics, including degraded cases, against the baseline.
+
+
+## PCA reconstruction loss in image coordinates
+
+The shared training/TTA PCA loss now uses the supervisor's complete inverse
+transform approach. Given predicted input-crop landmarks X, estimate the existing
+similarity transform T(X) = s X R + t, align to the prior reference, and reconstruct
+Z_hat = PCA(T(X)). Reuse exactly that transform to compute:
+
+```text
+X_hat = ((Z_hat - t) @ R.T) / s
+L_pca = mean((X - X_hat)^2)
+```
+
+This replaces the previous aligned-coordinate MSE; it is one regularizer, not
+an additional term. Gradients flow through scale, rotation, translation, PCA
+projection, and the inverse. No `detach` or stop-gradient is applied to this
+path. MSE averages over both coordinates, landmarks, and samples; there is no
+division by image dimensions or predicted face size. Its units are input-crop
+pixels squared, not original uncropped photograph pixels squared.
+
+The change applies to supervised training whenever `lambda_pca_projection > 0`
+and to all three TTA adaptation scopes. The PCA prior and model checkpoint
+formats remain compatible; they do not need rebuilding for this loss change.
+TTA summary metadata identifies `pca_loss_space: input_image_pixels` and
+`pca_alignment_gradient: full`.
+
+For each nondegenerate shape, L_image = L_aligned / s^2. Historical loss values
+and weights are therefore not directly comparable. Use separate output runs and
+reassess the supervised regularization weight. With full gradients, reducing
+predicted shape size can reduce the image-space residual without improving
+relative shape; evaluate landmark accuracy as well as reconstruction loss.
+The existing handling of degenerate alignment is retained: training raises an
+alignment error; TTA restores source weights and returns the baseline prediction.
