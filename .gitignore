@@ -172,3 +172,6 @@ weights/*
 *.csv
 external_repos/*
 !external_repos/.gitkeep
+
+# Generated presentation artifacts
+*.[pP][pP][tT][xX]

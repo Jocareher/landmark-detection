@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .normalization import build_feature_normalization
+
 BatchNorm2d = nn.BatchNorm2d
 BN_MOMENTUM = 0.01
 TransferMode = Literal["feature_extractor", "fine_tuning"]
@@ -523,10 +525,11 @@ class HRNetLandmarkVisibility(nn.Module):
 
     FINAL_CONV_KERNEL = 1
 
-    def __init__(self, num_landmarks: int = 72) -> None:
+    def __init__(self, num_landmarks: int = 72, head_normalization: str = "batch") -> None:
         """Initialize the multitask model and its task-specific heads."""
         super().__init__()
         self.num_landmarks = num_landmarks
+        self.head_normalization = head_normalization
         self.backbone = HRNetW18Backbone()
         in_channels = self.backbone.final_inp_channels
         branch_channels = in_channels // 2
@@ -541,7 +544,7 @@ class HRNetLandmarkVisibility(nn.Module):
                 padding=0,
                 bias=False,
             ),
-            BatchNorm2d(branch_channels, momentum=BN_MOMENTUM),
+            build_feature_normalization(head_normalization, branch_channels),
             nn.ReLU(inplace=True),
         )
         self.visibility_classifier = nn.Sequential(
@@ -564,7 +567,7 @@ class HRNetLandmarkVisibility(nn.Module):
                 padding=0,
                 bias=False,
             ),
-            BatchNorm2d(branch_channels, momentum=BN_MOMENTUM),
+            build_feature_normalization(head_normalization, branch_channels),
             nn.ReLU(inplace=True),
         )
         self.visible_landmark_predictor = nn.Conv2d(
@@ -584,7 +587,7 @@ class HRNetLandmarkVisibility(nn.Module):
                 padding=0,
                 bias=False,
             ),
-            BatchNorm2d(in_channels, momentum=BN_MOMENTUM),
+            build_feature_normalization(head_normalization, in_channels),
             nn.ReLU(inplace=True),
         )
         self.full_landmark_predictor = nn.Conv2d(
@@ -597,6 +600,13 @@ class HRNetLandmarkVisibility(nn.Module):
         )
         self._frozen_backbone_modules: list[nn.Module] = []
         self._initialize_new_heads()
+
+    def architecture_config(self) -> dict[str, object]:
+        """Describe the task heads for checkpoint reconstruction."""
+        return {
+            "num_landmarks": self.num_landmarks,
+            "head_normalization": self.head_normalization,
+        }
 
     def _task_heads(self) -> list[nn.Module]:
         """Return the experiment heads that sit on top of the shared backbone."""
@@ -617,7 +627,7 @@ class HRNetLandmarkVisibility(nn.Module):
                     nn.init.normal_(module.weight, std=0.001)
                     if module.bias is not None:
                         nn.init.constant_(module.bias, 0)
-                elif isinstance(module, nn.BatchNorm2d):
+                elif isinstance(module, (nn.BatchNorm2d, nn.InstanceNorm2d, nn.LayerNorm)):
                     nn.init.constant_(module.weight, 1)
                     nn.init.constant_(module.bias, 0)
 

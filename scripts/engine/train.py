@@ -306,6 +306,9 @@ def save_checkpoint(
     }
     if isinstance(model, NormalizedLandmarker) and model.normalizer is not None:
         payload["normalizer_architecture"] = model.normalizer.architecture_config()
+    landmarker = model.landmarker if isinstance(model, NormalizedLandmarker) else model
+    if hasattr(landmarker, "architecture_config"):
+        payload["landmarker_architecture"] = landmarker.architecture_config()
     torch.save(payload, checkpoint_path)
 
 

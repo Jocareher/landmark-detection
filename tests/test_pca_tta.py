@@ -62,14 +62,17 @@ def _pca_prior() -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("normalization", ["none", "layer", "instance"])
 def test_pca_tta_is_episodic_and_restores_source_normalizer(
     tmp_path: Path,
     capsys,
+    normalization: str,
 ) -> None:
     torch.manual_seed(7)
     model = NormalizedLandmarker(
         landmarker=TinyLandmarker(),
         normalizer=ResidualImageNormalizer(
+            normalization=normalization,
             hidden_channels=4,
             num_layers=2,
             residual_scale=0.1,
@@ -273,3 +276,72 @@ def test_enhanced_difference_view_exposes_small_nonzero_changes() -> None:
     assert display_max == pytest.approx(0.001)
     assert np.all(heatmap[0, 0] == 0.0)
     assert float(heatmap[3, 3].max()) == pytest.approx(0.9)
+
+
+@pytest.mark.parametrize("normalization", ["layer", "instance"])
+@pytest.mark.parametrize("scope", ["normalizer", "normalizer_head_norms", "normalizer_heads"])
+def test_head_scopes_reload_update_and_reset(normalization, scope, tmp_path, monkeypatch):
+    from scripts.models import HRNetLandmarkVisibility, build_model_from_checkpoints
+
+    torch.set_num_threads(1)
+    torch.manual_seed(19)
+    original = NormalizedLandmarker(
+        HRNetLandmarkVisibility(num_landmarks=4, head_normalization=normalization),
+        ResidualImageNormalizer(normalization=normalization, hidden_channels=4,
+                                initialize_identity=False),
+    )
+    # Exercise the same metadata reconstruction used by standalone evaluation.
+    model = build_model_from_checkpoints({
+        "model_state_dict": original.state_dict(),
+        "landmarker_architecture": original.landmarker.architecture_config(),
+        "normalizer_architecture": original.normalizer.architecture_config(),
+    })
+    source = deepcopy(model.state_dict())
+    adapter = PCAGuidedTTA(model, _pca_prior(), torch.device("cpu"), tmp_path,
+                          PCATTAConfig(adaptation_scope=scope, steps=1, probe_count=0))
+    selected = set(adapter.adapted_parameter_names)
+    assert not any(name.startswith("landmarker.backbone.") for name in selected)
+    head_names = {name for name in selected if name.startswith("landmarker.")}
+    if scope == "normalizer":
+        assert not head_names
+    elif scope == "normalizer_head_norms":
+        assert len(head_names) == 6  # Scale and shift of each of the three heads.
+        assert all(".1." in name for name in head_names)
+    else:
+        assert "landmarker.full_landmark_predictor.weight" in head_names
+
+    updates = []
+    adam_step = torch.optim.Adam.step
+    def record_step(optimizer, *args, **kwargs):
+        result = adam_step(optimizer, *args, **kwargs)
+        updates.append({name for name, value in model.state_dict().items()
+                        if not torch.equal(value, source[name])})
+        return result
+    monkeypatch.setattr(torch.optim.Adam, "step", record_step)
+    image = torch.randn(1, 3, 64, 64)
+    first = adapter.adapt_batch(image, ["first"])
+    second = adapter.adapt_batch(image, ["second"])
+    assert adapter.failed_samples == 0
+    assert len(updates) == 2 and updates[0]
+    assert updates[0] <= selected
+    if scope != "normalizer":
+        assert updates[0] & head_names
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, source[name], rtol=0, atol=0)
+    torch.testing.assert_close(first["heatmaps"], second["heatmaps"], rtol=0, atol=0)
+
+    # Simulate failure after the optimizer has already changed selected weights.
+    def failing_step(optimizer, *args, **kwargs):
+        adam_step(optimizer, *args, **kwargs)
+        raise RuntimeError("injected optimizer failure")
+    monkeypatch.setattr(torch.optim.Adam, "step", failing_step)
+    with pytest.warns(RuntimeWarning, match="injected optimizer failure"):
+        fallback = adapter.adapt_batch(image, ["failed"])
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, source[name], rtol=0, atol=0)
+    torch.testing.assert_close(fallback["heatmaps"], first["tta_baseline_heatmaps"], rtol=0, atol=0)
+
+
+def test_invalid_adaptation_scope():
+    with pytest.raises(ValueError, match="scope"):
+        PCATTAConfig(adaptation_scope="backbone").validate()

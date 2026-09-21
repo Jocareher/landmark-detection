@@ -4,9 +4,9 @@
 
 These experiments test the supervised prerequisite of a future test-time
 adaptation method: whether a small appearance adapter can be inserted before
-BabyLand-72 without changing the established landmark pipeline. Test-time
-adaptation, DAE guidance, atlas switching, and target-domain training are
-intentionally not implemented here.
+BabyLand-72 without changing the established landmark pipeline. The separate PCA-guided TTA evaluator adapts the normalizer after supervised
+training. DAE guidance, atlas switching, and target-domain training are outside
+these experiments.
 
 The effective pipeline is:
 
@@ -273,3 +273,68 @@ localization.
 These experiments do not establish domain generalization by themselves. They
 only establish the architecture, supervised trainability, checkpointing, and
 diagnostic baseline needed before considering per-image test-time updates.
+
+
+## LayerNorm and InstanceNorm comparison
+
+Run two independent supervised experiments, keeping data, seed, losses, and
+training budget fixed. Both update the complete residual normalizer, transition3,
+stage4, and all three heads. Stem, layer1, stage2, and stage3 stay frozen,
+including their BatchNorm running statistics. One unfrozen stage does not mean
+exactly 25% of the parameters in HRNet's multibranch architecture.
+
+```bash
+python -m scripts.main --config configs/normalizer_experiments.yaml \
+  --experiment-mode normalizer_joint_finetune \
+  --transfer-mode fine_tuning --num-unfrozen-stages 1 \
+  --normalizer-normalization layer --head-normalization layer \
+  --wandb-run-name normalization_layer
+
+python -m scripts.main --config configs/normalizer_experiments.yaml \
+  --experiment-mode normalizer_joint_finetune \
+  --transfer-mode fine_tuning --num-unfrozen-stages 1 \
+  --normalizer-normalization instance --head-normalization instance \
+  --wandb-run-name normalization_instance
+```
+
+Keep `unfreeze_stem: false` and `checkpoint: null` in the shared YAML. Configure
+its dataset, pretrained HRNet weights, and output paths for the training machine.
+These commands start from official HRNet weights and newly initialized heads,
+not a previously trained task checkpoint. The two commands use distinct run names. Use new names when repeating runs.
+
+`layer` means LayerNorm over C at each spatial position (NCHW -> NHWC ->
+LayerNorm(C) -> NCHW), with one learned scale and bias per channel. It does not
+normalize jointly over C,H,W. `instance` means InstanceNorm2d over H,W per image
+and channel, with affine=True and track_running_stats=False. Both work
+independently of the other images in a batch and use the same statistics in
+train/eval. They have the same number of affine parameters per layer.
+
+Normalization goes between convolution and activation in the normalizer's hidden
+blocks, and replaces BN in the visibility, visible-landmark, and full-landmark
+feature heads. Backbone BN, the output predictors, the normalizer's final RGB
+convolution, and the residual addition are preserved. The zero final convolution
+still gives an exact identity normalizer at initialization. This also initially
+blocks gradients to its preceding hidden layers until the final convolution
+learns; supervised training of the complete normalizer is therefore required.
+
+Checkpoints record `landmarker_architecture` as well as the normalizer
+architecture. Full checkpoints and split landmarker/normalizer exports can be
+reloaded for evaluation/TTA. Legacy checkpoints without the new metadata retain
+BatchNorm heads by default.
+
+After training, use each run's full checkpoint with the existing evaluator:
+
+```bash
+python -m scripts.evaluate --config configs/pca_tta_evaluation.yaml \
+  --checkpoint /absolute/path/to/run/checkpoints/full_model_best.pth
+```
+
+The existing episodic PCA TTA updates the complete normalizer only (convolutions
+and normalization affine parameters), freezes HRNet and all heads, and resets
+normalizer/optimizer state for each image. There are no InstanceNorm running
+statistics to adapt. Compare baseline and adapted NME/visibility metrics for
+each checkpoint; a lower PCA residual alone is not evidence of better landmarks.
+
+The evaluator also supports `normalizer_head_norms` and `normalizer_heads` via
+`--pca-tta-adaptation-scope`. See `docs/standalone_evaluation.md` for the three
+TTA ablations. The default remains normalizer-only adaptation.

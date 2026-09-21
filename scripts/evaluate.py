@@ -212,7 +212,7 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=defaults.pca_tta_enabled,
         help=(
-            "Enable episodic per-image TTA. Only the external normalizer is "
+            "Enable episodic per-image TTA. The selected normalizer/head parameters are "
             "updated and PCA reconstruction loss is the sole objective."
         ),
     )
@@ -223,16 +223,22 @@ def parse_args() -> argparse.Namespace:
         help="Source-trained PCA shape-prior checkpoint required by --pca-tta.",
     )
     parser.add_argument(
+        "--pca-tta-adaptation-scope",
+        choices=["normalizer", "normalizer_head_norms", "normalizer_heads"],
+        default=defaults.pca_tta_adaptation_scope,
+        help="Adapt the normalizer, optionally with head affine norms or full heads.",
+    )
+    parser.add_argument(
         "--pca-tta-steps",
         type=int,
         default=defaults.pca_tta_steps,
-        help="Number of independent normalizer updates performed per target image.",
+        help="Number of independent adaptation updates performed per target image.",
     )
     parser.add_argument(
         "--pca-tta-learning-rate",
         type=float,
         default=defaults.pca_tta_learning_rate,
-        help="Adam learning rate used for the normalizer during each TTA episode.",
+        help="Adam learning rate used for selected parameters during each TTA episode.",
     )
     parser.add_argument(
         "--pca-tta-weight-decay",
@@ -417,6 +423,7 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.save_natural_crop_overlays = args.save_crop_overlays
     config.pca_tta_enabled = args.pca_tta
     config.pca_prior_path = args.pca_prior_path
+    config.pca_tta_adaptation_scope = args.pca_tta_adaptation_scope
     config.pca_tta_steps = args.pca_tta_steps
     config.pca_tta_learning_rate = args.pca_tta_learning_rate
     config.pca_tta_weight_decay = args.pca_tta_weight_decay
@@ -579,6 +586,7 @@ def main() -> None:
             device=device,
             output_dir=output_dir / "tta",
             config=PCATTAConfig(
+                adaptation_scope=config.pca_tta_adaptation_scope,
                 steps=config.pca_tta_steps,
                 learning_rate=config.pca_tta_learning_rate,
                 weight_decay=config.pca_tta_weight_decay,
@@ -598,6 +606,7 @@ def main() -> None:
         )
         print(
             "[INFO] PCA-guided episodic TTA enabled | "
+            f"scope={config.pca_tta_adaptation_scope} "
             f"steps={config.pca_tta_steps} "
             f"lr={config.pca_tta_learning_rate:g} "
             f"scheduler={config.pca_tta_lr_scheduler} "

@@ -130,8 +130,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--normalizer-normalization",
-        choices=["none", "group", "instance"],
+        choices=["none", "group", "layer", "instance"],
         default=defaults.normalizer_internal_normalization,
+    )
+    parser.add_argument(
+        "--head-normalization",
+        choices=["batch", "layer", "instance"],
+        default=defaults.head_normalization,
+        help="Normalization inside all three task heads; backbone BN is preserved.",
     )
     parser.add_argument(
         "--normalizer-residual-scale",
@@ -686,7 +692,9 @@ def validate_experiment_config(config: ExperimentConfig) -> None:
 
 def build_model(config: ExperimentConfig) -> torch.nn.Module:
     """Instantiate the model, load pretrained weights, and configure trainable layers."""
-    landmarker = HRNetLandmarkVisibility(num_landmarks=config.num_landmarks)
+    landmarker = HRNetLandmarkVisibility(
+        num_landmarks=config.num_landmarks, head_normalization=config.head_normalization
+    )
     if (
         config.pretrained_weights is not None
         and Path(config.pretrained_weights).exists()

@@ -34,6 +34,8 @@ arguments:
 
   pca_tta: true
   pca_prior_path: /home/jocareher/Downloads/landmark-detection/weights/pca_prior_13y_k32.pt
+  # normalizer | normalizer_head_norms | normalizer_heads
+  pca_tta_adaptation_scope: normalizer
   pca_tta_steps: 20
   pca_tta_learning_rate: 0.0001
   pca_tta_weight_decay: 0.0

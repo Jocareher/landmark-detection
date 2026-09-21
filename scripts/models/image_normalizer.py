@@ -3,6 +3,8 @@ from __future__ import annotations
 import torch
 from torch import nn
 
+from .normalization import build_feature_normalization
+
 
 def _build_activation(name: str) -> nn.Module:
     """Build one supported activation layer."""
@@ -22,8 +24,8 @@ def _build_normalization(name: str, channels: int) -> nn.Module | None:
         while channels % groups != 0:
             groups -= 1
         return nn.GroupNorm(groups, channels)
-    if name == "instance":
-        return nn.InstanceNorm2d(channels, affine=True)
+    if name in {"layer", "instance"}:
+        return build_feature_normalization(name, channels)
     raise ValueError(f"Unsupported normalizer normalization: {name}")
 
 

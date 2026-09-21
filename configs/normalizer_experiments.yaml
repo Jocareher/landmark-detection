@@ -17,7 +17,9 @@ arguments:
   normalizer_num_layers: 3
   normalizer_kernel_size: 3
   normalizer_activation: relu
+  # For matched variants set both values to layer or instance.
   normalizer_normalization: none
+  head_normalization: batch
   normalizer_residual_scale: 0.05
   normalizer_initialize_identity: true
   normalizer_clamp_output: false

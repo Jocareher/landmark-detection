@@ -25,6 +25,7 @@ from ..utils.visualization import plt as plotting
 class PCATTAConfig:
     """Configuration for episodic PCA-guided test-time adaptation."""
 
+    adaptation_scope: str = "normalizer"
     steps: int = 20
     learning_rate: float = 1e-4
     weight_decay: float = 0.0
@@ -42,6 +43,8 @@ class PCATTAConfig:
 
     def validate(self) -> None:
         """Validate values before any target image is adapted."""
+        if self.adaptation_scope not in {"normalizer", "normalizer_head_norms", "normalizer_heads"}:
+            raise ValueError(f"Unsupported TTA adaptation scope: {self.adaptation_scope}")
         if self.steps < 0:
             raise ValueError("PCA TTA adaptation steps cannot be negative.")
         if self.learning_rate <= 0:
@@ -75,10 +78,10 @@ class PCATTAConfig:
 
 
 class PCAGuidedTTA:
-    """Adapt only an image normalizer using PCA reconstruction loss.
+    """Adapt a normalizer and optional task-head parameters using PCA loss.
 
-    Adaptation is episodic: the source-trained normalizer and a fresh Adam
-    optimizer are restored for every input image. The landmarker and PCA prior
+    Adaptation is episodic: all adapted source weights and a fresh Adam
+    optimizer are restored for every input image. The backbone and PCA prior
     remain frozen. No target ground truth is consumed by this class.
     """
 
@@ -119,6 +122,21 @@ class PCAGuidedTTA:
         self.model.to(device)
         self.model.freeze_landmarker()
         self.model.unfreeze_normalizer()
+        self.adapted_head_modules = self._select_head_modules()
+        for module in self.adapted_head_modules:
+            for parameter in module.parameters():
+                parameter.requires_grad = True
+        self.source_head_states = [
+            {key: value.detach().cpu().clone() for key, value in module.state_dict().items()}
+            for module in self.adapted_head_modules
+        ]
+        self.adapted_parameter_names = [
+            name for name, parameter in self.model.named_parameters() if parameter.requires_grad
+        ]
+        self.adapted_parameters = [
+            parameter for parameter in self.model.parameters() if parameter.requires_grad
+        ]
+        self.model.zero_grad(set_to_none=True)
         self._restore_source_normalizer()
         self._validate_parameter_partition()
         landmarker_total = _count_parameters(self.model.landmarker.parameters())
@@ -126,7 +144,8 @@ class PCAGuidedTTA:
         print(
             "[PCA-TTA] Parameter audit | "
             f"landmarker_total={landmarker_total:,} "
-            "landmarker_trainable=0 "
+            f"scope={self.config.adaptation_scope} "
+            f"landmarker_trainable={sum(p.numel() for p in self.model.landmarker.parameters() if p.requires_grad):,} "
             f"normalizer_total={normalizer_total:,} "
             f"normalizer_trainable={normalizer_total:,}"
         )
@@ -176,7 +195,7 @@ class PCAGuidedTTA:
         assert self.model.normalizer is not None
         self.model.normalizer.train()
         optimizer = torch.optim.Adam(
-            self.model.normalizer.parameters(),
+            self.adapted_parameters,
             lr=self.config.learning_rate,
             betas=(self.config.adam_beta1, self.config.adam_beta2),
             eps=self.config.adam_epsilon,
@@ -193,7 +212,7 @@ class PCAGuidedTTA:
         print(
             f"[PCA-TTA][episode={episode_number:06d}] sample={sample_id} | "
             "source_normalizer_restored=yes optimizer=fresh "
-            "landmarker=frozen normalizer=trainable"
+            f"scope={self.config.adaptation_scope} backbone=frozen normalizer=trainable"
         )
         image = image.detach().to(self.device)
         sample_rows: list[dict[str, Any]] = []
@@ -267,25 +286,25 @@ class PCAGuidedTTA:
                 optimizer.zero_grad(set_to_none=True)
                 reconstruction_loss.backward()
                 gradient_norm_before_clipping = _gradient_norm(
-                    self.model.normalizer.parameters()
+                    self.adapted_parameters
                 )
                 sample_rows[-1]["gradient_norm_before_clipping"] = (
                     gradient_norm_before_clipping
                 )
                 if not math.isfinite(gradient_norm_before_clipping):
                     raise FloatingPointError(
-                        f"Non-finite normalizer gradient at step {step}."
+                        f"Non-finite adaptation gradient at step {step}."
                     )
                 if self.config.max_gradient_norm > 0:
                     torch.nn.utils.clip_grad_norm_(
-                        self.model.normalizer.parameters(),
+                        self.adapted_parameters,
                         max_norm=self.config.max_gradient_norm,
                     )
-                gradient_norm = _gradient_norm(self.model.normalizer.parameters())
+                gradient_norm = _gradient_norm(self.adapted_parameters)
                 sample_rows[-1]["gradient_norm"] = gradient_norm
                 if not math.isfinite(gradient_norm):
                     raise FloatingPointError(
-                        f"Non-finite normalizer gradient at step {step}."
+                        f"Non-finite adaptation gradient at step {step}."
                     )
                 optimizer.step()
                 if scheduler is not None:
@@ -329,6 +348,9 @@ class PCAGuidedTTA:
                     }
                 )
         finally:
+            # Restore before reporting: even an I/O failure must not leak adapted weights.
+            self._restore_source_normalizer()
+            self.model.eval()
             for row in sample_rows:
                 row["failed"] = failed
                 row["failure_message"] = failure_message
@@ -344,8 +366,6 @@ class PCAGuidedTTA:
                     snapshots=snapshots,
                 )
             self.processed_samples += 1
-            self._restore_source_normalizer()
-            self.model.eval()
             print(
                 f"[PCA-TTA][episode={episode_number:06d}] sample={sample_id} | "
                 f"status={'failed' if failed else 'ok'} "
@@ -414,13 +434,16 @@ class PCAGuidedTTA:
         return steps
 
     def _restore_source_normalizer(self) -> None:
-        """Restore the immutable source state before or after an episode."""
+        """Restore the normalizer and every selected head module for an episode."""
         assert self.model.normalizer is not None
         self.model.normalizer.load_state_dict(
             deepcopy(self.source_normalizer_state), strict=True
         )
         for parameter in self.model.normalizer.parameters():
             parameter.requires_grad = True
+        for module, state in zip(self.adapted_head_modules, self.source_head_states):
+            module.load_state_dict(state, strict=True)
+        self.model.zero_grad(set_to_none=True)
         current_state = self.model.normalizer.state_dict()
         if any(
             not torch.equal(current_state[key].detach().cpu(), source_value)
@@ -428,28 +451,33 @@ class PCAGuidedTTA:
         ):
             raise RuntimeError("Failed to restore the source normalizer state exactly.")
 
+    def _select_head_modules(self) -> list[torch.nn.Module]:
+        """Select explicit task heads, never backbone layers."""
+        if self.config.adaptation_scope == "normalizer":
+            return []
+        get_heads = getattr(self.model.landmarker, "_task_heads", None)
+        if get_heads is None:
+            raise ValueError("Head TTA requires a landmarker exposing _task_heads().")
+        heads = list(get_heads())
+        backbone = getattr(self.model.landmarker, "backbone", None)
+        backbone_ids = {id(p) for p in backbone.parameters()} if backbone is not None else set()
+        if any(id(p) in backbone_ids for head in heads for p in head.parameters()):
+            raise ValueError("Task heads must not contain backbone parameters.")
+        if self.config.adaptation_scope == "normalizer_head_norms":
+            norm_types = (torch.nn.LayerNorm, torch.nn.InstanceNorm2d,
+                          torch.nn.GroupNorm, torch.nn.BatchNorm2d)
+            heads = [module for head in heads for module in head.modules()
+                     if isinstance(module, norm_types) and any(True for _ in module.parameters())]
+        if not heads:
+            raise ValueError("No eligible task-head modules for the selected TTA scope.")
+        return heads
+
     def _validate_parameter_partition(self) -> None:
-        """Fail fast unless only the complete normalizer remains trainable."""
-        trainable_landmarker = sum(
-            parameter.numel()
-            for parameter in self.model.landmarker.parameters()
-            if parameter.requires_grad
-        )
-        frozen_normalizer = sum(
-            parameter.numel()
-            for parameter in self.model.normalizer.parameters()
-            if not parameter.requires_grad
-        )
-        if trainable_landmarker:
-            raise RuntimeError(
-                "PCA TTA requires the complete landmarker to be frozen, but "
-                f"{trainable_landmarker:,} parameters remain trainable."
-            )
-        if frozen_normalizer:
-            raise RuntimeError(
-                "PCA TTA requires the complete normalizer to be trainable, but "
-                f"{frozen_normalizer:,} parameters remain frozen."
-            )
+        """Require exactly the selected normalizer/head parameters to be trainable."""
+        actual = {name for name, parameter in self.model.named_parameters()
+                  if parameter.requires_grad}
+        if actual != set(self.adapted_parameter_names):
+            raise RuntimeError("TTA trainable parameters no longer match the selected scope.")
 
     def _save_probe(
         self,
@@ -545,7 +573,14 @@ class PCAGuidedTTA:
         )
         summary = {
             "method": "episodic_pca_reconstruction_tta",
-            "adapted_module": "external_image_normalizer",
+            "adapted_module": ("external_image_normalizer" if self.config.adaptation_scope == "normalizer"
+                               else self.config.adaptation_scope),
+            "adaptation_scope": self.config.adaptation_scope,
+            "adapted_parameter_names": self.adapted_parameter_names,
+            "adapted_parameter_count": sum(p.numel() for p in self.adapted_parameters),
+            "landmarker_architecture": (self.model.landmarker.architecture_config()
+                                        if hasattr(self.model.landmarker, "architecture_config") else {}),
+            "normalizer_architecture": self.model.normalizer.architecture_config(),
             "loss": "pca_reconstruction_loss_only",
             "steps": self.config.steps,
             "learning_rate": self.config.learning_rate,
@@ -1429,8 +1464,10 @@ def _safe_name(value: str) -> str:
 def _tta_readme(config: PCATTAConfig) -> str:
     return f"""# PCA-guided episodic TTA
 
-Only the external image normalizer is updated. The landmarker and the PCA prior
-remain frozen. The sole optimization objective is PCA reconstruction loss; no
+Adaptation scope: `{config.adaptation_scope}`. The complete normalizer is updated;
+`normalizer_head_norms` additionally updates head normalization affine parameters,
+and `normalizer_heads` updates all task-head parameters. The backbone and PCA
+prior remain frozen. Head modules stay in eval mode (including any legacy BN). The sole optimization objective is PCA reconstruction loss; no
 target ground truth, image regularizer, parameter regularizer, or consistency
 loss is used.
 
@@ -1442,7 +1479,7 @@ loss is used.
 - LR scheduler: `{config.lr_scheduler}`
 - Minimum learning rate: `{config.min_learning_rate}`
 - Maximum gradient norm: `{config.max_gradient_norm}` (`0` disables clipping)
-- Source normalizer and optimizer state are reset before every image.
+- All adapted normalizer/head weights and optimizer state are reset before every image.
 - `trajectories.csv` contains one row per image and adaptation step.
 - `image_summary.csv` contains one row per image.
 - `image_summary.csv` additionally contains before/after GT-valid NME and

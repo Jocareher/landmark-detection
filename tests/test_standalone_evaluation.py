@@ -276,3 +276,13 @@ def test_infanface_evaluator_reuses_provided_dataloader(
     assert result["inference"]["num_samples"] == 2
     assert result["metrics"]["mean_hausdorff_box"] == 0.2
     assert result["output_dir"] == str(tmp_path)
+
+
+def test_head_scope_cli_overrides_yaml(monkeypatch):
+    from scripts.evaluate import parse_args, build_config_from_args
+
+    monkeypatch.setattr("sys.argv", ["evaluate", "--config", "configs/pca_tta_evaluation.yaml",
+                                    "--pca-tta-adaptation-scope", "normalizer_head_norms"])
+    args = parse_args()
+    config = build_config_from_args(args)
+    assert config.pca_tta_adaptation_scope == "normalizer_head_norms"

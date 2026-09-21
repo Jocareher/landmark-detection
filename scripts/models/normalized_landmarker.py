@@ -171,6 +171,9 @@ def build_model_from_checkpoints(
             )
         raise ValueError("Checkpoint does not contain model weights.")
 
+    landmarker_architecture = dict(checkpoint.get("landmarker_architecture", {}))
+    landmarker_architecture.setdefault("num_landmarks", num_landmarks)
+    landmarker_architecture.setdefault("head_normalization", "batch")
     state_keys = [str(key) for key in primary_state]
     is_full_model = any(key.startswith("landmarker.") for key in state_keys)
     if is_full_model:
@@ -184,13 +187,13 @@ def build_model_from_checkpoints(
             fallback=fallback_normalizer_architecture,
         )
         model = NormalizedLandmarker(
-            landmarker=HRNetLandmarkVisibility(num_landmarks=num_landmarks),
+            landmarker=HRNetLandmarkVisibility(**landmarker_architecture),
             normalizer=ResidualImageNormalizer(**architecture),
         )
         model.load_state_dict(primary_state, strict=strict)
         return model
 
-    landmarker = HRNetLandmarkVisibility(num_landmarks=num_landmarks)
+    landmarker = HRNetLandmarkVisibility(**landmarker_architecture)
     landmarker.load_state_dict(primary_state, strict=strict)
     if normalizer_checkpoint is None:
         return landmarker

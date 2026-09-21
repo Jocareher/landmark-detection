@@ -371,6 +371,8 @@ def save_modular_checkpoints(
                 "optimizer_state_dict": None,
                 "metrics": {},
             }
+        if hasattr(model.landmarker, "architecture_config"):
+            payload["landmarker_architecture"] = model.landmarker.architecture_config()
         payload["model_type"] = type(model).__name__
         if model.normalizer is not None:
             payload["normalizer_architecture"] = model.normalizer.architecture_config()
@@ -419,6 +421,7 @@ def save_modular_checkpoints(
                 "model_type": type(model.landmarker).__name__,
                 "model_state_dict": landmarker_state,
                 "landmarker_state_dict": landmarker_state,
+                "landmarker_architecture": checkpoint_payloads[full_name].get("landmarker_architecture", {}),
                 "source_full_checkpoint": str(checkpoints_dir / full_name),
             },
             target,
