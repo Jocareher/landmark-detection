@@ -402,7 +402,7 @@ def test_shared_yaml_supports_argparser_names_and_inverse_flags() -> None:
     assert config.use_wandb is True
     assert config.use_amp is True
     assert config.use_cache is True
-    assert config.save_config is False
+    assert config.save_config is True
     assert config.enable_photometric_augmentations is True
 
 
