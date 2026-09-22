@@ -86,6 +86,7 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode):
     else:
         assert resolved['pca_tta_adaptation_scope'] == 'normalizer_heads'
         assert resolved['checkpoint'] == str(args.checkpoint)
+        assert resolved['natural_source_root'] == settings['paths']['babyland_source_root']
 
 
 def test_generated_training_yaml_parses(tmp_path, monkeypatch):

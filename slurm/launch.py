@@ -120,7 +120,8 @@ def main():
             raise ValueError(f'Request exceeds partition MaxTime={maximum[1]}')
     paths = settings['paths']
     needed = ['pca_prior'] + (['train_dataset', 'pretrained_weights'] if args.mode == 'train'
-                             else [f'{args.dataset}_crops', f'{args.dataset}_labels'])
+                             else [f'{args.dataset}_crops', f'{args.dataset}_labels',
+                                   f'{args.dataset}_source_root'])
     selected_paths = {name: required_path(paths[name]) for name in needed}
     checkpoint = required_path(args.checkpoint, exists=not bool(args.afterok)) if args.checkpoint else None
     separate = required_path(args.normalizer_checkpoint, exists=not bool(args.afterok)) if args.normalizer_checkpoint else None

@@ -26,6 +26,8 @@ from scripts.models import build_model_from_checkpoints
 from scripts.utils import get_default_device, set_seed
 
 
+from scripts.utils.source_images import resolve_source_image
+
 VALID_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".tif", ".tiff"}
 
 
@@ -176,26 +178,9 @@ class DetectorExportInferenceDataset(Dataset):
         metadata_path: Path,
     ) -> Path:
         """Resolve a source image path stored in detector-export metadata."""
-        raw_path = metadata.get("source_image_path")
-        if not raw_path:
-            raise KeyError(f"Missing 'source_image_path' in {metadata_path}.")
-
-        source_path = Path(str(raw_path))
-        candidate_paths = []
-        if source_path.is_absolute():
-            candidate_paths.append(source_path)
-        else:
-            if self.source_root is not None:
-                candidate_paths.append(self.source_root / source_path)
-            candidate_paths.append(self.export_root / source_path)
-            candidate_paths.append(metadata_path.parent / source_path)
-
-        for candidate_path in candidate_paths:
-            if candidate_path.exists():
-                return candidate_path.resolve()
-
-        raise FileNotFoundError(
-            f"Could not resolve source image path '{raw_path}' from {metadata_path}."
+        return resolve_source_image(
+            metadata.get("source_image_path"), source_root=self.source_root,
+            export_root=self.export_root, metadata_path=metadata_path,
         )
 
     @staticmethod

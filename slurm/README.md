@@ -67,6 +67,21 @@ contienen rutas de otra máquina; cada job crea su propio cache y evita carreras
 entre experimentos paralelos. Los datasets deben conservar sus imágenes/labels
 y splits; no están incluidos en el clon de Git.
 
+Para TTA también son obligatorias `paths.babyland_source_root` y
+`paths.infanface_source_root` (solo se valida el dataset seleccionado). Apuntan
+al directorio de **imágenes originales**, no al de recortes ni al de labels.
+Si ya tenés un JSON local, agregá esas dos claves dentro de `paths`.
+El lanzador pasa la seleccionada como `natural_source_root` al evaluador.
+
+No hace falta editar los metadatos del detector: una ruta antigua como
+`/Users/usuario/dataset/subject/image.jpg` se busca bajo la nueva raíz conservando
+los directorios finales (`subject/image.jpg`) o como `image.jpg` si el directorio
+es plano. Si varias alternativas existen, se detiene con un error para evitar
+usar una imagen incorrecta. No se hace búsqueda recursiva por nombre. La raíz
+explícita tiene prioridad y no vuelve a las rutas antiguas si falta una imagen.
+Conservá la estructura y los nombres originales al copiar el dataset. La matriz
+`transform_crop_to_orig` sigue viniendo de los metadatos y no se modifica.
+
 `gpu_type: auto` prefiere un GRES identificable como L40S/Ada, seguido de RTX6000,
 consultando `sinfo` en la partición seleccionada. No asume que `gpu:l40s:1` sea un
 nombre válido. Si Slurm solo publica `turing` u otro nombre ambiguo, pide definir

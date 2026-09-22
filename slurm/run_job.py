@@ -34,7 +34,8 @@ def resolved_arguments(plan, base):
                     normalizer_checkpoint=plan['normalizer_checkpoint'],
                     dataset_root=paths[f'{plan["dataset"]}_crops'],
                     natural_gt_root=paths[f'{plan["dataset"]}_labels'],
-                    natural_source_root=None, output_dir=str(run), pca_tta=True,
+                    natural_source_root=paths[f'{plan["dataset"]}_source_root'],
+                    output_dir=str(run), pca_tta=True,
                     pca_tta_adaptation_scope=plan['scope'], pca_tta_steps=resources['steps'],
                     pca_tta_learning_rate=resources['learning_rate'])
     return args

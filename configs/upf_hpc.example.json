@@ -11,8 +11,10 @@
     "pretrained_weights": "/REPLACE/WITH/SHARED/STORAGE/weights/HR18-300W.pth",
     "pca_prior": "/REPLACE/WITH/SHARED/STORAGE/weights/pca_prior_13y_k32.pt",
     "babyland_crops": "/REPLACE/WITH/SHARED/STORAGE/babyland72/crops/all_detections",
+    "babyland_source_root": "/REPLACE/WITH/SHARED/STORAGE/babyland72/images",
     "babyland_labels": "/REPLACE/WITH/SHARED/STORAGE/babyland72/labels",
     "infanface_crops": "/REPLACE/WITH/SHARED/STORAGE/infanface/crops/all_detections",
+    "infanface_source_root": "/REPLACE/WITH/SHARED/STORAGE/infanface/images",
     "infanface_labels": "/REPLACE/WITH/SHARED/STORAGE/infanface/labels"
   },
   "train": {
