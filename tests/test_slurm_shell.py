@@ -13,7 +13,7 @@ def test_conda_startup_without_prompt(script, hook_fails, tmp_path):
     shell = r'''
 set -e
 unset PS1
-export SLURM_JOB_ID=123 CONDA_PREFIX=/mock/lmks
+export SLURM_JOB_ID=123
 flock() { :; }
 module() { local prompt="$PS1"; }
 conda() {
@@ -24,12 +24,22 @@ conda() {
         local prompt="$PS1"
     fi
 }
-srun() { [[ -o nounset ]] && printf 'WORK_STARTED\n'; }
+srun() {
+    [[ -o nounset && "$1" == --export=ALL && "$SLURM_EXPORT_ENV" == ALL ]] || return 1
+    shift 3
+    [[ "$1" == "$CONDA_PREFIX/bin/python" && "$1" == /* ]] || return 1
+    PATH=/usr/bin:/bin "$@"
+}
 python() { [[ -o nounset ]] && printf 'WORK_STARTED\n'; }
 source "$1" plan.json Miniconda3/4.9.2 lmks
 '''
     import os
-    env = dict(os.environ, HOOK_FAILS='yes' if hook_fails else 'no',
+    interpreter = tmp_path / 'env/bin/python'
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text('#!/bin/bash\nprintf "WORK_STARTED\\n"\n')
+    interpreter.chmod(0o755)
+    env = dict(os.environ, CONDA_PREFIX=str(tmp_path / 'env'),
+               HOOK_FAILS='yes' if hook_fails else 'no',
                LMKS_ENV_LOCK_DIR=str(tmp_path))
     result = subprocess.run(['bash', '-c', shell, 'test', str(ROOT / 'slurm' / script)],
                             env=env, capture_output=True, text=True)

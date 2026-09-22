@@ -22,5 +22,13 @@ export PYTHONUNBUFFERED=1 PYTHONNOUSERSITE=1 MPLBACKEND=Agg
 export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
 export NO_COLOR=1 TERM=dumb TQDM_DISABLE=1
 unset PYTHONPATH
-# Preserve Slurm's CUDA_VISIBLE_DEVICES.
-srun --unbuffered --ntasks=1 python -u slurm/run_job.py "$plan"
+# Use the activated environment explicitly: step startup must not resolve "python"
+# using the node's default PATH. Preserve CUDA_VISIBLE_DEVICES and Conda exports.
+lmks_python="${CONDA_PREFIX:?Conda activation did not set CONDA_PREFIX}/bin/python"
+if [[ ! -x "$lmks_python" ]]; then
+    echo "[ENV] Missing executable: $lmks_python" >&2
+    exit 1
+fi
+echo "[ENV] Launching with $lmks_python"
+export SLURM_EXPORT_ENV=ALL
+srun --export=ALL --unbuffered --ntasks=1 "$lmks_python" -u "$repo_root/slurm/run_job.py" "$plan"
