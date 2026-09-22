@@ -154,7 +154,7 @@ def main():
     for subdir in ('metadata', 'logs', 'code'):
         (run / subdir).mkdir(parents=True, exist_ok=False)
     # Freeze executable sources at submission; parallel/queued jobs do not follow checkout edits.
-    for directory in ('scripts', 'slurm'):
+    for directory in ('scripts', 'slurm', 'environments'):
         shutil.copytree(REPO / directory, run / 'code' / directory,
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
     template = 'normalizer_experiments.yaml' if args.mode == 'train' else 'pca_tta_evaluation.yaml'

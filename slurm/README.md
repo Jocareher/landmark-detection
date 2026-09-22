@@ -33,24 +33,21 @@ No se necesita torchaudio. Se requiere un nodo Linux compatible con esos wheels
 y un driver NVIDIA compatible; el job ejecuta operaciones CUDA con backward para
 verificarlo. Cargar un módulo CUDA no actualiza el driver del nodo.
 
-En el login, desde la raíz del repositorio:
+Los jobs crean automáticamente el entorno configurado si no existe, instalan
+PyTorch con CUDA y todas las dependencias y lo activan antes de ejecutar Python.
+Si ya existe y supera la comprobación de imports, CUDA build, Torch/NumPy y
+`pip check`, lo reutilizan sin reinstalar. Si está incompleto, intentan instalar
+las dependencias. Un entorno existente con Python anterior a 3.11 requiere elegir
+un nombre nuevo en `conda_env` para no modificar su versión de Python.
 
-```bash
-salloc --partition=short --nodes=1 --ntasks=1 --cpus-per-task=2 --mem=8G --time=00:30:00
-srun --pty bash
-# Ya dentro del nodo de cómputo:
-module avail Miniconda3
-bash slurm/install_lmks.sh
-exit
-exit
-```
+Un bloqueo compartido (`flock` en `$HOME/.cache/lmks-hpc`) evita que dos jobs creen
+o reparen entornos a la vez. La primera instalación necesita acceso a Conda/pip
+desde el nodo y consume parte del tiempo reservado; los errores quedan en los
+logs Slurm y detienen el job antes del entrenamiento. No hace falta un paso manual.
 
-El módulo predeterminado es `Miniconda3/4.9.2`, tal como figura en la guía.
-Si `module avail` muestra otro, usá `LMKS_CONDA_MODULE=... bash slurm/install_lmks.sh`
-y cambiá `conda_module` en los ajustes del siguiente paso. El instalador falla
-si `lmks` ya existe: no modifica silenciosamente un entorno que esté en uso.
-La instalación requiere acceso a los índices de Conda/pip desde el nodo.
-Ningún job de entrenamiento/TTA instala paquetes ni consume tiempo GPU en ello.
+Opcionalmente, `bash slurm/install_lmks.sh` permite preparar el entorno antes,
+dentro de una asignación interactiva. Usa la misma lógica y se puede repetir.
+El módulo predeterminado es `Miniconda3/4.9.2`; se puede cambiar en `conda_module`.
 
 ## 2. Ajustar rutas y recursos una sola vez
 

@@ -67,6 +67,7 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode):
     plan = json.loads((run / 'metadata/launch.json').read_text())
     assert (run / 'code/scripts/main.py').is_file()
     assert (run / 'code/slurm/run_job.py').is_file()
+    assert (run / 'code/environments/requirements-hpc.txt').is_file()
     assert (run / 'logs').is_dir()
     command = commands[-1]
     assert '--gres=gpu:l40s:1' in command and '--ntasks=1' in command
