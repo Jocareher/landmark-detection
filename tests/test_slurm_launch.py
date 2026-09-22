@@ -76,6 +76,8 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode):
         assert '--dependency=afterok:123' in command
         assert '--kill-on-invalid-dep=yes' in command
     base = yaml.safe_load((run / 'metadata/base.yaml').read_text())['arguments']
+    assert run.name.startswith(base['wandb_run_name'] + '_')
+    assert '--job-name=' + base['wandb_run_name'] in command
     resolved = worker.resolved_arguments(plan, base)
     assert resolved['device'] == 'cuda'
     assert resolved['cache_dir'] == str(run / 'dataset_cache')
@@ -131,3 +133,19 @@ def test_baseline_cli_preset(monkeypatch):
     monkeypatch.setattr('sys.argv', ['launch.py', 'train', '--settings', 'hpc.json',
                                     '--normalization', 'baseline'])
     assert launch.arguments().normalization == 'baseline'
+
+
+@pytest.mark.parametrize('scalar,expected', [
+    ('my_experiment', 'my_experiment'),
+    ('"instance run" # comment', 'instance_run'),
+    ("'baseline run'", 'baseline_run'),
+    ('experiment # comment', 'experiment'),
+])
+def test_yaml_run_name(scalar, expected):
+    assert launch.yaml_run_name('arguments:\n  wandb_run_name: ' + scalar) == expected
+
+
+@pytest.mark.parametrize('scalar', ['null', '', '|', '../..'])
+def test_invalid_yaml_run_name(scalar):
+    with pytest.raises(ValueError):
+        launch.yaml_run_name('arguments:\n  wandb_run_name: ' + scalar)

@@ -213,5 +213,22 @@ nodo de acceso. El entrenamiento y TTA siguen ejecutándose con Python 3.11 en
 El preset `--normalization baseline` cambia solo la normalización: normalizer
 `none`, heads `batch`, backbone con su BatchNorm original. Conserva las pérdidas
 (incluido el peso PCA del YAML), augmentations y política de fine-tuning de los
-otros presets. Los resultados se guardan bajo `train_baseline_...`.
+otros presets. El nombre de los resultados se toma de `wandb_run_name` del YAML.
 TTA carga esta arquitectura desde el checkpoint, con los mismos comandos y scopes.
+
+### Nombre de cada ejecución y actualizaciones del repositorio
+
+Antes de enviar, editá `arguments.wandb_run_name` en
+`configs/normalizer_experiments.yaml` para entrenamiento, o en
+`configs/pca_tta_evaluation.yaml` para TTA. Por ejemplo,
+`wandb_run_name: baseline_sin_norm` genera
+`baseline_sin_norm_FECHA_ID/`. El nombre de Slurm usa ese prefijo y W&B usa el
+nombre completo de la carpeta. Espacios y caracteres de ruta se sustituyen por
+`_`. Usá un nombre simple en una línea con la indentación existente. Cambiar
+`--normalization` no cambia automáticamente el nombre elegido en el YAML.
+
+Después de que el envío devuelve el job ID, `git pull` no modifica el código ni
+el YAML de ese job: están copiados en su directorio, incluso mientras está en
+cola. Los datasets, pesos de entrada y el entorno Conda siguen siendo compartidos;
+no se deben mover o modificar mientras los jobs los usan. Conservá tus rutas HPC
+en `configs/upf_hpc.local.json` (ignorado por Git) para evitar conflictos al actualizar.

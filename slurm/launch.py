@@ -87,6 +87,42 @@ def arguments():
     return parser.parse_args()
 
 
+def yaml_run_name(source):
+    """Read the simple run-name scalar without requiring PyYAML on login nodes."""
+    in_arguments = False
+    values = []
+    for line in source.splitlines():
+        if line.strip() == 'arguments:':
+            in_arguments = True
+            continue
+        if in_arguments and line and not line[0].isspace() and not line.startswith('#'):
+            in_arguments = False
+        if in_arguments:
+            match = re.fullmatch(r'  wandb_run_name:\s*(.*?)\s*', line)
+            if match:
+                values.append(match[1])
+    if len(values) != 1:
+        raise ValueError('YAML must contain one arguments.wandb_run_name (two-space indentation).')
+    value = values[0]
+    # Names are single-line scalars; do not attempt to interpret arbitrary YAML.
+    quoted = re.fullmatch(r"'((?:[^']|'')*)'\s*(?:#.*)?", value)
+    double = re.fullmatch(r'("(?:[^"\\]|\\.)*")\s*(?:#.*)?', value)
+    if quoted:
+        value = quoted[1].replace("''", "'")
+    elif double:
+        value = json.loads(double[1])
+    else:
+        value = value.split(' #', 1)[0].strip()
+        if not re.fullmatch(r'[\w .-]+', value):
+            raise ValueError('Use a plain or quoted single-line wandb_run_name in the YAML.')
+    if not value or value.lower() in ('null', 'none', 'true', 'false'):
+        raise ValueError('Set a nonempty wandb_run_name in the YAML before submitting.')
+    safe = re.sub(r'[^\w.-]+', '_', value).strip('._')
+    if not safe:
+        raise ValueError('wandb_run_name must contain letters or numbers.')
+    return safe
+
+
 def validate_runtime_files():
     required = ('slurm/job.sh', 'slurm/ensure_lmks.sh', 'slurm/check_environment.py',
                 'slurm/run_job.py', 'scripts/utils/source_images.py',
@@ -137,7 +173,9 @@ def main():
     checkpoint = required_path(args.checkpoint, exists=not bool(args.afterok)) if args.checkpoint else None
     separate = required_path(args.normalizer_checkpoint, exists=not bool(args.afterok)) if args.normalizer_checkpoint else None
     root = Path(required_path(settings['runs_root'], exists=False))
-    label = f'train_{args.normalization}' if args.mode == 'train' else f'tta_{args.dataset}_{args.scope}'
+    template = 'normalizer_experiments.yaml' if args.mode == 'train' else 'pca_tta_evaluation.yaml'
+    base_yaml = (REPO / 'configs' / template).read_text()
+    label = yaml_run_name(base_yaml)
     name = f'{label}_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}_{uuid.uuid4().hex[:6]}'
     run = root / name
     plan = dict(mode=args.mode, normalization=args.normalization, scope=args.scope,
@@ -169,8 +207,7 @@ def main():
     for directory in ('scripts', 'slurm', 'environments'):
         shutil.copytree(REPO / directory, run / 'code' / directory,
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
-    template = 'normalizer_experiments.yaml' if args.mode == 'train' else 'pca_tta_evaluation.yaml'
-    shutil.copy2(REPO / 'configs' / template, run / 'metadata/base.yaml')
+    (run / 'metadata/base.yaml').write_text(base_yaml)
     for filename, git_args in [('git_commit.txt', ['rev-parse', 'HEAD']),
                                ('git_status.txt', ['status', '--short']),
                                ('git_diff.patch', ['diff', 'HEAD'])]:
