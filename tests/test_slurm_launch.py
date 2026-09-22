@@ -115,3 +115,9 @@ def test_login_launcher_uses_python36_syntax_and_apis():
     assert 'shlex.join(' not in source
     assert 'capture_output=' not in source
     assert 'text=True' not in source
+
+
+def test_incomplete_checkout_fails_before_submission(tmp_path, monkeypatch):
+    monkeypatch.setattr(launch, 'REPO', tmp_path)
+    with pytest.raises(FileNotFoundError, match='ensure_lmks.sh'):
+        launch.validate_runtime_files()

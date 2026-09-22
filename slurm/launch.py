@@ -87,8 +87,20 @@ def arguments():
     return parser.parse_args()
 
 
+def validate_runtime_files():
+    required = ('slurm/job.sh', 'slurm/ensure_lmks.sh', 'slurm/check_environment.py',
+                'slurm/run_job.py', 'scripts/utils/source_images.py',
+                'environments/requirements-hpc.txt')
+    missing = [name for name in required if not (REPO / name).is_file()]
+    if missing:
+        raise FileNotFoundError(
+            'Incomplete HPC checkout; update the repository before submitting. Missing: '
+            + ', '.join(missing))
+
+
 def main():
     args = arguments()
+    validate_runtime_files()
     settings = json.loads(args.settings.read_text())
     resources = dict(settings[args.mode])
     for key in ('time', 'epochs', 'steps', 'batch_size'):
