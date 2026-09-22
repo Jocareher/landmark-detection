@@ -89,6 +89,10 @@ def parse_args() -> argparse.Namespace:
         help="Base directory where training runs will be created.",
     )
     parser.add_argument(
+        "--num-workers", type=int, default=defaults.num_workers,
+        help="DataLoader workers; keep below the allocated CPU count on Slurm.",
+    )
+    parser.add_argument(
         "--cache-dir",
         type=Path,
         default=defaults.cache_dir,

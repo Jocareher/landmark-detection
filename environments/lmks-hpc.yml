@@ -1,0 +1,7 @@
+# Portable Linux base; install the CUDA wheels separately (see slurm/README.md).
+name: lmks
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip

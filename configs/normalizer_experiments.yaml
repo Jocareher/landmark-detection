@@ -86,6 +86,7 @@ arguments:
   epochs: 60
   batch_size: 32
   eval_batch_size: 32
+  num_workers: 4
   lr: 0.0001
   seed: 42
   device: auto

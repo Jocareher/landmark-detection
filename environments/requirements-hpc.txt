@@ -1,0 +1,10 @@
+# Versions inspected in the local lmks environment on 2026-09-22.
+# torch/torchvision are installed from the explicit CUDA index, not this file.
+numpy==2.4.3
+pandas==3.0.3
+Pillow==12.1.1
+matplotlib==3.10.8
+PyYAML==6.0.3
+tqdm==4.67.3
+wandb==0.25.1
+torchinfo==1.8.0

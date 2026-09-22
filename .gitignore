@@ -175,3 +175,7 @@ external_repos/*
 
 # Generated presentation artifacts
 *.[pP][pP][tT][xX]
+
+# Machine-specific HPC paths and generated cluster runs
+configs/upf_hpc.local.json
+runs_hpc/
