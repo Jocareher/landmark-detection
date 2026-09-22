@@ -70,8 +70,8 @@ def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('train', 'tta'))
     parser.add_argument('--settings', type=Path, required=True)
-    parser.add_argument('--normalization', choices=('layer', 'instance'), default='layer',
-                        help='Training only. TTA architecture always comes from the checkpoint.')
+    parser.add_argument('--normalization', choices=('baseline', 'layer', 'instance'), default='layer',
+                        help='Training: baseline = no normalizer norm + BatchNorm heads; layer/instance = both. TTA architecture comes from checkpoint.')
     parser.add_argument('--scope', choices=SCOPES, default='normalizer')
     parser.add_argument('--dataset', choices=('babyland', 'infanface'), default='babyland')
     parser.add_argument('--checkpoint', type=Path)

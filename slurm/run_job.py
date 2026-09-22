@@ -24,8 +24,10 @@ def resolved_arguments(plan, base):
                     dataset_root=paths['train_dataset'],
                     pretrained_weights=paths['pretrained_weights'], checkpoint=None,
                     output_dir=str(run.parent), epochs=resources['epochs'],
-                    normalizer_normalization=plan['normalization'],
-                    head_normalization=plan['normalization'], transfer_mode='fine_tuning',
+                    normalizer_normalization=('none' if plan['normalization'] == 'baseline'
+                                              else plan['normalization']),
+                    head_normalization=('batch' if plan['normalization'] == 'baseline'
+                                        else plan['normalization']), transfer_mode='fine_tuning',
                     num_unfrozen_stages=1, unfreeze_stem=False,
                     eval_batch_size=resources['batch_size'], evaluate_synbaby=True,
                     evaluate_babyland=False, evaluate_infanface=False)

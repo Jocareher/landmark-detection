@@ -116,6 +116,10 @@ bash slurm/train_hrnet_landmarks_template.sh \
   --settings configs/upf_hpc.local.json --normalization layer \
   --epochs 1 --time 02:00:00
 
+# Baseline: normalizer sin normalización, heads con BatchNorm.
+bash slurm/train_hrnet_landmarks_template.sh \
+  --settings configs/upf_hpc.local.json --normalization baseline
+
 # Experimentos completos independientes:
 bash slurm/train_hrnet_landmarks_template.sh \
   --settings configs/upf_hpc.local.json --normalization layer
@@ -205,3 +209,9 @@ nodo de acceso. El entrenamiento y TTA siguen ejecutándose con Python 3.11 en
 `python3 --version`. Si necesitás elegir otro ejecutable, usá
 `LMKS_LAUNCH_PYTHON=/ruta/al/python bash slurm/train_hrnet_landmarks_template.sh ...`
 (también funciona para `slurm/tta_landmarks.sh`).
+
+El preset `--normalization baseline` cambia solo la normalización: normalizer
+`none`, heads `batch`, backbone con su BatchNorm original. Conserva las pérdidas
+(incluido el peso PCA del YAML), augmentations y política de fine-tuning de los
+otros presets. Los resultados se guardan bajo `train_baseline_...`.
+TTA carga esta arquitectura desde el checkpoint, con los mismos comandos y scopes.

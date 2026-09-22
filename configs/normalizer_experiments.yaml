@@ -6,6 +6,9 @@ arguments:
   # Experiment selection
   # ---------------------------------------------------------------------------
   # Active preset: LayerNorm training.
+  # Baseline: normalizer_normalization: none, head_normalization: batch,
+  # wandb_run_name: train_baseline_pca_image. Backbone keeps BatchNorm in all variants.
+  # HPC: select --normalization baseline; the launcher overrides these fields.
   # For InstanceNorm, set normalizer_normalization and head_normalization to instance,
   # and wandb_run_name to train_instance_pca_image. Use a new run name for repeats.
   # Modes: none | normalizer_sanity | normalizer_train_frozen_landmarker |

@@ -91,10 +91,13 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode):
         assert resolved['natural_source_root'] == settings['paths']['babyland_source_root']
 
 
-def test_generated_training_yaml_parses(tmp_path, monkeypatch):
+@pytest.mark.parametrize('variant,normalizer_norm,head_norm', [
+    ('baseline', 'none', 'batch'), ('layer', 'layer', 'layer'),
+    ('instance', 'instance', 'instance')])
+def test_generated_training_yaml_parses(tmp_path, monkeypatch, variant, normalizer_norm, head_norm):
     from scripts.main import parse_args, build_config_from_args
     base = yaml.safe_load((ROOT / 'configs/normalizer_experiments.yaml').read_text())['arguments']
-    plan = dict(mode='train', run_dir=str(tmp_path / 'run'), normalization='layer',
+    plan = dict(mode='train', run_dir=str(tmp_path / 'run'), normalization=variant,
                 resources=dict(batch_size=8, workers=2, epochs=1),
                 paths=dict(pca_prior='/weights/pca.pt', train_dataset='/data/train',
                            pretrained_weights='/weights/hrnet.pt'))
@@ -104,7 +107,8 @@ def test_generated_training_yaml_parses(tmp_path, monkeypatch):
     config = build_config_from_args(parse_args())
     assert config.num_workers == 2 and config.batch_size == 8
     assert config.dataset_root == Path('/data/train')
-    assert config.head_normalization == 'layer'
+    assert config.head_normalization == head_norm
+    assert config.normalizer_internal_normalization == normalizer_norm
 
 
 def test_login_launcher_uses_python36_syntax_and_apis():
@@ -121,3 +125,9 @@ def test_incomplete_checkout_fails_before_submission(tmp_path, monkeypatch):
     monkeypatch.setattr(launch, 'REPO', tmp_path)
     with pytest.raises(FileNotFoundError, match='ensure_lmks.sh'):
         launch.validate_runtime_files()
+
+
+def test_baseline_cli_preset(monkeypatch):
+    monkeypatch.setattr('sys.argv', ['launch.py', 'train', '--settings', 'hpc.json',
+                                    '--normalization', 'baseline'])
+    assert launch.arguments().normalization == 'baseline'
