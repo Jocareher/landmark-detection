@@ -1,5 +1,4 @@
 """Submit isolated SNOW jobs. Uses only the Python standard library on login nodes."""
-from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
@@ -111,9 +110,9 @@ def main():
         raise ValueError('steps must be nonnegative.')
     partition = args.partition or choose_partition(resources['time'])
     inventory = subprocess.check_output(
-        ['sinfo', '--noheader', f'--partition={partition}', '--format=%G'], text=True)
+        ['sinfo', '--noheader', f'--partition={partition}', '--format=%G'], universal_newlines=True)
     gpu = choose_gpu(args.gpu_type or settings['gpu_type'], inventory)
-    partition_info = subprocess.check_output(['scontrol', 'show', 'partition', partition], text=True)
+    partition_info = subprocess.check_output(['scontrol', 'show', 'partition', partition], universal_newlines=True)
     maximum = re.search(r'MaxTime=(\S+)', partition_info)
     if maximum and maximum[1] not in ('UNLIMITED', 'INFINITE'):
         if duration_seconds(resources['time']) > duration_seconds(maximum[1]):
@@ -145,7 +144,7 @@ def main():
         command.extend([f'--dependency=afterok:{args.afterok}', '--kill-on-invalid-dep=yes'])
     command.extend([str(run / 'code/slurm/job.sh'), str(run / 'metadata/launch.json'),
                     settings.get('conda_module', ''), settings.get('conda_env', 'lmks')])
-    print(shlex.join(command))
+    print(' '.join(shlex.quote(part) for part in command))
     print(f'Run directory: {run}')
     if args.mode == 'train':
         print(f'Future checkpoint: {run / "checkpoints/full_model_best.pth"}')
@@ -163,13 +162,13 @@ def main():
     for filename, git_args in [('git_commit.txt', ['rev-parse', 'HEAD']),
                                ('git_status.txt', ['status', '--short']),
                                ('git_diff.patch', ['diff', 'HEAD'])]:
-        result = subprocess.run(['git', '-C', str(REPO), *git_args], capture_output=True, text=True)
+        result = subprocess.run(['git', '-C', str(REPO), *git_args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
         (run / 'metadata' / filename).write_text(result.stdout)
     (run / 'metadata/launch.json').write_text(json.dumps(plan, indent=2) + '\n')
-    (run / 'metadata/submit_command.txt').write_text(shlex.join(command) + '\n')
+    (run / 'metadata/submit_command.txt').write_text(' '.join(shlex.quote(part) for part in command) + '\n')
     (run / 'metadata/partition.txt').write_text(partition_info)
     (run / 'metadata/gres.txt').write_text(inventory)
-    submitted = subprocess.check_output(command, text=True).strip()
+    submitted = subprocess.check_output(command, universal_newlines=True).strip()
     (run / 'metadata/job_id.txt').write_text(submitted + '\n')
     print(f'Submitted job: {submitted}')
 

@@ -106,7 +106,7 @@ No fija `CUDA_VISIBLE_DEVICES`: respeta la asignación de Slurm.
 ## 3. Lanzar entrenamiento
 
 Los wrappers se ejecutan con **bash**, no con `sbatch`: ellos preparan los logs,
-congelan el código y llaman a `sbatch`. El login necesita Python 3.8+ para el
+congelan el código y llaman a `sbatch`. El login necesita Python 3.6+ para el
 lanzador (solo biblioteca estándar, sin importar PyTorch ni YAML).
 
 ```bash
@@ -199,3 +199,12 @@ Python podría no llegar a actualizar `execution.json`. Para entrenar, estimá
 un margen medido. Para TTA, usá `imágenes × tiempo por episodio` más exportación;
 repetí la medición por scope/GPU, porque adaptar heads cambia el coste.
 No se ha ejecutado ni medido este pipeline en SNOW desde la máquina local.
+
+### Python antiguo en el nodo de acceso
+
+El lanzador es compatible con Python 3.6+ y no necesita activar `lmks` en el
+nodo de acceso. El entrenamiento y TTA siguen ejecutándose con Python 3.11 en
+`lmks`, dentro del nodo asignado. Comprobá el Python del lanzador con
+`python3 --version`. Si necesitás elegir otro ejecutable, usá
+`LMKS_LAUNCH_PYTHON=/ruta/al/python bash slurm/train_hrnet_landmarks_template.sh ...`
+(también funciona para `slurm/tta_landmarks.sh`).

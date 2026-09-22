@@ -53,6 +53,7 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode):
         args.afterok = '123'
     commands = []
     def check_output(command, **kwargs):
+        assert 'text' not in kwargs and 'capture_output' not in kwargs
         commands.append(command)
         if command[0] == 'sinfo':
             return 'gpu:l40s:2(S:0)\n'
@@ -103,3 +104,13 @@ def test_generated_training_yaml_parses(tmp_path, monkeypatch):
     assert config.num_workers == 2 and config.batch_size == 8
     assert config.dataset_root == Path('/data/train')
     assert config.head_normalization == 'layer'
+
+
+def test_login_launcher_uses_python36_syntax_and_apis():
+    import ast
+    source = (ROOT / 'slurm/launch.py').read_text()
+    ast.parse(source, feature_version=(3, 6))
+    assert 'from __future__ import annotations' not in source
+    assert 'shlex.join(' not in source
+    assert 'capture_output=' not in source
+    assert 'text=True' not in source
