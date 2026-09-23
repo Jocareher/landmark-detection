@@ -62,7 +62,7 @@ def _pca_prior() -> dict[str, object]:
     }
 
 
-@pytest.mark.parametrize("normalization", ["none", "layer", "instance"])
+@pytest.mark.parametrize("normalization", ["none", "layer", "instance", "adain"])
 def test_pca_tta_is_episodic_and_restores_source_normalizer(
     tmp_path: Path,
     capsys,
@@ -278,16 +278,19 @@ def test_enhanced_difference_view_exposes_small_nonzero_changes() -> None:
     assert float(heatmap[3, 3].max()) == pytest.approx(0.9)
 
 
-@pytest.mark.parametrize("normalization", ["layer", "instance", "adain"])
+@pytest.mark.parametrize("normalizer_norm,head_norm", [
+    ("none", "batch"), ("layer", "layer"),
+    ("instance", "instance"), ("adain", "adain"),
+])
 @pytest.mark.parametrize("scope", ["normalizer", "normalizer_head_norms", "normalizer_heads"])
-def test_head_scopes_reload_update_and_reset(normalization, scope, tmp_path, monkeypatch):
+def test_head_scopes_reload_update_and_reset(normalizer_norm, head_norm, scope, tmp_path, monkeypatch):
     from scripts.models import HRNetLandmarkVisibility, build_model_from_checkpoints
 
     torch.set_num_threads(1)
     torch.manual_seed(19)
     original = NormalizedLandmarker(
-        HRNetLandmarkVisibility(num_landmarks=4, head_normalization=normalization),
-        ResidualImageNormalizer(normalization=normalization, hidden_channels=4,
+        HRNetLandmarkVisibility(num_landmarks=4, head_normalization=head_norm),
+        ResidualImageNormalizer(normalization=normalizer_norm, hidden_channels=4,
                                 initialize_identity=False),
     )
     # Exercise the same metadata reconstruction used by standalone evaluation.

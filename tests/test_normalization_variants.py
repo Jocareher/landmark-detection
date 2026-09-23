@@ -29,12 +29,14 @@ def test_normalization_statistics_identity_and_gradients(kind):
     torch.testing.assert_close(norm(features[:1]), result[:1])
 
 
-@pytest.mark.parametrize('kind', ['layer', 'instance'])
-def test_finetune_partition_and_checkpoint_roundtrip(kind, tmp_path: Path):
+@pytest.mark.parametrize('normalizer_kind,head_kind', [
+    ('none', 'batch'), ('layer', 'layer'), ('instance', 'instance'),
+])
+def test_finetune_partition_and_checkpoint_roundtrip(normalizer_kind, head_kind, tmp_path: Path):
     torch.set_num_threads(1)
     source = NormalizedLandmarker(
-        HRNetLandmarkVisibility(num_landmarks=4, head_normalization=kind),
-        ResidualImageNormalizer(normalization=kind, hidden_channels=5),
+        HRNetLandmarkVisibility(num_landmarks=4, head_normalization=head_kind),
+        ResidualImageNormalizer(normalization=normalizer_kind, hidden_channels=5),
     )
     source.configure_joint_finetune(num_unfrozen_stages=1, unfreeze_stem=False)
     source.train()
@@ -42,7 +44,8 @@ def test_finetune_partition_and_checkpoint_roundtrip(kind, tmp_path: Path):
         assert param.requires_grad == name.startswith(('transition3.', 'stage4.'))
     assert not source.landmarker.backbone.stage3.training
     assert source.landmarker.backbone.stage4.training
-    expected_type = ChannelLayerNorm if kind == 'layer' else nn.InstanceNorm2d
+    expected_type = {'batch': nn.BatchNorm2d, 'layer': ChannelLayerNorm,
+                     'instance': nn.InstanceNorm2d}[head_kind]
     for head in (source.landmarker.visibility_feature_head, source.landmarker.visible_landmark_feature_head, source.landmarker.full_landmark_fusion_head):
         assert isinstance(head[1], expected_type)
         assert all(p.requires_grad for p in head.parameters())
