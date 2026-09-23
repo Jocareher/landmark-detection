@@ -43,7 +43,7 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode):
     settings['runs_root'] = str(tmp_path / 'runs')
     settings_path = tmp_path / 'settings.json'
     settings_path.write_text(json.dumps(settings))
-    args = SimpleNamespace(mode=mode, settings=settings_path, normalization='instance',
+    args = SimpleNamespace(mode=mode, settings=settings_path, config=None, normalization='instance',
                            scope='normalizer_heads', dataset='babyland', checkpoint=None,
                            normalizer_checkpoint=None, afterok=None, time=None,
                            partition=None, gpu_type=None, epochs=None, steps=None,
@@ -149,3 +149,18 @@ def test_yaml_run_name(scalar, expected):
 def test_invalid_yaml_run_name(scalar):
     with pytest.raises(ValueError):
         launch.yaml_run_name('arguments:\n  wandb_run_name: ' + scalar)
+
+
+def test_adain_hpc_preset_uses_its_yaml():
+    source = (ROOT / 'configs/adain_normalizer_experiments.yaml').read_text()
+    base = yaml.safe_load(source)['arguments']
+    assert launch.yaml_run_name(source) == 'train_adain_pca_image'
+    assert base['normalizer_normalization'] == 'adain'
+    assert base['head_normalization'] == 'adain'
+    plan = dict(mode='train', run_dir='/tmp/train_adain', normalization='adain',
+                resources=dict(batch_size=8, workers=2, epochs=1),
+                paths=dict(pca_prior='/weights/pca.pt', train_dataset='/data/train',
+                           pretrained_weights='/weights/hrnet.pt'))
+    resolved = worker.resolved_arguments(plan, base)
+    assert resolved['normalizer_normalization'] == 'adain'
+    assert resolved['head_normalization'] == 'adain'

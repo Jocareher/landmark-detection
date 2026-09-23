@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from scripts.config import (
     save_resolved_config_files,
 )
 from scripts.dataset import build_dataloaders, build_natural_evaluation_dataloader
+from scripts.dataset.builders import build_transforms
 from scripts.inference import build_inference_dataloader
 from scripts.engine.normalizer_experiments import (
     run_normalizer_diagnostics,
@@ -35,6 +38,7 @@ from scripts.models import (
     ResidualImageNormalizer,
     load_normalized_checkpoint,
 )
+from scripts.models.normalization import SourceAdaptiveInstanceNorm2d
 from scripts.utils import (
     get_default_device,
     save_model_summary,
@@ -134,12 +138,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--normalizer-normalization",
-        choices=["none", "group", "layer", "instance"],
+        choices=["none", "group", "layer", "instance", "adain"],
         default=defaults.normalizer_internal_normalization,
     )
     parser.add_argument(
         "--head-normalization",
-        choices=["batch", "layer", "instance"],
+        choices=["batch", "layer", "instance", "adain"],
         default=defaults.head_normalization,
         help="Normalization inside all three task heads; backbone BN is preserved.",
     )
@@ -880,6 +884,35 @@ def _add_numeric_wandb_metrics(
         output[prefix] = float(value)
 
 
+def calibrate_adain_source(model, train_loader, config, device) -> int:
+    """Measure final source feature moments on the unaugmented training split."""
+    modules = [module for module in model.modules()
+               if isinstance(module, SourceAdaptiveInstanceNorm2d)]
+    if not modules:
+        return 0
+    dataset = copy.copy(train_loader.dataset)
+    # Use the same resize/input normalization as evaluation, without augmentations.
+    _, dataset.transform = build_transforms(config)
+    loader = torch.utils.data.DataLoader(
+        dataset, batch_size=config.eval_batch_size or config.batch_size,
+        shuffle=False, num_workers=config.num_workers,
+        pin_memory=device.type == "cuda",
+    )
+    model.eval()
+    for module in modules:
+        module.collect_source = False
+        module.begin_calibration()
+    with torch.inference_mode():
+        for batch in loader:
+            model(batch["image"].to(device, non_blocking=True))
+    counts = [module.finish_calibration() for module in modules]
+    if len(set(counts)) != 1:
+        raise RuntimeError("AdaIN layers saw different numbers of source images.")
+    print(f"[INFO] AdaIN source reference calibrated | layers={len(modules)} "
+          f"synbaby_train_images={counts[0]}")
+    return counts[0]
+
+
 def main() -> None:
     """Execute the end-to-end experiment pipeline from the command line."""
     args = parse_args()
@@ -1152,6 +1185,17 @@ def main() -> None:
         )
         model.load_state_dict(best_checkpoint["model_state_dict"])
         model.to(device)
+        if any(isinstance(module, SourceAdaptiveInstanceNorm2d)
+               for module in model.modules()):
+            calibrate_adain_source(model, dataloaders["train"], config, device)
+            best_checkpoint["model_state_dict"] = model.state_dict()
+            best_checkpoint["adain_reference"] = {
+                "source_split": "synbaby72/train", "augmentation": "none",
+                "calibrated": True,
+            }
+            temporary_checkpoint = best_checkpoint_path.with_suffix(".calibrated.tmp")
+            torch.save(best_checkpoint, temporary_checkpoint)
+            os.replace(temporary_checkpoint, best_checkpoint_path)
 
         full_evaluation_summary = run_full_evaluation(
             model=model,

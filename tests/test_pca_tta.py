@@ -278,7 +278,7 @@ def test_enhanced_difference_view_exposes_small_nonzero_changes() -> None:
     assert float(heatmap[3, 3].max()) == pytest.approx(0.9)
 
 
-@pytest.mark.parametrize("normalization", ["layer", "instance"])
+@pytest.mark.parametrize("normalization", ["layer", "instance", "adain"])
 @pytest.mark.parametrize("scope", ["normalizer", "normalizer_head_norms", "normalizer_heads"])
 def test_head_scopes_reload_update_and_reset(normalization, scope, tmp_path, monkeypatch):
     from scripts.models import HRNetLandmarkVisibility, build_model_from_checkpoints

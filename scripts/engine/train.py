@@ -118,6 +118,10 @@ def run_epoch(
         raise ValueError("An optimizer is required when training=True.")
 
     model.train(training)
+    from ..models.normalization import SourceAdaptiveInstanceNorm2d
+    for module in model.modules():
+        if isinstance(module, SourceAdaptiveInstanceNorm2d):
+            module.collect_source = training
     total_loss_meter = AverageMeter()
     full_landmark_loss_meter = AverageMeter()
     visible_landmark_loss_meter = AverageMeter()

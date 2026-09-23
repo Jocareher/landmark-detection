@@ -70,8 +70,9 @@ def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('mode', choices=('train', 'tta'))
     parser.add_argument('--settings', type=Path, required=True)
-    parser.add_argument('--normalization', choices=('baseline', 'layer', 'instance'), default='layer',
-                        help='Training: baseline = no normalizer norm + BatchNorm heads; layer/instance = both. TTA architecture comes from checkpoint.')
+    parser.add_argument('--config', type=Path, help='YAML template; defaults to the matching preset.')
+    parser.add_argument('--normalization', choices=('baseline', 'layer', 'instance', 'adain'), default='layer',
+                        help='Training: baseline = no normalizer norm + BatchNorm heads; layer/instance/adain = both. TTA architecture comes from checkpoint.')
     parser.add_argument('--scope', choices=SCOPES, default='normalizer')
     parser.add_argument('--dataset', choices=('babyland', 'infanface'), default='babyland')
     parser.add_argument('--checkpoint', type=Path)
@@ -173,8 +174,10 @@ def main():
     checkpoint = required_path(args.checkpoint, exists=not bool(args.afterok)) if args.checkpoint else None
     separate = required_path(args.normalizer_checkpoint, exists=not bool(args.afterok)) if args.normalizer_checkpoint else None
     root = Path(required_path(settings['runs_root'], exists=False))
-    template = 'normalizer_experiments.yaml' if args.mode == 'train' else 'pca_tta_evaluation.yaml'
-    base_yaml = (REPO / 'configs' / template).read_text()
+    template = ('adain_normalizer_experiments.yaml' if args.normalization == 'adain'
+                else 'normalizer_experiments.yaml') if args.mode == 'train' else 'pca_tta_evaluation.yaml'
+    template_path = args.config if args.config is not None else REPO / 'configs' / template
+    base_yaml = template_path.read_text()
     label = yaml_run_name(base_yaml)
     name = f'{label}_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}_{uuid.uuid4().hex[:6]}'
     run = root / name

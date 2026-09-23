@@ -232,3 +232,42 @@ el YAML de ese job: están copiados en su directorio, incluso mientras está en
 cola. Los datasets, pesos de entrada y el entorno Conda siguen siendo compartidos;
 no se deben mover o modificar mientras los jobs los usan. Conservá tus rutas HPC
 en `configs/upf_hpc.local.json` (ignorado por Git) para evitar conflictos al actualizar.
+
+### AdaIN con referencia fija de synbaby72
+
+`--normalization adain` selecciona `configs/adain_normalizer_experiments.yaml`
+en entrenamiento. El normalizer y las tres heads usan AdaIN; el backbone
+conserva BatchNorm. Se entrenan normalizer, transition3/stage4 y heads igual
+que en los otros experimentos. Durante cada época, las capas AdaIN actualizan
+una estimación de media y desviación por canal a partir del split de entrenamiento.
+Validación y TTA no actualizan esa referencia. Al finalizar, se recupera el mejor
+checkpoint, se recalculan los momentos con **todo** el split `synbaby72/train`
+sin augmentations, y se guarda el checkpoint calibrado antes de la evaluación
+final. Este recorrido adicional requiere tiempo de GPU: dejá margen en `train.time`.
+La referencia y los parámetros afines quedan guardados en
+`checkpoints/full_model_best.pth`; no se necesitan imágenes fuente durante TTA.
+
+```bash
+bash slurm/train_hrnet_landmarks_template.sh \
+  --settings configs/upf_hpc.local.json --normalization adain
+
+bash slurm/tta_landmarks.sh \
+  --settings configs/upf_hpc.local.json \
+  --config configs/adain_pca_tta_evaluation.yaml \
+  --checkpoint /ruta/al/run/checkpoints/full_model_best.pth \
+  --dataset babyland --scope normalizer
+```
+
+Para comparar los tres scopes de TTA, cambiá `--scope` a
+`normalizer_head_norms` o `normalizer_heads`. El primero actualiza la escala y
+el sesgo AdaIN de las heads; las medias y desviaciones de referencia siguen
+fijas. Cada job recibe su propio directorio. `--config` permite elegir un YAML
+específico para entrenamiento o TTA; el lanzador sigue sustituyendo rutas HPC,
+recursos y modo según los parámetros del comando.
+
+En local, ajustá las rutas y `wandb_run_name` en
+`configs/adain_normalizer_experiments.yaml` y ejecutá
+`python -m scripts.main --config configs/adain_normalizer_experiments.yaml`.
+Para TTA local, ajustá el checkpoint y los datos en
+`configs/adain_pca_tta_evaluation.yaml`, luego ejecutá
+`python -m scripts.evaluate --config configs/adain_pca_tta_evaluation.yaml`.

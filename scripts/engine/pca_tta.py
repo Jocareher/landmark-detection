@@ -18,6 +18,7 @@ from .pca_shape_prior import (
     softargmax_heatmaps_to_image_coords,
 )
 from ..models import NormalizedLandmarker
+from ..models.normalization import SourceAdaptiveInstanceNorm2d
 from ..utils.visualization import plt as plotting
 
 
@@ -464,7 +465,7 @@ class PCAGuidedTTA:
         if any(id(p) in backbone_ids for head in heads for p in head.parameters()):
             raise ValueError("Task heads must not contain backbone parameters.")
         if self.config.adaptation_scope == "normalizer_head_norms":
-            norm_types = (torch.nn.LayerNorm, torch.nn.InstanceNorm2d,
+            norm_types = (torch.nn.LayerNorm, torch.nn.InstanceNorm2d, SourceAdaptiveInstanceNorm2d,
                           torch.nn.GroupNorm, torch.nn.BatchNorm2d)
             heads = [module for head in heads for module in head.modules()
                      if isinstance(module, norm_types) and any(True for _ in module.parameters())]
