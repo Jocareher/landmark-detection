@@ -10,9 +10,9 @@
     "train_dataset": "/home/jreyes/landmark-detection/data/synbaby72",
     "pretrained_weights": "/home/jreyes/landmark-detection/weights/HR18-300W.pth",
     "pca_prior": "/home/jreyes/landmark-detection/weights/pca_prior_13y_k32.pt",
-    "babyland_crops": "landmark-detection/data/babyland72/all_detections",
-    "babyland_source_root": "landmark-detection/data/babyland72/images",
-    "babyland_labels": "landmark-detection/data/babyland72/labels",
+    "babyland_crops": "/home/jreyes/landmark-detection/data/babyland72/all_detections",
+    "babyland_source_root": "/home/jreyes/landmark-detection/data/babyland72/images",
+    "babyland_labels": "/home/jreyes/landmark-detection/data/babyland72/labels",
     "infanface_crops": "/home/jreyes/landmark-detection/data/infanface_adapted/all_detections",
     "infanface_source_root": "/home/jreyes/landmark-detection/data/infanface_adapted/all/images",
     "infanface_labels": "/home/jreyes/landmark-detection/data/infanface_adapted/all/labels"
