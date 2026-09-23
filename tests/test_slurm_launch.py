@@ -197,12 +197,10 @@ def test_training_can_skip_natural_datasets_without_their_paths(tmp_path, monkey
     assert not (tmp_path / 'runs').exists()
 
 
-def test_adain_hpc_preset_uses_its_yaml():
-    source = (ROOT / 'configs/adain_normalizer_experiments.yaml').read_text()
+def test_adain_hpc_uses_shared_training_yaml():
+    source = (ROOT / 'configs/normalizer_experiments.yaml').read_text()
     base = yaml.safe_load(source)['arguments']
-    assert launch.yaml_run_name(source) == 'train_adain_pca_image'
-    assert base['normalizer_normalization'] == 'adain'
-    assert base['head_normalization'] == 'adain'
+    assert launch.yaml_run_name(source) == base['wandb_run_name']
     plan = dict(mode='train', run_dir='/tmp/train_adain', normalization='adain',
                 evaluations={'babyland': False, 'infanface': False},
                 resources=dict(batch_size=8, workers=2, epochs=1),

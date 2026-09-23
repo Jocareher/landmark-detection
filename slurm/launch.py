@@ -177,8 +177,7 @@ def main():
     if maximum and maximum[1] not in ('UNLIMITED', 'INFINITE'):
         if duration_seconds(resources['time']) > duration_seconds(maximum[1]):
             raise ValueError(f'Request exceeds partition MaxTime={maximum[1]}')
-    template = ('adain_normalizer_experiments.yaml' if args.normalization == 'adain'
-                else 'normalizer_experiments.yaml') if args.mode == 'train' else 'pca_tta_evaluation.yaml'
+    template = 'normalizer_experiments.yaml' if args.mode == 'train' else 'pca_tta_evaluation.yaml'
     template_path = args.config if args.config is not None else REPO / 'configs' / template
     base_yaml = template_path.read_text()
     evaluations = ({name: yaml_evaluation_enabled(base_yaml, f'evaluate_{name}')

@@ -80,12 +80,14 @@ def test_final_calibration_uses_unaugmented_train_images(monkeypatch):
     assert model._calibration is None
 
 
-def test_local_adain_yaml_builds_training_configuration(monkeypatch):
+def test_local_yaml_selects_adain_via_cli(monkeypatch):
     from pathlib import Path
     from scripts.main import parse_args, build_config_from_args
 
-    config_path = Path(__file__).resolve().parents[1] / 'configs/adain_normalizer_experiments.yaml'
-    monkeypatch.setattr('sys.argv', ['train', '--config', str(config_path)])
+    config_path = Path(__file__).resolve().parents[1] / 'configs/normalizer_experiments.yaml'
+    monkeypatch.setattr('sys.argv', ['train', '--config', str(config_path),
+                                    '--normalizer-normalization', 'adain',
+                                    '--head-normalization', 'adain'])
     config = build_config_from_args(parse_args())
     assert config.normalizer_internal_normalization == 'adain'
     assert config.head_normalization == 'adain'

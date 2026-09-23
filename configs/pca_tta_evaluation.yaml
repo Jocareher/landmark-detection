@@ -21,9 +21,10 @@ arguments:
   # ---------------------------------------------------------------------------
   # Checkpoint loading
   # ---------------------------------------------------------------------------
-  # LayerNorm/InstanceNorm architectures are reconstructed from checkpoint metadata.
-  # For InstanceNorm, replace train_layer_pca_image with train_instance_pca_image here
-  # and in output_dir; update wandb_run_name below. No normalization override is needed.
+  # Baseline, LayerNorm, InstanceNorm and AdaIN architectures are reconstructed
+  # from checkpoint metadata. For AdaIN, the calibrated synbaby72 reference is
+  # also stored in full_model_best.pth and remains fixed during TTA.
+  # Point checkpoint, output_dir and wandb_run_name at the chosen training run.
   # Full-model checkpoint: normalizer_checkpoint must be null.
   # Split alternative: checkpoint = .../landmarker_best.pth and
   # normalizer_checkpoint = .../normalizer_best.pth from the same trained run.

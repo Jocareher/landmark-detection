@@ -9,8 +9,10 @@ arguments:
   # Baseline: normalizer_normalization: none, head_normalization: batch,
   # wandb_run_name: train_baseline_pca_image. Backbone keeps BatchNorm in all variants.
   # HPC: select --normalization baseline; the launcher overrides these fields.
-  # For InstanceNorm, set normalizer_normalization and head_normalization to instance,
-  # and wandb_run_name to train_instance_pca_image. Use a new run name for repeats.
+  # InstanceNorm: set both normalization fields to instance.
+  # AdaIN: set both fields to adain. Training updates source moments only on
+  # synbaby72/train; the best checkpoint is recalibrated without augmentations.
+  # For every variant, give wandb_run_name a distinct value.
   # Modes: none | normalizer_sanity | normalizer_train_frozen_landmarker |
   #        normalizer_joint_finetune.
   experiment_mode: normalizer_joint_finetune
@@ -47,6 +49,8 @@ arguments:
   # Hidden blocks: Conv -> selected normalization -> activation.
   # layer: LayerNorm across channels at each pixel.
   # instance: InstanceNorm2d with affine parameters and no running statistics.
+  # adain: per-instance normalization toward fixed synbaby72 source moments;
+  # the scale/bias and moments are saved with the trained checkpoint.
   # Other normalizer choices: none, group. Other head choice: batch.
   # The final zero-initialized convolution preserves the initial identity mapping.
   normalizer_hidden_channels: 16
