@@ -129,7 +129,13 @@ bash slurm/train_hrnet_landmarks_template.sh \
 
 Se heredan pérdidas, augmentations y LR del YAML de normalizer. El job entrena el
 normalizer completo, transition3/stage4 y las tres heads; congela el resto.
-Activa evaluación sintética, pero deja BabyLand/InfAnFace para los jobs separados.
+También evalúa BabyLand e InfAnFace al terminar, porque
+`evaluate_babyland: true` y `evaluate_infanface: true` figuran en el YAML.
+Podés poner cualquiera de las dos en `false` para omitirla. Cuando está activa,
+el lanzador toma recortes, labels e imágenes originales del JSON HPC; las rutas
+locales escritas en el YAML se sustituyen. El entrenamiento usa solo synbaby72.
+Los jobs TTA siguen siendo independientes: hacen la adaptación por imagen y su
+evaluación posterior. Reservá tiempo para estas evaluaciones al solicitar GPU.
 La pérdida PCA conserva el cambio a coordenadas de imagen y su peso del YAML;
 los lanzadores no recalibran ese peso automáticamente.
 

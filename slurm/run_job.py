@@ -29,8 +29,16 @@ def resolved_arguments(plan, base):
                     head_normalization=('batch' if plan['normalization'] == 'baseline'
                                         else plan['normalization']), transfer_mode='fine_tuning',
                     num_unfrozen_stages=1, unfreeze_stem=False,
-                    eval_batch_size=resources['batch_size'], evaluate_synbaby=True,
-                    evaluate_babyland=False, evaluate_infanface=False)
+                    eval_batch_size=resources['batch_size'], evaluate_synbaby=True)
+        for dataset_name in ('babyland', 'infanface'):
+            enabled = plan['evaluations'][dataset_name]
+            args[f'evaluate_{dataset_name}'] = enabled
+            args[f'{dataset_name}_crop_root'] = (
+                paths[f'{dataset_name}_crops'] if enabled else None)
+            args[f'{dataset_name}_gt_root'] = (
+                paths[f'{dataset_name}_labels'] if enabled else None)
+            args[f'{dataset_name}_source_root'] = (
+                paths[f'{dataset_name}_source_root'] if enabled else None)
     else:
         args.update(eval_mode=plan['dataset'], checkpoint=plan['checkpoint'],
                     normalizer_checkpoint=plan['normalizer_checkpoint'],

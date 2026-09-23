@@ -124,6 +124,17 @@ def yaml_run_name(source):
     return safe
 
 
+def yaml_evaluation_enabled(source, name):
+    """Read a training evaluation switch on Python-only login nodes."""
+    matches = re.findall(
+        r'^  ' + re.escape(name) + r':\s*(true|false)\s*(?:#.*)?$',
+        source, re.I | re.M,
+    )
+    if len(matches) != 1:
+        raise ValueError(f'Set arguments.{name} to true or false in the training YAML.')
+    return matches[0].lower() == 'true'
+
+
 def validate_runtime_files():
     required = ('slurm/job.sh', 'slurm/ensure_lmks.sh', 'slurm/check_environment.py',
                 'slurm/run_job.py', 'scripts/utils/source_images.py',
@@ -166,22 +177,31 @@ def main():
     if maximum and maximum[1] not in ('UNLIMITED', 'INFINITE'):
         if duration_seconds(resources['time']) > duration_seconds(maximum[1]):
             raise ValueError(f'Request exceeds partition MaxTime={maximum[1]}')
-    paths = settings['paths']
-    needed = ['pca_prior'] + (['train_dataset', 'pretrained_weights'] if args.mode == 'train'
-                             else [f'{args.dataset}_crops', f'{args.dataset}_labels',
-                                   f'{args.dataset}_source_root'])
-    selected_paths = {name: required_path(paths[name]) for name in needed}
-    checkpoint = required_path(args.checkpoint, exists=not bool(args.afterok)) if args.checkpoint else None
-    separate = required_path(args.normalizer_checkpoint, exists=not bool(args.afterok)) if args.normalizer_checkpoint else None
-    root = Path(required_path(settings['runs_root'], exists=False))
     template = ('adain_normalizer_experiments.yaml' if args.normalization == 'adain'
                 else 'normalizer_experiments.yaml') if args.mode == 'train' else 'pca_tta_evaluation.yaml'
     template_path = args.config if args.config is not None else REPO / 'configs' / template
     base_yaml = template_path.read_text()
+    evaluations = ({name: yaml_evaluation_enabled(base_yaml, f'evaluate_{name}')
+                    for name in ('babyland', 'infanface')} if args.mode == 'train' else {})
+    paths = settings['paths']
+    if args.mode == 'train':
+        needed = ['pca_prior', 'train_dataset', 'pretrained_weights']
+        for dataset_name, enabled in evaluations.items():
+            if enabled:
+                needed.extend((f'{dataset_name}_crops', f'{dataset_name}_labels',
+                               f'{dataset_name}_source_root'))
+    else:
+        needed = ['pca_prior', f'{args.dataset}_crops', f'{args.dataset}_labels',
+                  f'{args.dataset}_source_root']
+    selected_paths = {name: required_path(paths[name]) for name in needed}
+    checkpoint = required_path(args.checkpoint, exists=not bool(args.afterok)) if args.checkpoint else None
+    separate = required_path(args.normalizer_checkpoint, exists=not bool(args.afterok)) if args.normalizer_checkpoint else None
+    root = Path(required_path(settings['runs_root'], exists=False))
     label = yaml_run_name(base_yaml)
     name = f'{label}_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}_{uuid.uuid4().hex[:6]}'
     run = root / name
     plan = dict(mode=args.mode, normalization=args.normalization, scope=args.scope,
+                evaluations=evaluations,
                 dataset=args.dataset, paths=selected_paths, checkpoint=checkpoint,
                 normalizer_checkpoint=separate, run_dir=str(run), resources=resources,
                 partition=partition, gpu_type=gpu, wandb_mode=settings.get('wandb_mode', 'offline'),

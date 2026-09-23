@@ -85,7 +85,9 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode):
     if mode == 'train':
         assert resolved['normalizer_normalization'] == resolved['head_normalization'] == 'instance'
         assert resolved['num_unfrozen_stages'] == 1
-        assert not resolved['evaluate_babyland'] and not resolved['evaluate_infanface']
+        assert resolved['evaluate_babyland'] and resolved['evaluate_infanface']
+        assert resolved['babyland_source_root'] == settings['paths']['babyland_source_root']
+        assert resolved['infanface_source_root'] == settings['paths']['infanface_source_root']
         assert Path(resolved['output_dir']) / resolved['wandb_run_name'] == run
     else:
         assert resolved['pca_tta_adaptation_scope'] == 'normalizer_heads'
@@ -100,6 +102,7 @@ def test_generated_training_yaml_parses(tmp_path, monkeypatch, variant, normaliz
     from scripts.main import parse_args, build_config_from_args
     base = yaml.safe_load((ROOT / 'configs/normalizer_experiments.yaml').read_text())['arguments']
     plan = dict(mode='train', run_dir=str(tmp_path / 'run'), normalization=variant,
+                evaluations={'babyland': False, 'infanface': False},
                 resources=dict(batch_size=8, workers=2, epochs=1),
                 paths=dict(pca_prior='/weights/pca.pt', train_dataset='/data/train',
                            pretrained_weights='/weights/hrnet.pt'))
@@ -151,6 +154,49 @@ def test_invalid_yaml_run_name(scalar):
         launch.yaml_run_name('arguments:\n  wandb_run_name: ' + scalar)
 
 
+def test_training_evaluation_switches_are_independent():
+    source = 'arguments:\n  evaluate_babyland: false\n  evaluate_infanface: true\n'
+    assert not launch.yaml_evaluation_enabled(source, 'evaluate_babyland')
+    assert launch.yaml_evaluation_enabled(source, 'evaluate_infanface')
+    plan = dict(mode='train', run_dir='/tmp/run', normalization='adain',
+                evaluations={'babyland': False, 'infanface': True},
+                resources=dict(batch_size=8, workers=2, epochs=1),
+                paths=dict(pca_prior='/prior', train_dataset='/train',
+                           pretrained_weights='/weights', infanface_crops='/crops',
+                           infanface_labels='/labels', infanface_source_root='/images'))
+    resolved = worker.resolved_arguments(plan, {})
+    assert not resolved['evaluate_babyland'] and resolved['babyland_source_root'] is None
+    assert resolved['evaluate_infanface']
+    assert resolved['infanface_crop_root'] == '/crops'
+
+
+def test_training_can_skip_natural_datasets_without_their_paths(tmp_path, monkeypatch, capsys):
+    settings = json.loads((ROOT / 'configs/upf_hpc.example.json').read_text())
+    settings['runs_root'] = str(tmp_path / 'runs')
+    settings['paths'] = {}
+    for key in ('train_dataset', 'pretrained_weights', 'pca_prior'):
+        path = tmp_path / key
+        path.touch()
+        settings['paths'][key] = str(path)
+    settings_path = tmp_path / 'settings.json'
+    settings_path.write_text(json.dumps(settings))
+    config_path = tmp_path / 'train.yaml'
+    config_path.write_text('arguments:\n  wandb_run_name: no_natural_eval\n'
+                           '  evaluate_babyland: false\n  evaluate_infanface: false\n')
+    args = SimpleNamespace(mode='train', settings=settings_path, config=config_path,
+                           normalization='adain', scope='normalizer', dataset='babyland',
+                           checkpoint=None, normalizer_checkpoint=None, afterok=None,
+                           time=None, partition=None, gpu_type=None, epochs=None,
+                           steps=None, batch_size=None, dry_run=True)
+    monkeypatch.setattr(launch, 'arguments', lambda: args)
+    monkeypatch.setattr(launch.subprocess, 'check_output',
+                        lambda command, **kwargs: 'gpu:l40s:2' if command[0] == 'sinfo'
+                        else 'PartitionName=medium MaxTime=08:00:00')
+    launch.main()
+    assert 'no_natural_eval_' in capsys.readouterr().out
+    assert not (tmp_path / 'runs').exists()
+
+
 def test_adain_hpc_preset_uses_its_yaml():
     source = (ROOT / 'configs/adain_normalizer_experiments.yaml').read_text()
     base = yaml.safe_load(source)['arguments']
@@ -158,6 +204,7 @@ def test_adain_hpc_preset_uses_its_yaml():
     assert base['normalizer_normalization'] == 'adain'
     assert base['head_normalization'] == 'adain'
     plan = dict(mode='train', run_dir='/tmp/train_adain', normalization='adain',
+                evaluations={'babyland': False, 'infanface': False},
                 resources=dict(batch_size=8, workers=2, epochs=1),
                 paths=dict(pca_prior='/weights/pca.pt', train_dataset='/data/train',
                            pretrained_weights='/weights/hrnet.pt'))
