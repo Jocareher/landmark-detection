@@ -224,9 +224,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--pca-tta-adaptation-scope",
-        choices=["normalizer", "normalizer_head_norms", "normalizer_heads"],
+        choices=["normalizer", "normalizer_head_norms", "normalizer_heads",
+                 "normalizer_stem", "normalizer_stem_layer1", "normalizer_layer1_instance"],
         default=defaults.pca_tta_adaptation_scope,
-        help="Adapt the normalizer, optionally with head affine norms or full heads.",
+        help="Adapt the normalizer, optionally with heads, stem, layer1, or its output InstanceNorm.",
     )
     parser.add_argument(
         "--pca-tta-steps",
@@ -484,6 +485,7 @@ def _normalizer_architecture_from_config(config: ExperimentConfig) -> dict[str, 
         "kernel_size": config.normalizer_kernel_size,
         "activation": config.normalizer_activation,
         "normalization": config.normalizer_internal_normalization,
+        "final_instance_norm": config.normalizer_final_instance_norm,
         "residual_scale": config.normalizer_residual_scale,
         "initialize_identity": config.normalizer_initialize_identity,
         "clamp_output": config.normalizer_clamp_output,

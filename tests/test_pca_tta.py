@@ -348,3 +348,84 @@ def test_head_scopes_reload_update_and_reset(normalizer_norm, head_norm, scope, 
 def test_invalid_adaptation_scope():
     with pytest.raises(ValueError, match="scope"):
         PCATTAConfig(adaptation_scope="backbone").validate()
+
+
+@pytest.mark.parametrize("scope,expected_prefixes", [
+    ("normalizer", ()),
+    ("normalizer_stem", ("conv1.", "bn1.", "conv2.", "bn2.")),
+    ("normalizer_stem_layer1", ("conv1.", "bn1.", "conv2.", "bn2.",
+                                   "layer1.", "layer1_output_norm.")),
+    ("normalizer_layer1_instance", ("layer1_output_norm.",)),
+])
+def test_early_backbone_tta_parameter_partition_and_restore(scope, expected_prefixes, tmp_path):
+    from scripts.models import HRNetLandmarkVisibility
+
+    torch.set_num_threads(1)
+    model = NormalizedLandmarker(
+        HRNetLandmarkVisibility(num_landmarks=4, layer1_output_instance_norm=True),
+        ResidualImageNormalizer(final_instance_norm=True, initialize_identity=False),
+    )
+    source = deepcopy(model.state_dict())
+    adapter = PCAGuidedTTA(model, _pca_prior(), torch.device("cpu"), tmp_path,
+                          PCATTAConfig(adaptation_scope=scope, steps=0, probe_count=0))
+    selected = set(adapter.adapted_parameter_names)
+    assert any(name.startswith("normalizer.") for name in selected)
+    backbone_names = {name.removeprefix("landmarker.backbone.") for name in selected
+                      if name.startswith("landmarker.backbone.")}
+    assert all(any(name.startswith(prefix) for prefix in expected_prefixes)
+               for name in backbone_names)
+    assert {prefix for prefix in expected_prefixes
+            if any(name.startswith(prefix) for name in backbone_names)} == set(expected_prefixes)
+    assert not any(name.startswith("landmarker.") and not name.startswith("landmarker.backbone.")
+                   for name in selected)
+    assert not model.landmarker.backbone.bn1.training
+    assert not model.landmarker.backbone.layer1.training
+    for parameter in adapter.adapted_parameters:
+        parameter.data.add_(0.1)
+    adapter._restore_source_normalizer()
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, source[name], rtol=0, atol=0)
+
+
+def test_early_instance_tta_rejects_legacy_checkpoint(tmp_path):
+    from scripts.models import HRNetLandmarkVisibility
+
+    model = NormalizedLandmarker(HRNetLandmarkVisibility(num_landmarks=4),
+                                 ResidualImageNormalizer())
+    with pytest.raises(ValueError, match="layer1_output_instance_norm"):
+        PCAGuidedTTA(model, _pca_prior(), torch.device("cpu"), tmp_path,
+                     PCATTAConfig(adaptation_scope="normalizer_layer1_instance"))
+
+
+def test_early_backbone_tta_updates_selected_weights_and_keeps_bn_statistics(tmp_path, monkeypatch):
+    from scripts.models import HRNetLandmarkVisibility
+
+    torch.set_num_threads(1)
+    torch.manual_seed(7)
+    model = NormalizedLandmarker(
+        HRNetLandmarkVisibility(num_landmarks=4, layer1_output_instance_norm=True),
+        ResidualImageNormalizer(final_instance_norm=True, initialize_identity=False),
+    )
+    source = deepcopy(model.state_dict())
+    adapter = PCAGuidedTTA(
+        model, _pca_prior(), torch.device("cpu"), tmp_path,
+        PCATTAConfig(adaptation_scope="normalizer_stem_layer1", steps=1, probe_count=0),
+    )
+    updates = []
+    adam_step = torch.optim.Adam.step
+
+    def record_step(optimizer, *args, **kwargs):
+        result = adam_step(optimizer, *args, **kwargs)
+        updates.append({name for name, value in model.state_dict().items()
+                        if not torch.equal(value, source[name])})
+        return result
+
+    monkeypatch.setattr(torch.optim.Adam, "step", record_step)
+    adapter.adapt_batch(torch.randn(1, 3, 64, 64), ["babyland_probe"])
+    assert len(updates) == 1 and updates[0]
+    assert updates[0] <= set(adapter.adapted_parameter_names)
+    assert any(name.startswith("landmarker.backbone.layer1.") for name in updates[0])
+    assert any(name.startswith("landmarker.backbone.conv1.") for name in updates[0])
+    assert "landmarker.backbone.bn1.running_mean" not in updates[0]
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, source[name], rtol=0, atol=0)

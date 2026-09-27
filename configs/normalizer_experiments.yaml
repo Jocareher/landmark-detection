@@ -5,20 +5,22 @@ arguments:
   # ---------------------------------------------------------------------------
   # Experiment selection
   # ---------------------------------------------------------------------------
-  # Active preset: LayerNorm training.
-  # Baseline: normalizer_normalization: none, head_normalization: batch,
-  # wandb_run_name: train_baseline_pca_image. Backbone keeps BatchNorm in all variants.
-  # HPC: select --normalization baseline; the launcher overrides these fields.
-  # InstanceNorm: set both normalization fields to instance.
-  # AdaIN: set both fields to adain. Training updates source moments only on
+  # Active preset: InstanceNorm at the end of the external normalizer and
+  # immediately after HRNet layer1; BatchNorm remains in all task heads.
+  # For the older baseline/layer/instance/adain variants, set BOTH new flags
+  # below to false and choose the earlier normalizer/head normalization pair.
+  # HPC --normalization selects the complete variant and overrides all four fields.
+  # AdaIN source moments are collected only on
   # synbaby72/train; the best checkpoint is recalibrated without augmentations.
   # For every variant, give wandb_run_name a distinct value.
   # Modes: none | normalizer_sanity | normalizer_train_frozen_landmarker |
   #        normalizer_joint_finetune.
   experiment_mode: normalizer_joint_finetune
-  normalizer_normalization: layer
-  head_normalization: layer
-  wandb_run_name: train_layer_pca_image
+  normalizer_normalization: none
+  normalizer_final_instance_norm: true
+  layer1_output_instance_norm: true
+  head_normalization: batch
+  wandb_run_name: train_instance_early_pca_image
 
   # ---------------------------------------------------------------------------
   # Training data and output
@@ -33,8 +35,9 @@ arguments:
   # ---------------------------------------------------------------------------
   # Joint fine-tuning starts from official HRNet weights and new heads/normalizer.
   # Keep checkpoint null for this mode. Sanity/frozen-landmarker modes require a checkpoint.
-  # Train the complete normalizer, transition3, stage4, and all task heads.
-  # Earlier backbone stages and their BN statistics remain frozen.
+  # Train the complete normalizer, the new post-layer1 InstanceNorm affine
+  # parameters, transition3, stage4, and all task heads. Stem/layer1 convolutions
+  # and their BatchNorm statistics remain frozen during source training.
   # Backbone normalization remains BatchNorm regardless of the head variant.
   pretrained_weights: /home/jocareher/Downloads/landmark-detection/weights/HR18-300W.pth
   checkpoint: null
@@ -47,6 +50,9 @@ arguments:
   # Residual normalizer architecture
   # ---------------------------------------------------------------------------
   # Hidden blocks: Conv -> selected normalization -> activation.
+  # When normalizer_final_instance_norm is true, append a separate IN after
+  # the last hidden activation and before the final zero-initialized RGB conv.
+  # The post-layer1 IN is between layer1 and transition1 (256 channels).
   # layer: LayerNorm across channels at each pixel.
   # instance: InstanceNorm2d with affine parameters and no running statistics.
   # adain: per-instance normalization toward fixed synbaby72 source moments;

@@ -1,5 +1,29 @@
 # Entrenamiento y TTA en SNOW / DTIC (UPF)
 
+## Experimento InstanceNorm temprano en local
+
+Editá las rutas de datasets, pesos, PCA y salidas en
+`configs/normalizer_experiments.yaml`. El preset activo usa normalizer sin
+normalización interna, InstanceNorm al final de su último bloque oculto,
+InstanceNorm después de `backbone.layer1` y heads con BatchNorm:
+
+```bash
+python -m scripts.main --config configs/normalizer_experiments.yaml
+```
+
+Al terminar, poné la ruta real de `full_model_best.pth` y las rutas de BabyLand
+en `configs/pca_tta_evaluation.yaml`. Elegí un `output_dir` y
+`wandb_run_name` distintos para cada alcance y ejecutá:
+
+```bash
+python -m scripts.evaluate --config configs/pca_tta_evaluation.yaml
+```
+
+Los valores de `pca_tta_adaptation_scope` disponibles para la comparación son
+`normalizer`, `normalizer_stem`, `normalizer_stem_layer1` y
+`normalizer_layer1_instance`. La arquitectura procede del checkpoint de
+entrenamiento, no del YAML de evaluación.
+
 Estos lanzadores corresponden a **SNOW**, descrito en la guía indicada por el
 usuario, no a las particiones `std-gpu`/`high-gpu` de Correfoc. Se consultó la
 documentación el 22-09-2026:
@@ -127,8 +151,21 @@ bash slurm/train_hrnet_landmarks_template.sh \
   --settings configs/upf_hpc.local.json --normalization instance
 ```
 
-Se heredan pérdidas, augmentations y LR del YAML de normalizer. El job entrena el
-normalizer completo, transition3/stage4 y las tres heads; congela el resto.
+Para el experimento nuevo, usá el preset específico:
+
+```bash
+bash slurm/train_hrnet_landmarks_template.sh \
+  --settings configs/upf_hpc.local.json --normalization instance_early --dry-run
+bash slurm/train_hrnet_landmarks_template.sh \
+  --settings configs/upf_hpc.local.json --normalization instance_early
+```
+
+Se heredan pérdidas, augmentations y LR del YAML de normalizer. `instance_early`
+pone InstanceNorm al final del normalizer y después de `backbone.layer1`, y
+conserva BatchNorm en las heads. En SynBaby se actualizan el normalizer, la
+nueva InstanceNorm de layer1, transition3/stage4 y las heads. Los convolucionales
+del stem/layer1 y sus estadísticas BatchNorm quedan congelados. Los otros
+presets mantienen su arquitectura original y desactivan ambas InstanceNorm nuevas.
 También evalúa BabyLand e InfAnFace al terminar, porque
 `evaluate_babyland: true` y `evaluate_infanface: true` figuran en el YAML.
 Podés poner cualquiera de las dos en `false` para omitirla. Cuando está activa,
@@ -172,6 +209,25 @@ for scope in normalizer normalizer_head_norms normalizer_heads; do
     --afterok 123456 --dataset babyland --scope "$scope"
 done
 ```
+
+Para comparar los cuatro alcances nuevos con el checkpoint `instance_early`:
+
+```bash
+for scope in normalizer normalizer_stem normalizer_stem_layer1 normalizer_layer1_instance; do
+  bash slurm/tta_landmarks.sh \
+    --settings configs/upf_hpc.local.json \
+    --checkpoint /ruta/mostrada/checkpoints/full_model_best.pth \
+    --dataset babyland --scope "$scope"
+done
+```
+
+`normalizer_stem` actualiza conv1/bn1/conv2/bn2; `normalizer_stem_layer1`
+agrega layer1 y la nueva InstanceNorm, sin tocar transition1; y
+`normalizer_layer1_instance` ajusta solo los parámetros afines de esa
+InstanceNorm además del normalizer. Los cuatro modos reinician los pesos por
+imagen y mantienen las estadísticas de BatchNorm fijas durante TTA. Los alcances
+con stem/layer1 necesitan más memoria y tiempo: medí primero con `--steps 1` y
+ajustá `--time` y `--batch-size` según el resultado.
 
 Repetí con `--dataset infanface` y/o el checkpoint de InstanceNorm. La arquitectura
 se carga de los metadatos del checkpoint, nunca de `--normalization` en TTA.

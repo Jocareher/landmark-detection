@@ -148,6 +148,18 @@ def parse_args() -> argparse.Namespace:
         help="Normalization inside all three task heads; backbone BN is preserved.",
     )
     parser.add_argument(
+        "--normalizer-final-instance-norm",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.normalizer_final_instance_norm,
+        help="Add InstanceNorm after the final hidden normalizer activation.",
+    )
+    parser.add_argument(
+        "--layer1-output-instance-norm",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.layer1_output_instance_norm,
+        help="Add InstanceNorm between HRNet layer1 and transition1.",
+    )
+    parser.add_argument(
         "--normalizer-residual-scale",
         type=float,
         default=defaults.normalizer_residual_scale,
@@ -624,6 +636,8 @@ def validate_experiment_config(config: ExperimentConfig) -> None:
     """Validate and resolve invariants of the normalizer experiment modes."""
     if config.experiment_mode == "none":
         return
+    if config.normalizer_final_instance_norm and config.normalizer_num_layers < 2:
+        raise ValueError("normalizer_final_instance_norm requires normalizer_num_layers >= 2.")
     checkpoint_required = config.experiment_mode in {
         "normalizer_sanity",
         "normalizer_train_frozen_landmarker",
@@ -701,7 +715,9 @@ def validate_experiment_config(config: ExperimentConfig) -> None:
 def build_model(config: ExperimentConfig) -> torch.nn.Module:
     """Instantiate the model, load pretrained weights, and configure trainable layers."""
     landmarker = HRNetLandmarkVisibility(
-        num_landmarks=config.num_landmarks, head_normalization=config.head_normalization
+        num_landmarks=config.num_landmarks,
+        head_normalization=config.head_normalization,
+        layer1_output_instance_norm=config.layer1_output_instance_norm,
     )
     if (
         config.pretrained_weights is not None
@@ -725,6 +741,7 @@ def build_model(config: ExperimentConfig) -> torch.nn.Module:
         kernel_size=config.normalizer_kernel_size,
         activation=config.normalizer_activation,
         normalization=config.normalizer_internal_normalization,
+        final_instance_norm=config.normalizer_final_instance_norm,
         residual_scale=config.normalizer_residual_scale,
         initialize_identity=config.normalizer_initialize_identity,
         clamp_output=config.normalizer_clamp_output,
@@ -845,8 +862,10 @@ def finalize_normalizer_experiment(
                 if config.experiment_mode == "normalizer_train_frozen_landmarker"
                 else (
                     "SynBaby-supervised training from official HRNet backbone weights: "
-                    "normalizer, transition3, stage4, and task heads trainable; earlier "
-                    "backbone stages frozen."
+                    "normalizer, transition3, stage4, and task heads trainable; "
+                    + ("post-layer1 InstanceNorm trainable; "
+                       if config.layer1_output_instance_norm else "")
+                    + "earlier backbone convolutions frozen."
                 )
             )
         ),
@@ -992,8 +1011,9 @@ def main() -> None:
                 "[INFO] Joint initialization | "
                 f"HRNet backbone={config.pretrained_weights} | "
                 "new identity-initialized normalizer | new task heads | "
-                "trainable=normalizer, transition3, stage4, task heads | "
-                "frozen=stem, stage1, stage2, stage3"
+                "trainable=normalizer, transition3, stage4, task heads"
+                + (", post-layer1 InstanceNorm" if config.layer1_output_instance_norm else "")
+                + " | frozen=stem, stage1 convolutions, stage2, stage3"
             )
 
         if config.checkpoint_path is not None:

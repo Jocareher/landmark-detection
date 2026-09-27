@@ -5,30 +5,33 @@ arguments:
   # ---------------------------------------------------------------------------
   # Experiment selection
   # ---------------------------------------------------------------------------
-  # Active preset: LayerNorm checkpoint, BabyLand, normalizer-only TTA.
+  # Active preset: the new post-layer1 InstanceNorm checkpoint on BabyLand.
   # Scopes:
   #   normalizer            = complete external normalizer
   #   normalizer_head_norms = normalizer + gamma/beta of normalization in all three heads
   #   normalizer_heads      = normalizer + all three complete task heads
-  # All scopes freeze the backbone and its BN statistics. Head modules stay in eval mode.
+  #   normalizer_stem       = normalizer + stem conv1/bn1/conv2/bn2
+  #   normalizer_stem_layer1 = above + layer1 + post-layer1 InstanceNorm
+  #   normalizer_layer1_instance = normalizer + post-layer1 InstanceNorm only
+  # BN running statistics remain frozen (eval mode) in every scope.
   # Source weights for every adapted module and the optimizer reset for each image.
   # PCA supervises full landmarks; the exclusive visibility classifier has no loss gradient.
   # Set pca_tta false for ordinary inference, or steps 0 for a zero-update TTA reference.
   eval_mode: babyland
   pca_tta: true
-  pca_tta_adaptation_scope: normalizer
+  pca_tta_adaptation_scope: normalizer_stem_layer1
 
   # ---------------------------------------------------------------------------
   # Checkpoint loading
   # ---------------------------------------------------------------------------
-  # Baseline, LayerNorm, InstanceNorm and AdaIN architectures are reconstructed
+  # Baseline, LayerNorm, InstanceNorm, post-layer1 IN and AdaIN are reconstructed
   # from checkpoint metadata. For AdaIN, the calibrated synbaby72 reference is
   # also stored in full_model_best.pth and remains fixed during TTA.
   # Point checkpoint, output_dir and wandb_run_name at the chosen training run.
   # Full-model checkpoint: normalizer_checkpoint must be null.
   # Split alternative: checkpoint = .../landmarker_best.pth and
   # normalizer_checkpoint = .../normalizer_best.pth from the same trained run.
-  checkpoint: /home/jocareher/Downloads/landmark-detection/runs/train_layer_pca_image/checkpoints/full_model_best.pth
+  checkpoint: /home/jocareher/Downloads/landmark-detection/runs/train_instance_early_pca_image/checkpoints/full_model_best.pth
   normalizer_checkpoint: null
 
   # ---------------------------------------------------------------------------
@@ -51,10 +54,10 @@ arguments:
   # Changing the scope above does NOT rename these paths automatically.
   # Example suffixes: babyland_normalizer_head_norms, babyland_normalizer_heads.
   # summary.json records the scope, selected parameters, architecture, and PCA loss space.
-  output_dir: /home/jocareher/Downloads/landmark-detection/runs/train_layer_pca_image/evaluation/babyland_normalizer
+  output_dir: /home/jocareher/Downloads/landmark-detection/runs/train_instance_early_pca_image/evaluation/babyland_normalizer_stem_layer1
   use_wandb: true
   wandb_project: BabyLMKS
-  wandb_run_name: tta_layer_babyland_normalizer
+  wandb_run_name: tta_instance_early_babyland_normalizer_stem_layer1
   save_config: true
 
   # ---------------------------------------------------------------------------

@@ -97,7 +97,8 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode):
 
 @pytest.mark.parametrize('variant,normalizer_norm,head_norm', [
     ('baseline', 'none', 'batch'), ('layer', 'layer', 'layer'),
-    ('instance', 'instance', 'instance')])
+    ('instance', 'instance', 'instance'),
+    ('instance_early', 'none', 'batch')])
 def test_generated_training_yaml_parses(tmp_path, monkeypatch, variant, normalizer_norm, head_norm):
     from scripts.main import parse_args, build_config_from_args
     base = yaml.safe_load((ROOT / 'configs/normalizer_experiments.yaml').read_text())['arguments']
@@ -114,6 +115,8 @@ def test_generated_training_yaml_parses(tmp_path, monkeypatch, variant, normaliz
     assert config.dataset_root == Path('/data/train')
     assert config.head_normalization == head_norm
     assert config.normalizer_internal_normalization == normalizer_norm
+    assert config.normalizer_final_instance_norm == (variant == 'instance_early')
+    assert config.layer1_output_instance_norm == (variant == 'instance_early')
 
 
 def test_login_launcher_uses_python36_syntax_and_apis():

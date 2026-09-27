@@ -44,7 +44,9 @@ class PCATTAConfig:
 
     def validate(self) -> None:
         """Validate values before any target image is adapted."""
-        if self.adaptation_scope not in {"normalizer", "normalizer_head_norms", "normalizer_heads"}:
+        if self.adaptation_scope not in {"normalizer", "normalizer_head_norms", "normalizer_heads",
+                                         "normalizer_stem", "normalizer_stem_layer1",
+                                         "normalizer_layer1_instance"}:
             raise ValueError(f"Unsupported TTA adaptation scope: {self.adaptation_scope}")
         if self.steps < 0:
             raise ValueError("PCA TTA adaptation steps cannot be negative.")
@@ -79,11 +81,11 @@ class PCATTAConfig:
 
 
 class PCAGuidedTTA:
-    """Adapt a normalizer and optional task-head parameters using PCA loss.
+    """Adapt a normalizer and optional landmarker parameters using PCA loss.
 
     Adaptation is episodic: all adapted source weights and a fresh Adam
-    optimizer are restored for every input image. The backbone and PCA prior
-    remain frozen. No target ground truth is consumed by this class.
+    optimizer are restored for every input image. The PCA prior remains frozen.
+    No target ground truth is consumed by this class.
     """
 
     def __init__(
@@ -123,13 +125,13 @@ class PCAGuidedTTA:
         self.model.to(device)
         self.model.freeze_landmarker()
         self.model.unfreeze_normalizer()
-        self.adapted_head_modules = self._select_head_modules()
-        for module in self.adapted_head_modules:
+        self.adapted_landmarker_modules = self._select_landmarker_modules()
+        for module in self.adapted_landmarker_modules:
             for parameter in module.parameters():
                 parameter.requires_grad = True
-        self.source_head_states = [
+        self.source_landmarker_states = [
             {key: value.detach().cpu().clone() for key, value in module.state_dict().items()}
-            for module in self.adapted_head_modules
+            for module in self.adapted_landmarker_modules
         ]
         self.adapted_parameter_names = [
             name for name, parameter in self.model.named_parameters() if parameter.requires_grad
@@ -213,7 +215,8 @@ class PCAGuidedTTA:
         print(
             f"[PCA-TTA][episode={episode_number:06d}] sample={sample_id} | "
             "source_normalizer_restored=yes optimizer=fresh "
-            f"scope={self.config.adaptation_scope} backbone=frozen normalizer=trainable"
+            f"scope={self.config.adaptation_scope} normalizer=trainable "
+            f"landmarker_selected={len(self.adapted_landmarker_modules)}"
         )
         image = image.detach().to(self.device)
         sample_rows: list[dict[str, Any]] = []
@@ -435,14 +438,14 @@ class PCAGuidedTTA:
         return steps
 
     def _restore_source_normalizer(self) -> None:
-        """Restore the normalizer and every selected head module for an episode."""
+        """Restore the normalizer and every selected landmarker module for an episode."""
         assert self.model.normalizer is not None
         self.model.normalizer.load_state_dict(
             deepcopy(self.source_normalizer_state), strict=True
         )
         for parameter in self.model.normalizer.parameters():
             parameter.requires_grad = True
-        for module, state in zip(self.adapted_head_modules, self.source_head_states):
+        for module, state in zip(self.adapted_landmarker_modules, self.source_landmarker_states):
             module.load_state_dict(state, strict=True)
         self.model.zero_grad(set_to_none=True)
         current_state = self.model.normalizer.state_dict()
@@ -452,8 +455,33 @@ class PCAGuidedTTA:
         ):
             raise RuntimeError("Failed to restore the source normalizer state exactly.")
 
+    def _select_landmarker_modules(self) -> list[torch.nn.Module]:
+        """Select exactly the landmarker modules requested for TTA."""
+        if self.config.adaptation_scope == "normalizer":
+            return []
+        backbone = getattr(self.model.landmarker, "backbone", None)
+        if self.config.adaptation_scope in {
+            "normalizer_stem", "normalizer_stem_layer1", "normalizer_layer1_instance"
+        }:
+            if backbone is None:
+                raise ValueError("Early-backbone TTA requires an HRNet backbone.")
+            if self.config.adaptation_scope in {
+                "normalizer_stem_layer1", "normalizer_layer1_instance"
+            } and not isinstance(backbone.layer1_output_norm, torch.nn.InstanceNorm2d):
+                raise ValueError(
+                    "This TTA scope requires a checkpoint trained with "
+                    "layer1_output_instance_norm: true."
+                )
+            if self.config.adaptation_scope == "normalizer_layer1_instance":
+                return [backbone.layer1_output_norm]
+            modules = [backbone.conv1, backbone.bn1, backbone.conv2, backbone.bn2]
+            if self.config.adaptation_scope == "normalizer_stem_layer1":
+                modules.extend([backbone.layer1, backbone.layer1_output_norm])
+            return modules
+        return self._select_head_modules()
+
     def _select_head_modules(self) -> list[torch.nn.Module]:
-        """Select explicit task heads, never backbone layers."""
+        """Select task heads for the original head-based scopes."""
         if self.config.adaptation_scope == "normalizer":
             return []
         get_heads = getattr(self.model.landmarker, "_task_heads", None)
@@ -474,7 +502,7 @@ class PCAGuidedTTA:
         return heads
 
     def _validate_parameter_partition(self) -> None:
-        """Require exactly the selected normalizer/head parameters to be trainable."""
+        """Require exactly the selected normalizer/landmarker parameters to be trainable."""
         actual = {name for name, parameter in self.model.named_parameters()
                   if parameter.requires_grad}
         if actual != set(self.adapted_parameter_names):
@@ -1470,8 +1498,11 @@ def _tta_readme(config: PCATTAConfig) -> str:
 
 Adaptation scope: `{config.adaptation_scope}`. The complete normalizer is updated;
 `normalizer_head_norms` additionally updates head normalization affine parameters,
-and `normalizer_heads` updates all task-head parameters. The backbone and PCA
-prior remain frozen. Head modules stay in eval mode (including any legacy BN). The sole optimization objective is PCA reconstruction loss; no
+`normalizer_heads` updates all task-head parameters, `normalizer_stem` updates
+the stem, `normalizer_stem_layer1` updates the stem, layer1 and its output
+InstanceNorm, and `normalizer_layer1_instance` updates just that new InstanceNorm.
+Other landmarker parameters and the PCA prior remain frozen. All landmarker
+modules stay in eval mode so BatchNorm running statistics remain fixed. The sole optimization objective is PCA reconstruction loss; no
 target ground truth, image regularizer, parameter regularizer, or consistency
 loss is used.
 

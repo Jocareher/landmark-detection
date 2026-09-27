@@ -99,6 +99,8 @@ NORMALIZER_NUM_LAYERS = 3
 NORMALIZER_KERNEL_SIZE = 3
 NORMALIZER_ACTIVATION = "relu"
 NORMALIZER_INTERNAL_NORMALIZATION = "none"
+NORMALIZER_FINAL_INSTANCE_NORM = False
+LAYER1_OUTPUT_INSTANCE_NORM = False
 NORMALIZER_RESIDUAL_SCALE = 0.05
 NORMALIZER_INITIALIZE_IDENTITY = True
 NORMALIZER_CLAMP_OUTPUT = False
@@ -261,6 +263,7 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "pretrained_weights": PRETRAINED_WEIGHTS,
     "num_landmarks": NUM_LANDMARKS,
     "head_normalization": "batch",
+    "layer1_output_instance_norm": LAYER1_OUTPUT_INSTANCE_NORM,
     "image_size": IMAGE_SIZE,
     "heatmap_size": HEATMAP_SIZE,
     "heatmap_sigma": HEATMAP_SIGMA,
@@ -280,6 +283,7 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "normalizer_kernel_size": NORMALIZER_KERNEL_SIZE,
     "normalizer_activation": NORMALIZER_ACTIVATION,
     "normalizer_internal_normalization": NORMALIZER_INTERNAL_NORMALIZATION,
+    "normalizer_final_instance_norm": NORMALIZER_FINAL_INSTANCE_NORM,
     "normalizer_residual_scale": NORMALIZER_RESIDUAL_SCALE,
     "normalizer_initialize_identity": NORMALIZER_INITIALIZE_IDENTITY,
     "normalizer_clamp_output": NORMALIZER_CLAMP_OUTPUT,

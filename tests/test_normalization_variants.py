@@ -91,3 +91,40 @@ def test_cli_selects_matched_normalization(kind, monkeypatch):
     assert model.landmarker.head_normalization == kind
     assert model.landmarker.backbone.stage4.training
     assert not model.landmarker.backbone.stage3.training
+
+
+def test_early_instance_norm_finetune_and_checkpoint(tmp_path: Path):
+    torch.set_num_threads(1)
+    model = NormalizedLandmarker(
+        HRNetLandmarkVisibility(num_landmarks=4, head_normalization="batch",
+                                layer1_output_instance_norm=True),
+        ResidualImageNormalizer(normalization="none", final_instance_norm=True),
+    )
+    model.configure_joint_finetune(num_unfrozen_stages=1, unfreeze_stem=False)
+    model.train()
+    assert isinstance(model.normalizer.delta_network[-2], nn.InstanceNorm2d)
+    assert isinstance(model.landmarker.backbone.layer1_output_norm, nn.InstanceNorm2d)
+    assert all(not p.requires_grad for p in model.landmarker.backbone.layer1.parameters())
+    assert all(not p.requires_grad for p in model.landmarker.backbone.bn1.parameters())
+    assert all(p.requires_grad for p in model.landmarker.backbone.layer1_output_norm.parameters())
+    assert all(p.requires_grad for p in model.landmarker.backbone.stage4.parameters())
+    assert all(isinstance(head[1], nn.BatchNorm2d) for head in (
+        model.landmarker.visibility_feature_head,
+        model.landmarker.visible_landmark_feature_head,
+        model.landmarker.full_landmark_fusion_head,
+    ))
+    assert not model.landmarker.backbone.bn1.training
+    assert not model.landmarker.backbone.layer1.training
+    image = torch.randn(1, 3, 64, 64)
+    with torch.no_grad():
+        expected = model.eval()(image)
+    payload = {
+        "model_state_dict": model.state_dict(),
+        "landmarker_architecture": model.landmarker.architecture_config(),
+        "normalizer_architecture": model.normalizer.architecture_config(),
+    }
+    restored = build_model_from_checkpoints(payload).eval()
+    with torch.no_grad():
+        actual = restored(image)
+    for key in expected:
+        torch.testing.assert_close(actual[key], expected[key], rtol=0, atol=0)

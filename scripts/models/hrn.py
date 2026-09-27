@@ -305,7 +305,7 @@ class HRNetW18Backbone(nn.Module):
         "FUSE_METHOD": "SUM",
     }
 
-    def __init__(self) -> None:
+    def __init__(self, layer1_output_instance_norm: bool = False) -> None:
         """Construct the HRNet stem and all multi-resolution stages."""
         super().__init__()
         self.inplanes = self.STEM_INPLANES
@@ -319,6 +319,10 @@ class HRNetW18Backbone(nn.Module):
         self.bn2 = BatchNorm2d(self.inplanes, momentum=BN_MOMENTUM)
         self.relu = nn.ReLU(inplace=True)
         self.layer1 = self._make_layer(Bottleneck, self.inplanes, 64, 4)
+        self.layer1_output_norm = (
+            nn.InstanceNorm2d(256, affine=True, track_running_stats=False)
+            if layer1_output_instance_norm else nn.Identity()
+        )
 
         stage2_block = BLOCKS_DICT[self.STAGE2["BLOCK"]]
         stage2_num_channels = [
@@ -478,6 +482,7 @@ class HRNetW18Backbone(nn.Module):
         x = self.relu(self.bn1(self.conv1(x)))
         x = self.relu(self.bn2(self.conv2(x)))
         x = self.layer1(x)
+        x = self.layer1_output_norm(x)
 
         x_list: list[torch.Tensor] = []
         for branch_index in range(self.STAGE2["NUM_BRANCHES"]):
@@ -525,12 +530,18 @@ class HRNetLandmarkVisibility(nn.Module):
 
     FINAL_CONV_KERNEL = 1
 
-    def __init__(self, num_landmarks: int = 72, head_normalization: str = "batch") -> None:
+    def __init__(
+        self,
+        num_landmarks: int = 72,
+        head_normalization: str = "batch",
+        layer1_output_instance_norm: bool = False,
+    ) -> None:
         """Initialize the multitask model and its task-specific heads."""
         super().__init__()
         self.num_landmarks = num_landmarks
         self.head_normalization = head_normalization
-        self.backbone = HRNetW18Backbone()
+        self.layer1_output_instance_norm = bool(layer1_output_instance_norm)
+        self.backbone = HRNetW18Backbone(layer1_output_instance_norm)
         in_channels = self.backbone.final_inp_channels
         branch_channels = in_channels // 2
         final_padding = 1 if self.FINAL_CONV_KERNEL == 3 else 0
@@ -606,6 +617,7 @@ class HRNetLandmarkVisibility(nn.Module):
         return {
             "num_landmarks": self.num_landmarks,
             "head_normalization": self.head_normalization,
+            "layer1_output_instance_norm": self.layer1_output_instance_norm,
         }
 
     def _task_heads(self) -> list[nn.Module]:
@@ -722,6 +734,8 @@ class HRNetLandmarkVisibility(nn.Module):
 
         modules_to_unfreeze: list[nn.Module] = []
         if mode == "fine_tuning":
+            if self.layer1_output_instance_norm:
+                modules_to_unfreeze.append(self.backbone.layer1_output_norm)
             num_unfrozen_stages = max(0, min(num_unfrozen_stages, 4))
             if num_unfrozen_stages >= 1:
                 modules_to_unfreeze.extend(
@@ -757,6 +771,7 @@ class HRNetLandmarkVisibility(nn.Module):
             self.backbone.conv2,
             self.backbone.bn2,
             self.backbone.layer1,
+            self.backbone.layer1_output_norm,
             self.backbone.transition1,
             self.backbone.stage2,
             self.backbone.transition2,

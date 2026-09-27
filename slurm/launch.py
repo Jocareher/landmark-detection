@@ -11,7 +11,8 @@ import subprocess
 import uuid
 
 REPO = Path(__file__).resolve().parents[1]
-SCOPES = ('normalizer', 'normalizer_head_norms', 'normalizer_heads')
+SCOPES = ('normalizer', 'normalizer_head_norms', 'normalizer_heads',
+          'normalizer_stem', 'normalizer_stem_layer1', 'normalizer_layer1_instance')
 
 
 def duration_seconds(value):
@@ -71,8 +72,8 @@ def arguments():
     parser.add_argument('mode', choices=('train', 'tta'))
     parser.add_argument('--settings', type=Path, required=True)
     parser.add_argument('--config', type=Path, help='YAML template; defaults to the matching preset.')
-    parser.add_argument('--normalization', choices=('baseline', 'layer', 'instance', 'adain'), default='layer',
-                        help='Training: baseline = no normalizer norm + BatchNorm heads; layer/instance/adain = both. TTA architecture comes from checkpoint.')
+    parser.add_argument('--normalization', choices=('baseline', 'layer', 'instance', 'adain', 'instance_early'), default='layer',
+                        help='Training: instance_early = final normalizer IN + post-layer1 IN + BN heads. TTA architecture comes from checkpoint.')
     parser.add_argument('--scope', choices=SCOPES, default='normalizer')
     parser.add_argument('--dataset', choices=('babyland', 'infanface'), default='babyland')
     parser.add_argument('--checkpoint', type=Path)

@@ -46,6 +46,7 @@ class ResidualImageNormalizer(nn.Module):
         kernel_size: int = 3,
         activation: str = "relu",
         normalization: str = "none",
+        final_instance_norm: bool = False,
         residual_scale: float = 0.05,
         initialize_identity: bool = True,
         clamp_output: bool = False,
@@ -58,6 +59,8 @@ class ResidualImageNormalizer(nn.Module):
             raise ValueError("Normalizer channel counts must be positive.")
         if num_layers <= 0:
             raise ValueError("Normalizer num_layers must be positive.")
+        if final_instance_norm and num_layers == 1:
+            raise ValueError("Final InstanceNorm requires at least one hidden layer.")
         if kernel_size <= 0 or kernel_size % 2 == 0:
             raise ValueError("Normalizer kernel_size must be a positive odd integer.")
         if residual_scale < 0:
@@ -94,6 +97,12 @@ class ResidualImageNormalizer(nn.Module):
                     layers.append(normalization_layer)
                 layers.append(_build_activation(activation))
                 in_channels = hidden_channels
+            if final_instance_norm:
+                layers.append(
+                    nn.InstanceNorm2d(
+                        hidden_channels, affine=True, track_running_stats=False
+                    )
+                )
             layers.append(
                 nn.Conv2d(
                     hidden_channels,
@@ -114,6 +123,7 @@ class ResidualImageNormalizer(nn.Module):
         self.kernel_size = int(kernel_size)
         self.activation_name = activation
         self.normalization_name = normalization
+        self.final_instance_norm = bool(final_instance_norm)
         self.initialize_identity = bool(initialize_identity)
         self.reset_parameters()
 
@@ -156,6 +166,7 @@ class ResidualImageNormalizer(nn.Module):
             "kernel_size": self.kernel_size,
             "activation": self.activation_name,
             "normalization": self.normalization_name,
+            "final_instance_norm": self.final_instance_norm,
             "residual_scale": self.residual_scale,
             "initialize_identity": self.initialize_identity,
             "clamp_output": self.clamp_output,
