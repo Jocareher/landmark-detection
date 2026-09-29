@@ -72,9 +72,12 @@ def arguments():
     parser.add_argument('mode', choices=('train', 'tta'))
     parser.add_argument('--settings', type=Path, required=True)
     parser.add_argument('--config', type=Path, help='YAML template; defaults to the matching preset.')
-    parser.add_argument('--normalization', choices=('baseline', 'layer', 'instance', 'adain', 'instance_early'), default='layer',
-                        help='Training: instance_early = final normalizer IN + post-layer1 IN + BN heads. TTA architecture comes from checkpoint.')
+    parser.add_argument('--normalization', choices=('baseline', 'layer', 'instance', 'adain', 'instance_early', 'instance_hidden'), default='layer',
+                        help='Training: instance_early = final hidden IN; instance_hidden = IN in every hidden block. Both add post-layer1 IN and keep BN heads.')
+    parser.add_argument('--run-name', help='Override arguments.wandb_run_name for this submission.')
     parser.add_argument('--scope', choices=SCOPES, default='normalizer')
+    parser.add_argument('--pca-loss-space', choices=('aligned', 'image'),
+                        help='Override the PCA loss space selected in the YAML, for training or TTA.')
     parser.add_argument('--dataset', choices=('babyland', 'infanface'), default='babyland')
     parser.add_argument('--checkpoint', type=Path)
     parser.add_argument('--normalizer-checkpoint', type=Path)
@@ -119,6 +122,10 @@ def yaml_run_name(source):
             raise ValueError('Use a plain or quoted single-line wandb_run_name in the YAML.')
     if not value or value.lower() in ('null', 'none', 'true', 'false'):
         raise ValueError('Set a nonempty wandb_run_name in the YAML before submitting.')
+    return safe_run_name(value)
+
+
+def safe_run_name(value):
     safe = re.sub(r'[^\w.-]+', '_', value).strip('._')
     if not safe:
         raise ValueError('wandb_run_name must contain letters or numbers.')
@@ -197,10 +204,12 @@ def main():
     checkpoint = required_path(args.checkpoint, exists=not bool(args.afterok)) if args.checkpoint else None
     separate = required_path(args.normalizer_checkpoint, exists=not bool(args.afterok)) if args.normalizer_checkpoint else None
     root = Path(required_path(settings['runs_root'], exists=False))
-    label = yaml_run_name(base_yaml)
+    label = (safe_run_name(args.run_name) if getattr(args, 'run_name', None)
+             else yaml_run_name(base_yaml))
     name = f'{label}_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}_{uuid.uuid4().hex[:6]}'
     run = root / name
     plan = dict(mode=args.mode, normalization=args.normalization, scope=args.scope,
+                pca_loss_space=getattr(args, 'pca_loss_space', None),
                 evaluations=evaluations,
                 dataset=args.dataset, paths=selected_paths, checkpoint=checkpoint,
                 normalizer_checkpoint=separate, run_dir=str(run), resources=resources,

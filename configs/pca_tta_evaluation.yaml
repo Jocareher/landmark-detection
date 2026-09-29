@@ -31,7 +31,7 @@ arguments:
   # Full-model checkpoint: normalizer_checkpoint must be null.
   # Split alternative: checkpoint = .../landmarker_best.pth and
   # normalizer_checkpoint = .../normalizer_best.pth from the same trained run.
-  checkpoint: /home/jocareher/Downloads/landmark-detection/runs/train_instance_early_pca_image/checkpoints/full_model_best.pth
+  checkpoint: /home/jocareher/Downloads/landmark-detection/runs/train_instance_early_pca_aligned/checkpoints/full_model_best.pth
   normalizer_checkpoint: null
 
   # ---------------------------------------------------------------------------
@@ -54,19 +54,20 @@ arguments:
   # Changing the scope above does NOT rename these paths automatically.
   # Example suffixes: babyland_normalizer_head_norms, babyland_normalizer_heads.
   # summary.json records the scope, selected parameters, architecture, and PCA loss space.
-  output_dir: /home/jocareher/Downloads/landmark-detection/runs/train_instance_early_pca_image/evaluation/babyland_normalizer_stem_layer1
+  output_dir: /home/jocareher/Downloads/landmark-detection/runs/train_instance_early_pca_aligned/evaluation/babyland_normalizer_stem_layer1_aligned
   use_wandb: true
   wandb_project: BabyLMKS
-  wandb_run_name: tta_instance_early_babyland_normalizer_stem_layer1
+  wandb_run_name: tta_instance_early_babyland_normalizer_stem_layer1_aligned
   save_config: true
 
   # ---------------------------------------------------------------------------
   # PCA adaptation objective
   # ---------------------------------------------------------------------------
-  # ONE PCA reconstruction MSE in input-crop pixels after applying the inverse
-  # alignment. Full gradients through scale/rotation/translation; no extra aligned
-  # loss, no image-size normalization, and no extra image regularization.
-  # The existing PCA prior can be reused. Loss units differ from old aligned-space runs.
+  # Select ONE loss: aligned (original) or image (inverse-transformed, pixels^2).
+  # The existing PCA prior works for both. This choice is independent of the
+  # loss used during source training; it does not alter checkpoint architecture.
+  # No extra regularization or face-size normalization. LR may need recalibration.
+  pca_loss_space: aligned
   pca_prior_path: /home/jocareher/Downloads/landmark-detection/weights/pca_prior_13y_k32.pt
 
   # ---------------------------------------------------------------------------

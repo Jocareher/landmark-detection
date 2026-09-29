@@ -153,6 +153,7 @@ WASSERSTEIN_EPSILON = 1e-8
 WASSERSTEIN_VALIDATE_NORMALIZATION = False
 PCA_PRIOR_PATH = None
 LAMBDA_PCA_PROJECTION = 0.0
+PCA_LOSS_SPACE = "image"
 PCA_TTA_ENABLED = False
 PCA_TTA_STEPS = 20
 PCA_TTA_LEARNING_RATE = LEARNING_RATE
@@ -331,6 +332,7 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "wasserstein_validate_normalization": WASSERSTEIN_VALIDATE_NORMALIZATION,
     "pca_prior_path": PCA_PRIOR_PATH,
     "lambda_pca_projection": LAMBDA_PCA_PROJECTION,
+    "pca_loss_space": PCA_LOSS_SPACE,
     "pca_tta_enabled": PCA_TTA_ENABLED,
     "pca_tta_adaptation_scope": "normalizer",
     "pca_tta_steps": PCA_TTA_STEPS,

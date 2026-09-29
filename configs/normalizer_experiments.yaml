@@ -10,6 +10,8 @@ arguments:
   # For the older baseline/layer/instance/adain variants, set BOTH new flags
   # below to false and choose the earlier normalizer/head normalization pair.
   # HPC --normalization selects the complete variant and overrides all four fields.
+  # instance_early: normalizer none + final IN true + layer1 IN true + BN heads.
+  # instance_hidden: normalizer instance + final IN false + layer1 IN true + BN heads.
   # AdaIN source moments are collected only on
   # synbaby72/train; the best checkpoint is recalibrated without augmentations.
   # For every variant, give wandb_run_name a distinct value.
@@ -20,7 +22,7 @@ arguments:
   normalizer_final_instance_norm: true
   layer1_output_instance_norm: true
   head_normalization: batch
-  wandb_run_name: train_instance_early_pca_image
+  wandb_run_name: train_instance_early_pca_aligned
 
   # ---------------------------------------------------------------------------
   # Training data and output
@@ -50,8 +52,9 @@ arguments:
   # Residual normalizer architecture
   # ---------------------------------------------------------------------------
   # Hidden blocks: Conv -> selected normalization -> activation.
-  # When normalizer_final_instance_norm is true, append a separate IN after
-  # the last hidden activation and before the final zero-initialized RGB conv.
+  # Final-only IN is inserted after the last HIDDEN convolution, before ReLU.
+  # The final RGB convolution is never normalized. Do not enable final-only IN
+  # together with per-block normalization; use one of the two presets above.
   # The post-layer1 IN is between layer1 and transition1 (256 channels).
   # layer: LayerNorm across channels at each pixel.
   # instance: InstanceNorm2d with affine parameters and no running statistics.
@@ -71,10 +74,13 @@ arguments:
   # Supervised losses and PCA
   # ---------------------------------------------------------------------------
   # Wasserstein uses barycenter decoding. Adaptive Wing settings are inactive here.
-  # PCA uses ONE reconstruction MSE in input-crop pixel coordinates, after inverse
-  # alignment, with full gradients through scale/rotation/translation. No size normalization.
-  # The PCA weight below is retained from the previous setup; it is not recalibrated
-  # for pixel-squared units. Set lambda_pca_projection to 0 to disable training PCA.
+  # Select ONE PCA loss:
+  # aligned = original MSE(prediction aligned by Procrustes, PCA reconstruction).
+  # image = MSE(original prediction, inverse-transformed PCA reconstruction), in pixels^2.
+  # Both preserve gradients through alignment; image also through its inverse.
+  # No additional face-size normalization. Weights are NOT comparable across spaces.
+  # Set lambda_pca_projection to 0 to disable training PCA.
+  pca_loss_space: aligned
   landmark_loss: wasserstein
   wasserstein_softmax_temperature: 1.0
   wasserstein_epsilon: 1.0e-08

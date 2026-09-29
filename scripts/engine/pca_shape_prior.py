@@ -372,8 +372,9 @@ def softargmax_heatmaps_to_image_coords(
 def compute_pca_projection_loss(
     predicted_landmarks: torch.Tensor,
     pca_prior: dict[str, Any],
+    loss_space: str = "image",
 ) -> torch.Tensor:
-    """Measure PCA reconstruction MSE in the input landmark coordinate space.
+    """Measure PCA reconstruction MSE in aligned or input-image coordinates.
 
     Align X with T(X), reconstruct in PCA space, then compare X against
     T^{-1}(PCA(T(X))). The inverse reuses the exact forward transform.
@@ -381,7 +382,11 @@ def compute_pca_projection_loss(
     including prediction-dependent scale. Only the mean over coordinates,
     landmarks, and samples is applied; there is no size normalization or
     additional aligned-space loss. Image-coordinate inputs yield pixel^2.
+    With loss_space='aligned', use the original MSE between T(X) and its
+    PCA reconstruction instead, without applying the inverse transformation.
     """
+    if loss_space not in {"aligned", "image"}:
+        raise ValueError(f"Unsupported PCA loss space: {loss_space}. Use aligned or image.")
     if predicted_landmarks.ndim != 3 or predicted_landmarks.shape[-1] != 2:
         raise ValueError(
             "Expected predicted_landmarks with shape (B, N, 2), "
@@ -430,9 +435,12 @@ def compute_pca_projection_loss(
         centered = shape_vector - mean_shape
         coefficients = centered @ components.T
         reconstructed = mean_shape + coefficients @ components
-        reconstructed_image_shape = invert_similarity_transform_torch(
-            reconstructed.reshape_as(current_shape), rotation, scale, translation
-        )
-        sample_losses.append(F.mse_loss(current_shape, reconstructed_image_shape))
+        if loss_space == "aligned":
+            sample_losses.append(F.mse_loss(shape_vector, reconstructed))
+        else:
+            reconstructed_image_shape = invert_similarity_transform_torch(
+                reconstructed.reshape_as(current_shape), rotation, scale, translation
+            )
+            sample_losses.append(F.mse_loss(current_shape, reconstructed_image_shape))
 
     return torch.stack(sample_losses).mean()

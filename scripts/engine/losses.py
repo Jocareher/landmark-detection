@@ -23,6 +23,7 @@ def compute_multitask_loss(
     pca_shape_prior: dict[str, Any] | None = None,
     image_height: int | None = None,
     image_width: int | None = None,
+    pca_loss_space: str = "image",
 ) -> dict[str, torch.Tensor]:
     """Compute the experiment loss for visibility, visible landmarks, and full landmarks."""
     predicted_full_heatmaps = outputs["heatmaps"]
@@ -60,6 +61,7 @@ def compute_multitask_loss(
             pca_projection_loss = compute_pca_projection_loss(
                 predicted_landmarks=predicted_landmarks,
                 pca_prior=pca_shape_prior,
+                loss_space=pca_loss_space,
             )
         pca_projection_loss = pca_projection_loss.to(
             dtype=predicted_full_heatmaps.dtype

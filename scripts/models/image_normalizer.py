@@ -52,6 +52,7 @@ class ResidualImageNormalizer(nn.Module):
         clamp_output: bool = False,
         clamp_min: float = 0.0,
         clamp_max: float = 1.0,
+        final_instance_norm_position: str = "before_activation",
     ) -> None:
         """Initialize the residual image normalizer."""
         super().__init__()
@@ -61,6 +62,14 @@ class ResidualImageNormalizer(nn.Module):
             raise ValueError("Normalizer num_layers must be positive.")
         if final_instance_norm and num_layers == 1:
             raise ValueError("Final InstanceNorm requires at least one hidden layer.")
+        if final_instance_norm_position not in {"before_activation", "after_activation"}:
+            raise ValueError("Invalid final InstanceNorm position.")
+        if final_instance_norm and final_instance_norm_position == "before_activation" and normalization != "none":
+            raise ValueError(
+                "Final-only InstanceNorm requires normalization='none'. "
+                "For InstanceNorm in every hidden block, use normalization='instance' "
+                "and final_instance_norm=False."
+            )
         if kernel_size <= 0 or kernel_size % 2 == 0:
             raise ValueError("Normalizer kernel_size must be a positive odd integer.")
         if residual_scale < 0:
@@ -81,7 +90,7 @@ class ResidualImageNormalizer(nn.Module):
             )
         else:
             in_channels = input_channels
-            for _ in range(num_layers - 1):
+            for hidden_index in range(num_layers - 1):
                 layers.append(
                     nn.Conv2d(
                         in_channels,
@@ -95,9 +104,11 @@ class ResidualImageNormalizer(nn.Module):
                 )
                 if normalization_layer is not None:
                     layers.append(normalization_layer)
+                if final_instance_norm and final_instance_norm_position == "before_activation" and hidden_index == num_layers - 2:
+                    layers.append(nn.InstanceNorm2d(hidden_channels, affine=True, track_running_stats=False))
                 layers.append(_build_activation(activation))
                 in_channels = hidden_channels
-            if final_instance_norm:
+            if final_instance_norm and final_instance_norm_position == "after_activation":
                 layers.append(
                     nn.InstanceNorm2d(
                         hidden_channels, affine=True, track_running_stats=False
@@ -124,6 +135,7 @@ class ResidualImageNormalizer(nn.Module):
         self.activation_name = activation
         self.normalization_name = normalization
         self.final_instance_norm = bool(final_instance_norm)
+        self.final_instance_norm_position = final_instance_norm_position
         self.initialize_identity = bool(initialize_identity)
         self.reset_parameters()
 
@@ -167,6 +179,7 @@ class ResidualImageNormalizer(nn.Module):
             "activation": self.activation_name,
             "normalization": self.normalization_name,
             "final_instance_norm": self.final_instance_norm,
+            "final_instance_norm_position": self.final_instance_norm_position,
             "residual_scale": self.residual_scale,
             "initialize_identity": self.initialize_identity,
             "clamp_output": self.clamp_output,

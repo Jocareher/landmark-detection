@@ -63,10 +63,12 @@ def _pca_prior() -> dict[str, object]:
 
 
 @pytest.mark.parametrize("normalization", ["none", "layer", "instance", "adain"])
+@pytest.mark.parametrize("loss_space", ["aligned", "image"])
 def test_pca_tta_is_episodic_and_restores_source_normalizer(
     tmp_path: Path,
     capsys,
     normalization: str,
+    loss_space: str,
 ) -> None:
     torch.manual_seed(7)
     model = NormalizedLandmarker(
@@ -87,6 +89,7 @@ def test_pca_tta_is_episodic_and_restores_source_normalizer(
         device=torch.device("cpu"),
         output_dir=tmp_path / "tta",
         config=PCATTAConfig(
+            pca_loss_space=loss_space,
             steps=2,
             learning_rate=1e-3,
             monitor_steps=(0, 1, 2),
@@ -142,6 +145,8 @@ def test_pca_tta_is_episodic_and_restores_source_normalizer(
         torch.testing.assert_close(model.landmarker.state_dict()[key], expected)
 
     summary = adapter.finalize()
+    assert summary['pca_loss_mode'] == loss_space
+    assert summary['pca_loss_space'] == ('aligned_procrustes' if loss_space == 'aligned' else 'input_image_pixels')
     assert summary["processed_samples"] == 2
     assert summary["failed_samples"] == 0
     assert (tmp_path / "tta/trajectories.csv").exists()

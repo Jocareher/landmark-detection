@@ -34,7 +34,8 @@ def test_snow_queues_and_real_gpu_types():
 
 
 @pytest.mark.parametrize('mode', ['train', 'tta'])
-def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode):
+@pytest.mark.parametrize('run_name', [None, 'train_hidden_aligned'])
+def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode, run_name):
     settings = json.loads((ROOT / 'configs/upf_hpc.example.json').read_text())
     for key in settings['paths']:
         path = tmp_path / key
@@ -44,6 +45,7 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode):
     settings_path = tmp_path / 'settings.json'
     settings_path.write_text(json.dumps(settings))
     args = SimpleNamespace(mode=mode, settings=settings_path, config=None, normalization='instance',
+                           run_name=run_name,
                            scope='normalizer_heads', dataset='babyland', checkpoint=None,
                            normalizer_checkpoint=None, afterok=None, time=None,
                            partition=None, gpu_type=None, epochs=None, steps=None,
@@ -76,8 +78,8 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode):
         assert '--dependency=afterok:123' in command
         assert '--kill-on-invalid-dep=yes' in command
     base = yaml.safe_load((run / 'metadata/base.yaml').read_text())['arguments']
-    assert run.name.startswith(base['wandb_run_name'] + '_')
-    assert '--job-name=' + base['wandb_run_name'] in command
+    assert run.name.startswith((run_name or base['wandb_run_name']) + '_')
+    assert '--job-name=' + (run_name or base['wandb_run_name']) in command
     resolved = worker.resolved_arguments(plan, base)
     assert resolved['device'] == 'cuda'
     assert resolved['cache_dir'] == str(run / 'dataset_cache')
@@ -98,7 +100,7 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode):
 @pytest.mark.parametrize('variant,normalizer_norm,head_norm', [
     ('baseline', 'none', 'batch'), ('layer', 'layer', 'layer'),
     ('instance', 'instance', 'instance'),
-    ('instance_early', 'none', 'batch')])
+    ('instance_early', 'none', 'batch'), ('instance_hidden', 'instance', 'batch')])
 def test_generated_training_yaml_parses(tmp_path, monkeypatch, variant, normalizer_norm, head_norm):
     from scripts.main import parse_args, build_config_from_args
     base = yaml.safe_load((ROOT / 'configs/normalizer_experiments.yaml').read_text())['arguments']
@@ -108,6 +110,8 @@ def test_generated_training_yaml_parses(tmp_path, monkeypatch, variant, normaliz
                 paths=dict(pca_prior='/weights/pca.pt', train_dataset='/data/train',
                            pretrained_weights='/weights/hrnet.pt'))
     config_path = tmp_path / 'generated.yaml'
+    assert worker.resolved_arguments(plan, base)['pca_loss_space'] == 'aligned'
+    plan['pca_loss_space'] = 'image'
     config_path.write_text(yaml.safe_dump({'arguments': worker.resolved_arguments(plan, base)}))
     monkeypatch.setattr('sys.argv', ['train', '--config', str(config_path)])
     config = build_config_from_args(parse_args())
@@ -116,7 +120,8 @@ def test_generated_training_yaml_parses(tmp_path, monkeypatch, variant, normaliz
     assert config.head_normalization == head_norm
     assert config.normalizer_internal_normalization == normalizer_norm
     assert config.normalizer_final_instance_norm == (variant == 'instance_early')
-    assert config.layer1_output_instance_norm == (variant == 'instance_early')
+    assert config.layer1_output_instance_norm == (variant in ('instance_early', 'instance_hidden'))
+    assert config.pca_loss_space == 'image'
 
 
 def test_login_launcher_uses_python36_syntax_and_apis():

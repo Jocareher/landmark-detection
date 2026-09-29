@@ -224,6 +224,7 @@ def _resolve_normalizer_architecture(
     architecture = checkpoint.get("normalizer_architecture")
     if not isinstance(architecture, Mapping):
         architecture = checkpoint.get("architecture")
+    has_saved_architecture = isinstance(architecture, Mapping)
     if not isinstance(architecture, Mapping):
         architecture = fallback
     if not isinstance(architecture, Mapping):
@@ -232,6 +233,10 @@ def _resolve_normalizer_architecture(
             "Provide fallback normalizer configuration."
         )
     resolved = dict(architecture)
+    if has_saved_architecture and resolved.get("final_instance_norm"):
+        # The first final-IN checkpoints placed it after activation. Preserve
+        # their exact topology; all new checkpoints record the position explicitly.
+        resolved.setdefault("final_instance_norm_position", "after_activation")
     normalizer_type = resolved.pop("type", "residual")
     if normalizer_type != "residual":
         raise ValueError(f"Unsupported normalizer type: {normalizer_type}")

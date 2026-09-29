@@ -313,6 +313,11 @@ def parse_args() -> argparse.Namespace:
         help="Weight assigned to the PCA projection loss on final landmarks.",
     )
     parser.add_argument(
+        "--pca-loss-space", choices=["aligned", "image"],
+        default=defaults.pca_loss_space,
+        help="PCA reconstruction MSE: original aligned space or inverse-transformed image space.",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=defaults.seed,
@@ -634,6 +639,8 @@ def validate_full_evaluation_paths(config: ExperimentConfig) -> None:
 
 def validate_experiment_config(config: ExperimentConfig) -> None:
     """Validate and resolve invariants of the normalizer experiment modes."""
+    if config.pca_loss_space not in {"aligned", "image"}:
+        raise ValueError(f"Unsupported PCA loss space: {config.pca_loss_space}")
     if config.experiment_mode == "none":
         return
     if config.normalizer_final_instance_norm and config.normalizer_num_layers < 2:
@@ -1111,6 +1118,7 @@ def main() -> None:
             f"landmark_loss={config.landmark_loss} "
             f"coordinate_decoder={config.coordinate_decoder} "
             f"lambda_pca_projection={config.lambda_pca_projection} "
+            f"pca_loss_space={config.pca_loss_space} "
             f"pca_prior_path={config.pca_prior_path} "
         )
         if config.landmark_loss == "adaptive_wing":
@@ -1142,6 +1150,7 @@ def main() -> None:
                 lambda_lmk_vis=config.lambda_lmk_vis,
                 lambda_lmk_full=config.lambda_lmk_full,
                 lambda_pca_projection=config.lambda_pca_projection,
+                pca_loss_space=config.pca_loss_space,
                 pca_prior_path=config.pca_prior_path,
                 coordinate_decoder=config.coordinate_decoder,
                 wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
@@ -1163,6 +1172,7 @@ def main() -> None:
             lambda_lmk_vis=config.lambda_lmk_vis,
             lambda_lmk_full=config.lambda_lmk_full,
             lambda_pca_projection=config.lambda_pca_projection,
+            pca_loss_space=config.pca_loss_space,
             lambda_image_l1=config.normalizer_lambda_l1,
             lambda_image_tv=config.normalizer_lambda_tv,
             pca_prior_path=config.pca_prior_path,

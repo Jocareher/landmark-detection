@@ -223,6 +223,11 @@ def parse_args() -> argparse.Namespace:
         help="Source-trained PCA shape-prior checkpoint required by --pca-tta.",
     )
     parser.add_argument(
+        "--pca-loss-space", choices=["aligned", "image"],
+        default=defaults.pca_loss_space,
+        help="Select original aligned PCA loss or inverse-transformed image-space loss for TTA.",
+    )
+    parser.add_argument(
         "--pca-tta-adaptation-scope",
         choices=["normalizer", "normalizer_head_norms", "normalizer_heads",
                  "normalizer_stem", "normalizer_stem_layer1", "normalizer_layer1_instance"],
@@ -424,6 +429,9 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.save_natural_crop_overlays = args.save_crop_overlays
     config.pca_tta_enabled = args.pca_tta
     config.pca_prior_path = args.pca_prior_path
+    config.pca_loss_space = args.pca_loss_space
+    if config.pca_loss_space not in {"aligned", "image"}:
+        raise ValueError(f"Unsupported PCA loss space: {config.pca_loss_space}")
     config.pca_tta_adaptation_scope = args.pca_tta_adaptation_scope
     config.pca_tta_steps = args.pca_tta_steps
     config.pca_tta_learning_rate = args.pca_tta_learning_rate
@@ -588,6 +596,7 @@ def main() -> None:
             device=device,
             output_dir=output_dir / "tta",
             config=PCATTAConfig(
+                pca_loss_space=config.pca_loss_space,
                 adaptation_scope=config.pca_tta_adaptation_scope,
                 steps=config.pca_tta_steps,
                 learning_rate=config.pca_tta_learning_rate,
@@ -609,6 +618,7 @@ def main() -> None:
         print(
             "[INFO] PCA-guided episodic TTA enabled | "
             f"scope={config.pca_tta_adaptation_scope} "
+            f"pca_loss_space={config.pca_loss_space} "
             f"steps={config.pca_tta_steps} "
             f"lr={config.pca_tta_learning_rate:g} "
             f"scheduler={config.pca_tta_lr_scheduler} "

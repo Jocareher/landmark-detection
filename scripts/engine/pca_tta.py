@@ -41,9 +41,12 @@ class PCATTAConfig:
     difference_display_max: float = 0.15
     normalization_mean: tuple[float, ...] = (0.485, 0.456, 0.406)
     normalization_std: tuple[float, ...] = (0.229, 0.224, 0.225)
+    pca_loss_space: str = "image"
 
     def validate(self) -> None:
         """Validate values before any target image is adapted."""
+        if self.pca_loss_space not in {"aligned", "image"}:
+            raise ValueError(f"Unsupported PCA loss space: {self.pca_loss_space}")
         if self.adaptation_scope not in {"normalizer", "normalizer_head_norms", "normalizer_heads",
                                          "normalizer_stem", "normalizer_stem_layer1",
                                          "normalizer_layer1_instance"}:
@@ -148,6 +151,7 @@ class PCAGuidedTTA:
             "[PCA-TTA] Parameter audit | "
             f"landmarker_total={landmarker_total:,} "
             f"scope={self.config.adaptation_scope} "
+            f"pca_loss_space={self.config.pca_loss_space} "
             f"landmarker_trainable={sum(p.numel() for p in self.model.landmarker.parameters() if p.requires_grad):,} "
             f"normalizer_total={normalizer_total:,} "
             f"normalizer_trainable={normalizer_total:,}"
@@ -238,6 +242,7 @@ class PCAGuidedTTA:
                 reconstruction_loss = compute_pca_projection_loss(
                     predicted_landmarks=landmarks,
                     pca_prior=self.pca_prior,
+                    loss_space=self.config.pca_loss_space,
                 )
                 if not bool(torch.isfinite(reconstruction_loss).item()):
                     raise FloatingPointError(
@@ -611,7 +616,9 @@ class PCAGuidedTTA:
                                         if hasattr(self.model.landmarker, "architecture_config") else {}),
             "normalizer_architecture": self.model.normalizer.architecture_config(),
             "loss": "pca_reconstruction_loss_only",
-            "pca_loss_space": "input_image_pixels",
+            "pca_loss_space": ("input_image_pixels" if self.config.pca_loss_space == "image"
+                               else "aligned_procrustes"),
+            "pca_loss_mode": self.config.pca_loss_space,
             "pca_loss_reduction": "mean_squared_error",
             "pca_alignment_gradient": "full",
             "steps": self.config.steps,
@@ -1494,6 +1501,16 @@ def _safe_name(value: str) -> str:
 
 
 def _tta_readme(config: PCATTAConfig) -> str:
+    objective = (
+        "Original PCA loss: MSE between the Procrustes-aligned prediction and its "
+        "PCA reconstruction, before any inverse transformation. Gradients flow "
+        "through alignment and reconstruction."
+        if config.pca_loss_space == "aligned" else
+        "Image-space PCA loss: MSE between the original prediction and the PCA "
+        "reconstruction mapped back with the inverse of the same similarity "
+        "transform, in input-crop pixel coordinates (pixel^2). Gradients flow "
+        "through the complete alignment and inverse, including scale."
+    )
     return f"""# PCA-guided episodic TTA
 
 Adaptation scope: `{config.adaptation_scope}`. The complete normalizer is updated;
@@ -1506,12 +1523,9 @@ modules stay in eval mode so BatchNorm running statistics remain fixed. The sole
 target ground truth, image regularizer, parameter regularizer, or consistency
 loss is used.
 
-PCA reconstruction is mapped back with the inverse of the same similarity
-transform used to align the prediction. The sole loss is MSE between the original
-prediction and this reconstruction in input-crop pixel coordinates (pixel^2).
-Gradients flow through the complete alignment and inverse, including scale;
-neither the reconstruction nor the transform is detached. No additional aligned
-loss or image-size normalization is applied.
+PCA loss mode: `{config.pca_loss_space}`. {objective}
+Neither the reconstruction nor the transform is detached. No second PCA loss
+or face-size normalization is applied.
 
 - Adaptation steps per image: `{config.steps}`
 - Adam learning rate: `{config.learning_rate}`

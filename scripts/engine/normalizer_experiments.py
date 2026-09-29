@@ -400,6 +400,7 @@ def save_modular_checkpoints(
                     "normalizer_state_dict": normalizer_state
                     or model.normalizer.state_dict(),
                     "architecture": model.normalizer.architecture_config(),
+                    "pca_loss_space": checkpoint_payloads[full_name].get("pca_loss_space"),
                 },
                 target,
             )
@@ -423,6 +424,7 @@ def save_modular_checkpoints(
                 "landmarker_state_dict": landmarker_state,
                 "landmarker_architecture": checkpoint_payloads[full_name].get("landmarker_architecture", {}),
                 "source_full_checkpoint": str(checkpoints_dir / full_name),
+                "pca_loss_space": checkpoint_payloads[full_name].get("pca_loss_space"),
             },
             target,
         )

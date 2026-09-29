@@ -112,6 +112,7 @@ def run_epoch(
     progress_desc: str | None = None,
     progress_reporter: TrainingProgressReporter | None = None,
     learning_rate: float = 0.0,
+    pca_loss_space: str = "image",
 ) -> dict[str, float]:
     """Run one full training or validation epoch and aggregate split metrics."""
     if training and optimizer is None:
@@ -164,6 +165,7 @@ def run_epoch(
                     lambda_lmk_vis=lambda_lmk_vis,
                     lambda_lmk_full=lambda_lmk_full,
                     lambda_pca_projection=lambda_pca_projection,
+                    pca_loss_space=pca_loss_space,
                     pca_shape_prior=pca_shape_prior,
                     image_height=images.shape[2],
                     image_width=images.shape[3],
@@ -202,6 +204,7 @@ def run_epoch(
                         lambda_lmk_vis=lambda_lmk_vis,
                         lambda_lmk_full=lambda_lmk_full,
                         lambda_pca_projection=lambda_pca_projection,
+                        pca_loss_space=pca_loss_space,
                         pca_shape_prior=pca_shape_prior,
                         image_height=images.shape[2],
                         image_width=images.shape[3],
@@ -296,6 +299,7 @@ def save_checkpoint(
     model: torch.nn.Module,
     optimizer: torch.optim.Optimizer | None,
     metrics: dict[str, Any],
+    pca_loss_space: str | None = None,
 ) -> None:
     """Save a model checkpoint with optimizer state and tracked metrics."""
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -308,6 +312,8 @@ def save_checkpoint(
         "metrics": metrics,
         "model_type": type(model).__name__,
     }
+    if pca_loss_space is not None:
+        payload["pca_loss_space"] = pca_loss_space
     if isinstance(model, NormalizedLandmarker) and model.normalizer is not None:
         payload["normalizer_architecture"] = model.normalizer.architecture_config()
     landmarker = model.landmarker if isinstance(model, NormalizedLandmarker) else model
@@ -438,8 +444,11 @@ def train_model(
     normalization_mean: tuple[float, ...] = (0.485, 0.456, 0.406),
     normalization_std: tuple[float, ...] = (0.229, 0.224, 0.225),
     progress_reporter: TrainingProgressReporter | None = None,
+    pca_loss_space: str = "image",
 ) -> dict[str, Any]:
     """Execute the full training pipeline, including validation and checkpointing."""
+    if pca_loss_space not in {"aligned", "image"}:
+        raise ValueError(f"Unsupported PCA loss space: {pca_loss_space}")
     wandb = None
     if use_wandb:
         import wandb as wandb_module
@@ -544,6 +553,7 @@ def train_model(
             lambda_lmk_vis=lambda_lmk_vis,
             lambda_lmk_full=lambda_lmk_full,
             lambda_pca_projection=lambda_pca_projection,
+            pca_loss_space=pca_loss_space,
             lambda_image_l1=lambda_image_l1,
             lambda_image_tv=lambda_image_tv,
             pca_shape_prior=pca_shape_prior,
@@ -570,6 +580,7 @@ def train_model(
             lambda_lmk_vis=lambda_lmk_vis,
             lambda_lmk_full=lambda_lmk_full,
             lambda_pca_projection=lambda_pca_projection,
+            pca_loss_space=pca_loss_space,
             lambda_image_l1=lambda_image_l1,
             lambda_image_tv=lambda_image_tv,
             pca_shape_prior=pca_shape_prior,
@@ -607,7 +618,8 @@ def train_model(
 
         metrics_payload = {"train": train_metrics, "val": val_metrics, "lr": current_lr}
         save_checkpoint(
-            output_dir / "last_model.pth", epoch, model, optimizer, metrics_payload
+            output_dir / "last_model.pth", epoch, model, optimizer, metrics_payload,
+            pca_loss_space=pca_loss_space,
         )
         reporter.report_checkpoint(output_dir / "last_model.pth", is_best=False)
 
@@ -617,7 +629,8 @@ def train_model(
             best_epoch = epoch
             patience_counter = 0
             save_checkpoint(
-                output_dir / "best_model.pth", epoch, model, optimizer, metrics_payload
+                output_dir / "best_model.pth", epoch, model, optimizer, metrics_payload,
+                pca_loss_space=pca_loss_space,
             )
             reporter.report_checkpoint(output_dir / "best_model.pth", is_best=True)
         else:
@@ -733,6 +746,7 @@ def train_model(
 
     return {
         "best_val_loss": best_val_loss,
+        "pca_loss_space": pca_loss_space,
         "best_val_nme": best_val_nme,
         "best_nme_epoch": best_nme_epoch,
         "best_epoch": best_epoch,
@@ -756,6 +770,7 @@ def smoke_test_single_batch(
     pca_prior_path: str | Path | None = None,
     coordinate_decoder: str = "argmax_subpixel",
     wasserstein_softmax_temperature: float = 1.0,
+    pca_loss_space: str = "image",
 ) -> None:
     """Run a single optimization step to validate the end-to-end training path."""
     model.train()
@@ -782,6 +797,7 @@ def smoke_test_single_batch(
         lambda_lmk_vis=lambda_lmk_vis,
         lambda_lmk_full=lambda_lmk_full,
         lambda_pca_projection=lambda_pca_projection,
+        pca_loss_space=pca_loss_space,
         pca_shape_prior=pca_shape_prior,
         image_height=images.shape[2],
         image_width=images.shape[3],

@@ -1,5 +1,38 @@
 # Entrenamiento y TTA en SNOW / DTIC (UPF)
 
+## Elegir la pérdida PCA
+
+En los YAML de entrenamiento y TTA, `arguments.pca_loss_space` admite:
+
+- `aligned`: pérdida original, MSE entre la predicción alineada por Procrustes
+  y su reconstrucción PCA. No se aplica la inversa.
+- `image`: MSE entre la predicción original y la reconstrucción PCA transformada
+  de vuelta a la imagen, usando la inversa completa con gradientes (píxeles²).
+
+Se usa una sola pérdida PCA y el mismo prior sirve para ambas. Los YAML activos
+seleccionan `aligned`; configuraciones antiguas sin esta clave conservan `image`.
+No se normaliza por tamaño de cara. El valor numérico de la pérdida y su peso
+no son comparables entre espacios: no reutilices un peso/LR como si fueran equivalentes.
+La elección para TTA es independiente de la usada al entrenar el checkpoint.
+
+```bash
+# Local: la CLI sobrescribe el YAML.
+python -m scripts.main --config configs/normalizer_experiments.yaml --pca-loss-space aligned
+python -m scripts.evaluate --config configs/pca_tta_evaluation.yaml --pca-loss-space aligned
+
+# HPC: la misma opción sirve para entrenamiento y TTA.
+bash slurm/train_hrnet_landmarks_template.sh \
+  --settings configs/upf_hpc.local.json --normalization instance_early --pca-loss-space aligned
+bash slurm/tta_landmarks.sh \
+  --settings configs/upf_hpc.local.json --checkpoint /ruta/full_model_best.pth \
+  --dataset babyland --scope normalizer --pca-loss-space aligned
+```
+
+Para volver a la variante en coordenadas de imagen, reemplazá `aligned` por
+`image`. Usá nombres de ejecución y directorios diferentes para las comparaciones.
+La selección se registra en la configuración resuelta, los checkpoints de
+entrenamiento y el resumen de TTA.
+
 ## Experimento InstanceNorm temprano en local
 
 Editá las rutas de datasets, pesos, PCA y salidas en
@@ -151,20 +184,31 @@ bash slurm/train_hrnet_landmarks_template.sh \
   --settings configs/upf_hpc.local.json --normalization instance
 ```
 
-Para el experimento nuevo, usá el preset específico:
+Para comparar las dos posiciones de InstanceNorm con PCA original:
 
 ```bash
 bash slurm/train_hrnet_landmarks_template.sh \
-  --settings configs/upf_hpc.local.json --normalization instance_early --dry-run
+  --settings configs/upf_hpc.local.json --normalization instance_hidden \
+  --pca-loss-space aligned --run-name train_in_hidden_layer1_pca_aligned
 bash slurm/train_hrnet_landmarks_template.sh \
-  --settings configs/upf_hpc.local.json --normalization instance_early
+  --settings configs/upf_hpc.local.json --normalization instance_early \
+  --pca-loss-space aligned --run-name train_in_final_layer1_pca_aligned
 ```
 
-Se heredan pérdidas, augmentations y LR del YAML de normalizer. `instance_early`
-pone InstanceNorm al final del normalizer y después de `backbone.layer1`, y
-conserva BatchNorm en las heads. En SynBaby se actualizan el normalizer, la
+Agregá `--dry-run` para validar sin enviar. Los presets resuelven:
+
+| Preset | Normalizer | IN después de layer1 | Heads |
+|---|---|---|---|
+| `instance_hidden` | Conv → IN → ReLU en cada bloque oculto | Sí | BatchNorm |
+| `instance_early` | IN solo en el último bloque oculto, antes de ReLU | Sí | BatchNorm |
+
+La convolución RGB final queda sin normalización en ambos. La posición final
+se corrigió a antes de ReLU; los checkpoints anteriores que la colocaban
+después de ReLU conservan su topología al cargarlos desde sus metadatos.
+Se heredan las demás pérdidas, augmentations y LR del YAML de normalizer.
+En SynBaby se actualizan el normalizer, la
 nueva InstanceNorm de layer1, transition3/stage4 y las heads. Los convolucionales
-del stem/layer1 y sus estadísticas BatchNorm quedan congelados. Los otros
+del stem/layer1 y sus estadísticas BatchNorm quedan congelados. Los antiguos
 presets mantienen su arquitectura original y desactivan ambas InstanceNorm nuevas.
 También evalúa BabyLand e InfAnFace al terminar, porque
 `evaluate_babyland: true` y `evaluate_infanface: true` figuran en el YAML.
@@ -173,8 +217,8 @@ el lanzador toma recortes, labels e imágenes originales del JSON HPC; las rutas
 locales escritas en el YAML se sustituyen. El entrenamiento usa solo synbaby72.
 Los jobs TTA siguen siendo independientes: hacen la adaptación por imagen y su
 evaluación posterior. Reservá tiempo para estas evaluaciones al solicitar GPU.
-La pérdida PCA conserva el cambio a coordenadas de imagen y su peso del YAML;
-los lanzadores no recalibran ese peso automáticamente.
+La pérdida PCA usa `pca_loss_space` del YAML (`aligned` o `image`), salvo que
+se pase `--pca-loss-space`. Los lanzadores no recalibran su peso automáticamente.
 
 Cada envío imprime el job ID, un directorio único y la ruta futura del checkpoint.
 No hay reanudación automática tras timeout: los checkpoints por época existentes
@@ -288,6 +332,8 @@ Antes de enviar, editá `arguments.wandb_run_name` en
 nombre completo de la carpeta. Espacios y caracteres de ruta se sustituyen por
 `_`. Usá un nombre simple en una línea con la indentación existente. Cambiar
 `--normalization` no cambia automáticamente el nombre elegido en el YAML.
+También podés pasar `--run-name NOMBRE` para sobrescribirlo solo en ese envío,
+sin editar el YAML entre experimentos. La carpeta conserva el sufijo de fecha/ID.
 
 Después de que el envío devuelve el job ID, `git pull` no modifica el código ni
 el YAML de ese job: están copiados en su directorio, incluso mientras está en
