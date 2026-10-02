@@ -230,7 +230,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pca-tta-adaptation-scope",
         choices=["normalizer", "normalizer_head_norms", "normalizer_heads",
-                 "normalizer_stem", "normalizer_stem_layer1", "normalizer_layer1_instance"],
+                 "normalizer_stem", "normalizer_stem_layer1", "normalizer_layer1_instance",
+                 "normalizer_all_norms", "normalizer_all_instance_norms"],
         default=defaults.pca_tta_adaptation_scope,
         help="Adapt the normalizer, optionally with heads, stem, layer1, or its output InstanceNorm.",
     )
@@ -572,6 +573,9 @@ def main() -> None:
     tta_adapter = None
     wandb_module = None
     if config.pca_tta_enabled:
+        if (config.pca_tta_adaptation_scope == "normalizer_all_instance_norms"
+                and config.eval_batch_size != 1):
+            raise ValueError("normalizer_all_instance_norms requires --batch-size 1.")
         if dataset_protocol == "synthetic":
             raise ValueError("PCA-guided TTA is supported only for natural datasets.")
         if not isinstance(model, NormalizedLandmarker):

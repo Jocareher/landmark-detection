@@ -138,7 +138,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--normalizer-normalization",
-        choices=["none", "group", "layer", "instance", "adain"],
+        choices=["none", "group", "batch", "layer", "instance", "adain"],
         default=defaults.normalizer_internal_normalization,
     )
     parser.add_argument(
@@ -146,6 +146,11 @@ def parse_args() -> argparse.Namespace:
         choices=["batch", "layer", "instance", "adain"],
         default=defaults.head_normalization,
         help="Normalization inside all three task heads; backbone BN is preserved.",
+    )
+    parser.add_argument(
+        "--backbone-normalization", choices=["batch", "instance"],
+        default=defaults.backbone_normalization,
+        help="Keep pretrained BatchNorm or replace all HRNet BatchNorm layers with InstanceNorm.",
     )
     parser.add_argument(
         "--normalizer-final-instance-norm",
@@ -724,6 +729,7 @@ def build_model(config: ExperimentConfig) -> torch.nn.Module:
     landmarker = HRNetLandmarkVisibility(
         num_landmarks=config.num_landmarks,
         head_normalization=config.head_normalization,
+        backbone_normalization=config.backbone_normalization,
         layer1_output_instance_norm=config.layer1_output_instance_norm,
     )
     if (
@@ -872,6 +878,8 @@ def finalize_normalizer_experiment(
                     "normalizer, transition3, stage4, and task heads trainable; "
                     + ("post-layer1 InstanceNorm trainable; "
                        if config.layer1_output_instance_norm else "")
+                    + ("all backbone InstanceNorm affine parameters trainable; "
+                       if config.backbone_normalization == "instance" else "")
                     + "earlier backbone convolutions frozen."
                 )
             )
@@ -1020,7 +1028,9 @@ def main() -> None:
                 "new identity-initialized normalizer | new task heads | "
                 "trainable=normalizer, transition3, stage4, task heads"
                 + (", post-layer1 InstanceNorm" if config.layer1_output_instance_norm else "")
-                + " | frozen=stem, stage1 convolutions, stage2, stage3"
+                + (", all backbone InstanceNorm affine parameters"
+                   if config.backbone_normalization == "instance" else "")
+                + " | frozen=stem and stages 1-3 convolutional weights"
             )
 
         if config.checkpoint_path is not None:

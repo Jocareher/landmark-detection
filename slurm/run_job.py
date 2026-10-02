@@ -24,16 +24,22 @@ def resolved_arguments(plan, base):
     if plan['mode'] == 'train':
         early_instance = plan['normalization'] == 'instance_early'
         hidden_instance = plan['normalization'] == 'instance_hidden'
+        all_batch = plan['normalization'] == 'batch_all_norms'
+        all_instance = plan['normalization'] == 'instance_all_norms'
         args.update(experiment_mode='normalizer_joint_finetune',
                     dataset_root=paths['train_dataset'],
                     pretrained_weights=paths['pretrained_weights'], checkpoint=None,
                     output_dir=str(run.parent), epochs=resources['epochs'],
                     normalizer_normalization=('none' if plan['normalization'] in ('baseline', 'instance_early')
-                                              else 'instance' if hidden_instance else plan['normalization']),
+                                              else 'batch' if all_batch
+                                              else 'instance' if hidden_instance or all_instance
+                                              else plan['normalization']),
                     normalizer_final_instance_norm=early_instance,
                     layer1_output_instance_norm=early_instance or hidden_instance,
-                    head_normalization=('batch' if plan['normalization'] in ('baseline', 'instance_early', 'instance_hidden')
-                                        else plan['normalization']), transfer_mode='fine_tuning',
+                    head_normalization=('batch' if plan['normalization'] in ('baseline', 'instance_early', 'instance_hidden', 'batch_all_norms')
+                                        else 'instance' if all_instance else plan['normalization']),
+                    backbone_normalization=('instance' if all_instance else 'batch'),
+                    transfer_mode='fine_tuning',
                     num_unfrozen_stages=1, unfreeze_stem=False,
                     eval_batch_size=resources['batch_size'], evaluate_synbaby=True)
         for dataset_name in ('babyland', 'infanface'):

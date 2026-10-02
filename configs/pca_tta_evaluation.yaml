@@ -13,8 +13,11 @@ arguments:
   #   normalizer_stem       = normalizer + stem conv1/bn1/conv2/bn2
   #   normalizer_stem_layer1 = above + layer1 + post-layer1 InstanceNorm
   #   normalizer_layer1_instance = normalizer + post-layer1 InstanceNorm only
-  # BN running statistics remain frozen (eval mode) in every scope.
-  # Source weights for every adapted module and the optimizer reset for each image.
+  #   normalizer_all_norms = normalizer + every backbone/head norm; one episode per batch
+  #   normalizer_all_instance_norms = normalizer + all backbone/head IN; batch size 1
+  # In normalizer_all_norms selected BN layers use current-batch statistics.
+  # All selected parameters, BN buffers and optimizer reset after each batch.
+  # Other scopes remain image-episodic, with BN in eval mode.
   # PCA supervises full landmarks; the exclusive visibility classifier has no loss gradient.
   # Set pca_tta false for ordinary inference, or steps 0 for a zero-update TTA reference.
   eval_mode: babyland
@@ -98,7 +101,9 @@ arguments:
   # ---------------------------------------------------------------------------
   # Runtime
   # ---------------------------------------------------------------------------
-  # Adaptation is per image even when the loader supplies a larger batch.
+  # normalizer_all_norms adapts one batch jointly; --batch-size selects its size.
+  # normalizer_all_instance_norms requires batch_size: 1.
+  # All other scopes adapt per image even when the loader batch is larger.
   batch_size: 1
   num_workers: 4
   device: auto

@@ -100,7 +100,9 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode, run_nam
 @pytest.mark.parametrize('variant,normalizer_norm,head_norm', [
     ('baseline', 'none', 'batch'), ('layer', 'layer', 'layer'),
     ('instance', 'instance', 'instance'),
-    ('instance_early', 'none', 'batch'), ('instance_hidden', 'instance', 'batch')])
+    ('instance_early', 'none', 'batch'), ('instance_hidden', 'instance', 'batch'),
+    ('batch_all_norms', 'batch', 'batch'),
+    ('instance_all_norms', 'instance', 'instance')])
 def test_generated_training_yaml_parses(tmp_path, monkeypatch, variant, normalizer_norm, head_norm):
     from scripts.main import parse_args, build_config_from_args
     base = yaml.safe_load((ROOT / 'configs/normalizer_experiments.yaml').read_text())['arguments']
@@ -121,7 +123,31 @@ def test_generated_training_yaml_parses(tmp_path, monkeypatch, variant, normaliz
     assert config.normalizer_internal_normalization == normalizer_norm
     assert config.normalizer_final_instance_norm == (variant == 'instance_early')
     assert config.layer1_output_instance_norm == (variant in ('instance_early', 'instance_hidden'))
+    assert config.backbone_normalization == ('instance' if variant == 'instance_all_norms' else 'batch')
     assert config.pca_loss_space == 'image'
+
+
+@pytest.mark.parametrize('scope,batch_size', [
+    ('normalizer_all_norms', 4),
+    ('normalizer_all_instance_norms', 1),
+])
+def test_new_tta_scopes_resolve_batch_size(scope, batch_size, tmp_path, monkeypatch):
+    from scripts.evaluate import parse_args, build_config_from_args
+
+    base = yaml.safe_load((ROOT / 'configs/pca_tta_evaluation.yaml').read_text())['arguments']
+    plan = dict(mode='tta', run_dir=str(tmp_path / 'run'), scope=scope,
+                checkpoint='/weights/model.pth', normalizer_checkpoint=None,
+                dataset='babyland', resources=dict(batch_size=batch_size, workers=2,
+                                                   steps=1, learning_rate=1e-4),
+                paths=dict(pca_prior='/weights/pca.pt', babyland_crops='/data/crops',
+                           babyland_labels='/data/labels', babyland_source_root='/data/images'))
+    config_path = tmp_path / 'tta.yaml'
+    config_path.write_text(yaml.safe_dump({'arguments': worker.resolved_arguments(plan, base)}))
+    monkeypatch.setattr('sys.argv', ['evaluate', '--config', str(config_path)])
+    config = build_config_from_args(parse_args())
+    assert config.pca_tta_adaptation_scope == scope
+    assert config.eval_batch_size == batch_size
+    assert config.pca_loss_space == 'aligned'
 
 
 def test_login_launcher_uses_python36_syntax_and_apis():

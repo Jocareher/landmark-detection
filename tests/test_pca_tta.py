@@ -434,3 +434,147 @@ def test_early_backbone_tta_updates_selected_weights_and_keeps_bn_statistics(tmp
     assert "landmarker.backbone.bn1.running_mean" not in updates[0]
     for name, value in model.state_dict().items():
         torch.testing.assert_close(value, source[name], rtol=0, atol=0)
+
+
+def test_all_batch_norm_tta_uses_one_episode_per_batch_and_restores_buffers(tmp_path, monkeypatch):
+    from scripts.models import HRNetLandmarkVisibility
+
+    torch.set_num_threads(1)
+    torch.manual_seed(12)
+    model = NormalizedLandmarker(
+        HRNetLandmarkVisibility(num_landmarks=4, head_normalization="batch"),
+        ResidualImageNormalizer(normalization="batch", hidden_channels=4,
+                                initialize_identity=False),
+    )
+    source = deepcopy(model.state_dict())
+    adapter = PCAGuidedTTA(
+        model, _pca_prior(), torch.device("cpu"), tmp_path,
+        PCATTAConfig(adaptation_scope="normalizer_all_norms", steps=1, probe_count=1),
+    )
+    selected = set(adapter.adapted_parameter_names)
+    assert any(name.startswith("landmarker.backbone.") and name.endswith("weight")
+               for name in selected)
+    assert any(name.startswith("landmarker.full_landmark_fusion_head.1.")
+               for name in selected)
+    assert "landmarker.backbone.conv1.weight" not in selected
+    adam_step = torch.optim.Adam.step
+    updates = []
+
+    def record_step(optimizer, *args, **kwargs):
+        assert model.landmarker.backbone.bn1.training
+        assert not torch.equal(model.landmarker.backbone.bn1.running_mean,
+                               source["landmarker.backbone.bn1.running_mean"])
+        result = adam_step(optimizer, *args, **kwargs)
+        updates.append({name for name, value in model.state_dict().items()
+                        if name in selected and not torch.equal(value, source[name])})
+        return result
+
+    monkeypatch.setattr(torch.optim.Adam, "step", record_step)
+    images = torch.randn(2, 3, 64, 64)
+    first = adapter.adapt_batch(images, ["a", "b"])
+    second = adapter.adapt_batch(images, ["c", "d"])
+    assert len(updates) == 2 and updates[0] == updates[1]
+    assert adapter.episode_batch_sizes == [2, 2]
+    assert adapter.processed_samples == 4 and adapter.failed_samples == 0
+    assert len(adapter.trajectory_rows) == 8
+    assert all(sum(row["sample_id"] == sample_id for row in adapter.trajectory_rows) == 2
+               for sample_id in ("a", "b", "c", "d"))
+    torch.testing.assert_close(first["heatmaps"], second["heatmaps"], rtol=0, atol=0)
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, source[name], rtol=0, atol=0)
+    summary = adapter.finalize()
+    assert summary["adaptation_unit"] == "batch"
+    assert summary["episode_batch_sizes"] == [2, 2]
+    assert (tmp_path / "probes/a/adaptation_grid.png").exists()
+
+
+def test_all_instance_norm_tta_selects_norm_affines_and_requires_batch_one(tmp_path):
+    from scripts.models import HRNetLandmarkVisibility
+
+    torch.set_num_threads(1)
+    model = NormalizedLandmarker(
+        HRNetLandmarkVisibility(num_landmarks=4, head_normalization="instance",
+                                backbone_normalization="instance"),
+        ResidualImageNormalizer(normalization="instance", hidden_channels=4),
+    )
+    adapter = PCAGuidedTTA(
+        model, _pca_prior(), torch.device("cpu"), tmp_path,
+        PCATTAConfig(adaptation_scope="normalizer_all_instance_norms", steps=0,
+                     probe_count=0),
+    )
+    selected = set(adapter.adapted_parameter_names)
+    assert "landmarker.backbone.bn1.weight" in selected
+    assert "landmarker.full_landmark_fusion_head.1.weight" in selected
+    assert "landmarker.backbone.conv1.weight" not in selected
+    assert all(name.startswith("normalizer.") or name.endswith((".weight", ".bias"))
+               for name in selected)
+    with pytest.raises(ValueError, match="batch_size=1"):
+        adapter.adapt_batch(torch.randn(2, 3, 64, 64), ["x", "y"])
+    image = torch.randn(1, 3, 64, 64)
+    outputs = adapter.adapt_batch(image, ["solo"])
+    assert outputs["heatmaps"].shape[0] == 1
+    assert adapter.episode_batch_sizes == [1]
+
+
+def test_batch_norm_tta_failure_restores_source_for_whole_batch(tmp_path, monkeypatch):
+    from scripts.models import HRNetLandmarkVisibility
+
+    torch.set_num_threads(1)
+    model = NormalizedLandmarker(
+        HRNetLandmarkVisibility(num_landmarks=4),
+        ResidualImageNormalizer(normalization="batch", hidden_channels=4,
+                                initialize_identity=False),
+    )
+    source = deepcopy(model.state_dict())
+    adapter = PCAGuidedTTA(
+        model, _pca_prior(), torch.device("cpu"), tmp_path,
+        PCATTAConfig(adaptation_scope="normalizer_all_norms", steps=1, probe_count=0),
+    )
+    adam_step = torch.optim.Adam.step
+
+    def fail_after_step(optimizer, *args, **kwargs):
+        adam_step(optimizer, *args, **kwargs)
+        raise RuntimeError("injected batch failure")
+
+    monkeypatch.setattr(torch.optim.Adam, "step", fail_after_step)
+    with pytest.warns(RuntimeWarning, match="injected batch failure"):
+        result = adapter.adapt_batch(torch.randn(2, 3, 64, 64), ["one", "two"])
+    assert adapter.failed_samples == 2
+    torch.testing.assert_close(result["heatmaps"], result["tta_baseline_heatmaps"],
+                               rtol=0, atol=0)
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, source[name], rtol=0, atol=0)
+
+
+def test_all_instance_norm_tta_updates_only_selected_weights(tmp_path, monkeypatch):
+    from scripts.models import HRNetLandmarkVisibility
+
+    torch.set_num_threads(1)
+    model = NormalizedLandmarker(
+        HRNetLandmarkVisibility(num_landmarks=4, head_normalization="instance",
+                                backbone_normalization="instance"),
+        ResidualImageNormalizer(normalization="instance", hidden_channels=4,
+                                initialize_identity=False),
+    )
+    source = deepcopy(model.state_dict())
+    adapter = PCAGuidedTTA(
+        model, _pca_prior(), torch.device("cpu"), tmp_path,
+        PCATTAConfig(adaptation_scope="normalizer_all_instance_norms", steps=1,
+                     probe_count=0),
+    )
+    updates = []
+    adam_step = torch.optim.Adam.step
+
+    def record_step(optimizer, *args, **kwargs):
+        result = adam_step(optimizer, *args, **kwargs)
+        updates.append({name for name, value in model.state_dict().items()
+                        if not torch.equal(value, source[name])})
+        return result
+
+    monkeypatch.setattr(torch.optim.Adam, "step", record_step)
+    adapter.adapt_batch(torch.randn(1, 3, 64, 64), ["one"])
+    assert len(updates) == 1 and updates[0]
+    assert updates[0] <= set(adapter.adapted_parameter_names)
+    assert any(name.startswith("landmarker.backbone.") for name in updates[0])
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, source[name], rtol=0, atol=0)

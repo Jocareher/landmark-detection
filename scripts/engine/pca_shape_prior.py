@@ -373,6 +373,7 @@ def compute_pca_projection_loss(
     predicted_landmarks: torch.Tensor,
     pca_prior: dict[str, Any],
     loss_space: str = "image",
+    reduction: str = "mean",
 ) -> torch.Tensor:
     """Measure PCA reconstruction MSE in aligned or input-image coordinates.
 
@@ -387,6 +388,8 @@ def compute_pca_projection_loss(
     """
     if loss_space not in {"aligned", "image"}:
         raise ValueError(f"Unsupported PCA loss space: {loss_space}. Use aligned or image.")
+    if reduction not in {"mean", "none"}:
+        raise ValueError(f"Unsupported PCA loss reduction: {reduction}.")
     if predicted_landmarks.ndim != 3 or predicted_landmarks.shape[-1] != 2:
         raise ValueError(
             "Expected predicted_landmarks with shape (B, N, 2), "
@@ -443,4 +446,5 @@ def compute_pca_projection_loss(
             )
             sample_losses.append(F.mse_loss(current_shape, reconstructed_image_shape))
 
-    return torch.stack(sample_losses).mean()
+    losses = torch.stack(sample_losses)
+    return losses.mean() if reduction == "mean" else losses

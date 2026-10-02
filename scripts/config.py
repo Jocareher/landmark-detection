@@ -264,6 +264,7 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "pretrained_weights": PRETRAINED_WEIGHTS,
     "num_landmarks": NUM_LANDMARKS,
     "head_normalization": "batch",
+    "backbone_normalization": "batch",
     "layer1_output_instance_norm": LAYER1_OUTPUT_INSTANCE_NORM,
     "image_size": IMAGE_SIZE,
     "heatmap_size": HEATMAP_SIZE,

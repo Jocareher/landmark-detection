@@ -14,6 +14,26 @@ BN_MOMENTUM = 0.01
 TransferMode = Literal["feature_extractor", "fine_tuning"]
 
 
+def _replace_backbone_batch_norms_with_instance_norms(module: nn.Module) -> None:
+    """Replace HRNet BatchNorm in place, preserving affine parameter names.
+
+    Official pretrained convolution and BN affine weights still load by key;
+    BN running statistics have no analogue when InstanceNorm uses per-image stats.
+    """
+    for name, child in list(module.named_children()):
+        if isinstance(child, nn.BatchNorm2d):
+            replacement = nn.InstanceNorm2d(
+                child.num_features, eps=child.eps, affine=True,
+                track_running_stats=False,
+            )
+            with torch.no_grad():
+                replacement.weight.copy_(child.weight)
+                replacement.bias.copy_(child.bias)
+            setattr(module, name, replacement)
+        else:
+            _replace_backbone_batch_norms_with_instance_norms(child)
+
+
 def conv3x3(in_planes: int, out_planes: int, stride: int = 1) -> nn.Conv2d:
     """Create a 3x3 convolution with padding and no bias."""
     return nn.Conv2d(
@@ -535,13 +555,19 @@ class HRNetLandmarkVisibility(nn.Module):
         num_landmarks: int = 72,
         head_normalization: str = "batch",
         layer1_output_instance_norm: bool = False,
+        backbone_normalization: str = "batch",
     ) -> None:
         """Initialize the multitask model and its task-specific heads."""
         super().__init__()
         self.num_landmarks = num_landmarks
         self.head_normalization = head_normalization
+        if backbone_normalization not in {"batch", "instance"}:
+            raise ValueError(f"Unsupported backbone normalization: {backbone_normalization}")
+        self.backbone_normalization = backbone_normalization
         self.layer1_output_instance_norm = bool(layer1_output_instance_norm)
         self.backbone = HRNetW18Backbone(layer1_output_instance_norm)
+        if backbone_normalization == "instance":
+            _replace_backbone_batch_norms_with_instance_norms(self.backbone)
         in_channels = self.backbone.final_inp_channels
         branch_channels = in_channels // 2
         final_padding = 1 if self.FINAL_CONV_KERNEL == 3 else 0
@@ -618,6 +644,7 @@ class HRNetLandmarkVisibility(nn.Module):
             "num_landmarks": self.num_landmarks,
             "head_normalization": self.head_normalization,
             "layer1_output_instance_norm": self.layer1_output_instance_norm,
+            "backbone_normalization": self.backbone_normalization,
         }
 
     def _task_heads(self) -> list[nn.Module]:
@@ -736,6 +763,11 @@ class HRNetLandmarkVisibility(nn.Module):
         if mode == "fine_tuning":
             if self.layer1_output_instance_norm:
                 modules_to_unfreeze.append(self.backbone.layer1_output_norm)
+            if self.backbone_normalization == "instance":
+                modules_to_unfreeze.extend(
+                    module for module in self.backbone.modules()
+                    if isinstance(module, nn.InstanceNorm2d)
+                )
             num_unfrozen_stages = max(0, min(num_unfrozen_stages, 4))
             if num_unfrozen_stages >= 1:
                 modules_to_unfreeze.extend(

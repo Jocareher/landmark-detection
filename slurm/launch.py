@@ -12,7 +12,8 @@ import uuid
 
 REPO = Path(__file__).resolve().parents[1]
 SCOPES = ('normalizer', 'normalizer_head_norms', 'normalizer_heads',
-          'normalizer_stem', 'normalizer_stem_layer1', 'normalizer_layer1_instance')
+          'normalizer_stem', 'normalizer_stem_layer1', 'normalizer_layer1_instance',
+          'normalizer_all_norms', 'normalizer_all_instance_norms')
 
 
 def duration_seconds(value):
@@ -72,8 +73,8 @@ def arguments():
     parser.add_argument('mode', choices=('train', 'tta'))
     parser.add_argument('--settings', type=Path, required=True)
     parser.add_argument('--config', type=Path, help='YAML template; defaults to the matching preset.')
-    parser.add_argument('--normalization', choices=('baseline', 'layer', 'instance', 'adain', 'instance_early', 'instance_hidden'), default='layer',
-                        help='Training: instance_early = final hidden IN; instance_hidden = IN in every hidden block. Both add post-layer1 IN and keep BN heads.')
+    parser.add_argument('--normalization', choices=('baseline', 'layer', 'instance', 'adain', 'instance_early', 'instance_hidden', 'batch_all_norms', 'instance_all_norms'), default='layer',
+                        help='Training normalization preset. batch_all_norms and instance_all_norms configure all-normalization experiments.')
     parser.add_argument('--run-name', help='Override arguments.wandb_run_name for this submission.')
     parser.add_argument('--scope', choices=SCOPES, default='normalizer')
     parser.add_argument('--pca-loss-space', choices=('aligned', 'image'),
@@ -176,6 +177,9 @@ def main():
         raise ValueError('epochs must be positive.')
     if args.mode == 'tta' and resources['steps'] < 0:
         raise ValueError('steps must be nonnegative.')
+    if (args.mode == 'tta' and args.scope == 'normalizer_all_instance_norms'
+            and int(resources['batch_size']) != 1):
+        raise ValueError('normalizer_all_instance_norms requires --batch-size 1.')
     partition = args.partition or choose_partition(resources['time'])
     inventory = subprocess.check_output(
         ['sinfo', '--noheader', f'--partition={partition}', '--format=%G'], universal_newlines=True)

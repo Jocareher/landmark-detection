@@ -15,6 +15,52 @@ No se normaliza por tamaño de cara. El valor numérico de la pérdida y su peso
 no son comparables entre espacios: no reutilices un peso/LR como si fueran equivalentes.
 La elección para TTA es independiente de la usada al entrenar el checkpoint.
 
+## Dos experimentos de normalización global
+
+Ambos usan el fine-tuning habitual: normalizer, transition3/stage4 y heads.
+`batch_all_norms` agrega BatchNorm a cada bloque oculto del normalizer; el
+backbone y las heads conservan BatchNorm. `instance_all_norms` coloca
+InstanceNorm en esos bloques y en las heads y reemplaza **todas** las BatchNorm
+del HRNet por InstanceNorm. En este último también se entrenan los parámetros
+afines de todas las InstanceNorm del backbone, aun donde las convoluciones
+siguen congeladas. Los pesos convolucionales preentrenados y los parámetros
+afines de BN se cargan por nombre; las medias/varianzas acumuladas de BN no
+existen en InstanceNorm.
+
+```bash
+bash slurm/train_hrnet_landmarks_template.sh \
+  --settings configs/upf_hpc.local.json --normalization batch_all_norms \
+  --pca-loss-space aligned --run-name train_bn_all_norms
+bash slurm/train_hrnet_landmarks_template.sh \
+  --settings configs/upf_hpc.local.json --normalization instance_all_norms \
+  --pca-loss-space aligned --run-name train_in_all_norms
+```
+
+Para TTA, usá **el checkpoint de cada entrenamiento**. En el primer caso,
+`--batch-size` define cuántas imágenes comparten una adaptación y un Adam;
+las BN seleccionadas usan estadísticas del batch. Pesos, buffers BN y Adam se
+restauran al estado de SynBaby antes del siguiente batch. El último batch
+puede ser más pequeño. En el segundo caso, cada episodio contiene una sola
+imagen y solo se actualizan el normalizer y los parámetros afines de IN del
+backbone y heads:
+
+```bash
+bash slurm/tta_landmarks.sh \
+  --settings configs/upf_hpc.local.json \
+  --checkpoint /ruta/train_bn_all_norms/checkpoints/full_model_best.pth \
+  --dataset babyland --scope normalizer_all_norms --batch-size 4 \
+  --pca-loss-space aligned --run-name tta_bn_all_norms_b4
+bash slurm/tta_landmarks.sh \
+  --settings configs/upf_hpc.local.json \
+  --checkpoint /ruta/train_in_all_norms/checkpoints/full_model_best.pth \
+  --dataset babyland --scope normalizer_all_instance_norms --batch-size 1 \
+  --pca-loss-space aligned --run-name tta_in_all_norms_b1
+```
+
+Las rutas del ejemplo se reemplazan por los checkpoints impresos por el envío
+de entrenamiento. `--dry-run` valida recursos/rutas sin enviar el job; para
+medir memoria y tiempo reales, enviá después un trabajo con `--steps 1`.
+
 ```bash
 # Local: la CLI sobrescribe el YAML.
 python -m scripts.main --config configs/normalizer_experiments.yaml --pca-loss-space aligned

@@ -165,3 +165,51 @@ def test_final_only_and_hidden_instance_norm_order_and_identity():
         torch.testing.assert_close(model(image), image, rtol=0, atol=0)
     with pytest.raises(ValueError, match="every hidden block"):
         ResidualImageNormalizer(normalization="instance", final_instance_norm=True)
+
+
+def test_batch_normalizer_and_full_instance_backbone_finetune(tmp_path: Path):
+    torch.set_num_threads(1)
+    batch_normalizer = ResidualImageNormalizer(normalization="batch")
+    assert sum(isinstance(module, nn.BatchNorm2d) for module in batch_normalizer.modules()) == 2
+
+    official = HRNetLandmarkVisibility(num_landmarks=4)
+    source = {key: value.clone() for key, value in official.backbone.state_dict().items()
+              if key in ("conv1.weight", "bn1.weight", "bn1.bias", "bn1.running_mean")}
+    pretrained_path = tmp_path / "pretrained.pth"
+    torch.save(source, pretrained_path)
+    model = NormalizedLandmarker(
+        HRNetLandmarkVisibility(num_landmarks=4, head_normalization="instance",
+                                backbone_normalization="instance"),
+        ResidualImageNormalizer(normalization="instance"),
+    )
+    audit = model.landmarker.load_official_hrnet_pretrained(str(pretrained_path), verbose=False)
+    assert "backbone.conv1.weight" in audit["loaded_keys"]
+    assert "backbone.bn1.weight" in audit["loaded_keys"]
+    assert "bn1.running_mean" in audit["skipped_keys"]
+    assert not any(isinstance(module, nn.BatchNorm2d) for module in model.landmarker.backbone.modules())
+    torch.testing.assert_close(model.landmarker.backbone.conv1.weight, source["conv1.weight"])
+    model.configure_joint_finetune(num_unfrozen_stages=1, unfreeze_stem=False)
+    model.train()
+    assert all(parameter.requires_grad for module in model.landmarker.backbone.modules()
+               if isinstance(module, nn.InstanceNorm2d) for parameter in module.parameters())
+    assert all(not parameter.requires_grad for parameter in model.landmarker.backbone.conv1.parameters())
+    assert all(not parameter.requires_grad for parameter in model.landmarker.backbone.layer1[0].conv1.parameters())
+    assert all(parameter.requires_grad for parameter in model.landmarker.backbone.stage4.parameters())
+    assert all(isinstance(head[1], nn.InstanceNorm2d) for head in (
+        model.landmarker.visibility_feature_head,
+        model.landmarker.visible_landmark_feature_head,
+        model.landmarker.full_landmark_fusion_head,
+    ))
+    output = model(torch.randn(1, 3, 64, 64))
+    output["heatmaps"].square().mean().backward()
+    assert model.landmarker.backbone.bn1.weight.grad is not None
+    assert model.landmarker.backbone.stage2[0].branches[0][0].bn1.weight.grad is not None
+    assert model.landmarker.backbone.conv1.weight.grad is None
+    payload = {
+        "model_state_dict": model.state_dict(),
+        "landmarker_architecture": model.landmarker.architecture_config(),
+        "normalizer_architecture": model.normalizer.architecture_config(),
+    }
+    restored = build_model_from_checkpoints(payload)
+    assert restored.landmarker.backbone_normalization == "instance"
+    assert not any(isinstance(module, nn.BatchNorm2d) for module in restored.landmarker.backbone.modules())

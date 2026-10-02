@@ -49,7 +49,8 @@ class PCATTAConfig:
             raise ValueError(f"Unsupported PCA loss space: {self.pca_loss_space}")
         if self.adaptation_scope not in {"normalizer", "normalizer_head_norms", "normalizer_heads",
                                          "normalizer_stem", "normalizer_stem_layer1",
-                                         "normalizer_layer1_instance"}:
+                                         "normalizer_layer1_instance", "normalizer_all_norms",
+                                         "normalizer_all_instance_norms"}:
             raise ValueError(f"Unsupported TTA adaptation scope: {self.adaptation_scope}")
         if self.steps < 0:
             raise ValueError("PCA TTA adaptation steps cannot be negative.")
@@ -122,6 +123,7 @@ class PCAGuidedTTA:
         self.summary_by_sample_id: dict[str, dict[str, Any]] = {}
         self.processed_samples = 0
         self.failed_samples = 0
+        self.episode_batch_sizes: list[int] = []
         self.output_dir.mkdir(parents=True, exist_ok=True)
         (self.output_dir / "figures").mkdir(parents=True, exist_ok=True)
         (self.output_dir / "probes").mkdir(parents=True, exist_ok=True)
@@ -162,7 +164,7 @@ class PCAGuidedTTA:
         images: torch.Tensor,
         sample_ids: Sequence[str] | None = None,
     ) -> dict[str, torch.Tensor]:
-        """Adapt independently to every image and concatenate final outputs."""
+        """Adapt per image, or adapt a whole loader batch in the BN scope."""
         if images.ndim != 4:
             raise ValueError(
                 f"Expected image batch with shape (B, C, H, W), got {images.shape}."
@@ -177,9 +179,15 @@ class PCAGuidedTTA:
         )
         if len(ids) != images.shape[0]:
             raise ValueError("sample_ids length must match the image batch size.")
+        if self.config.adaptation_scope == "normalizer_all_instance_norms" and images.shape[0] != 1:
+            raise ValueError("InstanceNorm-only TTA requires batch_size=1.")
+        if self.config.adaptation_scope == "normalizer_all_norms":
+            self.episode_batch_sizes.append(images.shape[0])
+            return self._adapt_batch_episode(images, ids)
 
         batched_outputs: dict[str, list[torch.Tensor]] = {}
         for sample_index, sample_id in enumerate(ids):
+            self.episode_batch_sizes.append(1)
             outputs = self._adapt_sample(
                 image=images[sample_index : sample_index + 1],
                 sample_id=sample_id,
@@ -391,6 +399,172 @@ class PCAGuidedTTA:
         ]
         return final_outputs
 
+    def _adapt_batch_episode(
+        self, images: torch.Tensor, sample_ids: Sequence[str]
+    ) -> dict[str, torch.Tensor]:
+        """Share one optimizer across a batch and restore all source state afterward."""
+        self._restore_source_normalizer()
+        self._validate_parameter_partition()
+        images = images.detach().to(self.device)
+        batch_size = images.shape[0]
+        self.model.eval()
+        with torch.inference_mode():
+            source_outputs = {
+                key: value.detach().clone() for key, value in self.model(images).items()
+            }
+            source_landmarks = softargmax_heatmaps_to_image_coords(
+                source_outputs["heatmaps"], images.shape[2], images.shape[3]
+            )
+        assert self.model.normalizer is not None
+        self.model.normalizer.train()
+        for module in self.adapted_landmarker_modules:
+            if isinstance(module, torch.nn.BatchNorm2d):
+                module.train()
+        optimizer = torch.optim.Adam(
+            self.adapted_parameters, lr=self.config.learning_rate,
+            betas=(self.config.adam_beta1, self.config.adam_beta2),
+            eps=self.config.adam_epsilon, weight_decay=self.config.weight_decay,
+        )
+        scheduler = (
+            torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=self.config.steps,
+                eta_min=self.config.min_learning_rate,
+            )
+            if self.config.lr_scheduler == "cosine" and self.config.steps > 0
+            else None
+        )
+        rows_by_sample: dict[str, list[dict[str, Any]]] = {
+            sample_id: [] for sample_id in sample_ids
+        }
+        snapshots_by_sample: dict[str, list[dict[str, Any]]] = {
+            sample_id: [] for sample_id in sample_ids
+        }
+        final_outputs: dict[str, torch.Tensor] | None = None
+        failed = False
+        failure_message = ""
+        episode_number = self.processed_samples + 1
+        print(
+            f"[PCA-TTA][episode={episode_number:06d}] batch_size={batch_size} "
+            f"scope={self.config.adaptation_scope} source_restored=yes optimizer=fresh"
+        )
+        try:
+            for step in range(self.config.steps + 1):
+                normalized = self.model.normalize_images(images)
+                outputs = self.model.forward_normalized(normalized)
+                landmarks = softargmax_heatmaps_to_image_coords(
+                    outputs["heatmaps"], images.shape[2], images.shape[3]
+                )
+                sample_losses = compute_pca_projection_loss(
+                    landmarks, self.pca_prior, loss_space=self.config.pca_loss_space,
+                    reduction="none",
+                )
+                batch_loss = sample_losses.mean()
+                if not bool(torch.isfinite(sample_losses).all().item()):
+                    raise FloatingPointError(f"Non-finite PCA loss at step {step}.")
+                drift = torch.linalg.norm(
+                    landmarks.detach() - source_landmarks, dim=-1
+                )
+                image_change = (normalized.detach() - images).abs().mean(dim=(1, 2, 3))
+                for index, sample_id in enumerate(sample_ids):
+                    rows_by_sample[sample_id].append({
+                        "sample_id": sample_id,
+                        "step": int(step),
+                        "pca_reconstruction_loss": float(sample_losses[index].detach().item()),
+                        "total_tta_loss": float(batch_loss.detach().item()),
+                        "learning_rate": float(optimizer.param_groups[0]["lr"]),
+                        "gradient_norm": math.nan,
+                        "gradient_norm_before_clipping": math.nan,
+                        "mean_landmark_drift_px": float(drift[index].mean().item()),
+                        "max_landmark_drift_px": float(drift[index].max().item()),
+                        "mean_absolute_normalizer_change": float(image_change[index].item()),
+                        "failed": False,
+                        "failure_message": "",
+                    })
+                    if step in self._capture_steps():
+                        snapshots_by_sample[sample_id].append({
+                            "step": step,
+                            "normalized": normalized[index:index + 1].detach().cpu().clone(),
+                            "landmarks": landmarks[index:index + 1].detach().cpu().clone(),
+                            "loss": float(sample_losses[index].detach().item()),
+                        })
+                final_outputs = {
+                    key: value.detach().clone() for key, value in outputs.items()
+                }
+                if step == self.config.steps:
+                    break
+                optimizer.zero_grad(set_to_none=True)
+                batch_loss.backward()
+                before_clipping = _gradient_norm(self.adapted_parameters)
+                if not math.isfinite(before_clipping):
+                    raise FloatingPointError(f"Non-finite adaptation gradient at step {step}.")
+                if self.config.max_gradient_norm > 0:
+                    torch.nn.utils.clip_grad_norm_(
+                        self.adapted_parameters, self.config.max_gradient_norm
+                    )
+                gradient_norm = _gradient_norm(self.adapted_parameters)
+                if not math.isfinite(gradient_norm):
+                    raise FloatingPointError(f"Non-finite adaptation gradient at step {step}.")
+                for rows in rows_by_sample.values():
+                    rows[-1]["gradient_norm_before_clipping"] = before_clipping
+                    rows[-1]["gradient_norm"] = gradient_norm
+                optimizer.step()
+                if scheduler is not None:
+                    scheduler.step()
+        except Exception as error:
+            failed = True
+            failure_message = str(error)
+            self.failed_samples += batch_size
+            warnings.warn(
+                f"PCA TTA failed for batch {list(sample_ids)}; using source predictions. "
+                f"Reason: {error}", RuntimeWarning, stacklevel=2,
+            )
+            final_outputs = source_outputs
+            for sample_id in sample_ids:
+                if not rows_by_sample[sample_id]:
+                    rows_by_sample[sample_id].append({
+                        "sample_id": sample_id, "step": 0,
+                        "pca_reconstruction_loss": math.nan,
+                        "total_tta_loss": math.nan,
+                        "learning_rate": self.config.learning_rate,
+                        "gradient_norm": math.nan,
+                        "gradient_norm_before_clipping": math.nan,
+                        "mean_landmark_drift_px": 0.0,
+                        "max_landmark_drift_px": 0.0,
+                        "mean_absolute_normalizer_change": math.nan,
+                        "failed": True, "failure_message": failure_message,
+                    })
+        finally:
+            self._restore_source_normalizer()
+            self.model.eval()
+            for index, sample_id in enumerate(sample_ids):
+                rows = rows_by_sample[sample_id]
+                for row in rows:
+                    row["failed"] = failed
+                    row["failure_message"] = failure_message
+                self.trajectory_rows.extend(rows)
+                summary = _summarize_sample_rows(rows)
+                self.summary_rows.append(summary)
+                self.summary_by_sample_id[sample_id] = summary
+                if self.processed_samples + index < self.config.probe_count:
+                    snapshots = snapshots_by_sample[sample_id]
+                    if snapshots:
+                        self._save_probe(
+                            sample_id=sample_id, image=images[index:index + 1].cpu(),
+                            baseline_landmarks=source_landmarks[index:index + 1],
+                            snapshots=snapshots,
+                        )
+            self.processed_samples += batch_size
+            print(
+                f"[PCA-TTA][episode={episode_number:06d}] batch_size={batch_size} "
+                f"status={'failed' if failed else 'ok'} source_restored_after=yes"
+            )
+        assert final_outputs is not None
+        final_outputs["tta_baseline_heatmaps"] = source_outputs["heatmaps"]
+        final_outputs["tta_baseline_visibility_logits"] = source_outputs[
+            "visibility_logits"
+        ]
+        return final_outputs
+
     def record_evaluation_metrics(
         self,
         *,
@@ -464,6 +638,25 @@ class PCAGuidedTTA:
         """Select exactly the landmarker modules requested for TTA."""
         if self.config.adaptation_scope == "normalizer":
             return []
+        if self.config.adaptation_scope in {"normalizer_all_norms", "normalizer_all_instance_norms"}:
+            norm_types = (
+                (torch.nn.InstanceNorm2d,)
+                if self.config.adaptation_scope == "normalizer_all_instance_norms"
+                else (torch.nn.BatchNorm2d, torch.nn.InstanceNorm2d,
+                      torch.nn.LayerNorm, torch.nn.GroupNorm)
+            )
+            if self.config.adaptation_scope == "normalizer_all_instance_norms":
+                if getattr(self.model.landmarker, "backbone_normalization", None) != "instance":
+                    raise ValueError("All-InstanceNorm TTA requires an InstanceNorm backbone checkpoint.")
+                if getattr(self.model.landmarker, "head_normalization", None) != "instance":
+                    raise ValueError("All-InstanceNorm TTA requires InstanceNorm heads.")
+                if self.model.normalizer.normalization_name != "instance":
+                    raise ValueError("All-InstanceNorm TTA requires an InstanceNorm normalizer.")
+            selected = [module for module in self.model.landmarker.modules()
+                        if isinstance(module, norm_types)]
+            if not selected:
+                raise ValueError("No landmarker normalization layers found for TTA.")
+            return selected
         backbone = getattr(self.model.landmarker, "backbone", None)
         if self.config.adaptation_scope in {
             "normalizer_stem", "normalizer_stem_layer1", "normalizer_layer1_instance"
@@ -610,6 +803,9 @@ class PCAGuidedTTA:
             "adapted_module": ("external_image_normalizer" if self.config.adaptation_scope == "normalizer"
                                else self.config.adaptation_scope),
             "adaptation_scope": self.config.adaptation_scope,
+            "adaptation_unit": ("batch" if self.config.adaptation_scope == "normalizer_all_norms"
+                                else "image"),
+            "episode_batch_sizes": self.episode_batch_sizes,
             "adapted_parameter_names": self.adapted_parameter_names,
             "adapted_parameter_count": sum(p.numel() for p in self.adapted_parameters),
             "landmarker_architecture": (self.model.landmarker.architecture_config()
@@ -1511,6 +1707,14 @@ def _tta_readme(config: PCATTAConfig) -> str:
         "transform, in input-crop pixel coordinates (pixel^2). Gradients flow "
         "through the complete alignment and inverse, including scale."
     )
+    episode = (
+        "One episode uses the entire loader batch. Selected BatchNorm layers use "
+        "batch statistics and update their running buffers during adaptation. "
+        "All parameters, buffers, and optimizer state reset before the next batch."
+        if config.adaptation_scope == "normalizer_all_norms" else
+        "Each image is an independent episode; adapted parameters and optimizer "
+        "state reset before the next image."
+    )
     return f"""# PCA-guided episodic TTA
 
 Adaptation scope: `{config.adaptation_scope}`. The complete normalizer is updated;
@@ -1518,8 +1722,10 @@ Adaptation scope: `{config.adaptation_scope}`. The complete normalizer is update
 `normalizer_heads` updates all task-head parameters, `normalizer_stem` updates
 the stem, `normalizer_stem_layer1` updates the stem, layer1 and its output
 InstanceNorm, and `normalizer_layer1_instance` updates just that new InstanceNorm.
-Other landmarker parameters and the PCA prior remain frozen. All landmarker
-modules stay in eval mode so BatchNorm running statistics remain fixed. The sole optimization objective is PCA reconstruction loss; no
+`normalizer_all_norms` updates all landmarker normalization layers in batches;
+`normalizer_all_instance_norms` updates all landmarker InstanceNorm affine
+parameters, one image at a time. Other landmarker parameters and the PCA prior
+remain frozen. {episode} The sole optimization objective is PCA reconstruction loss; no
 target ground truth, image regularizer, parameter regularizer, or consistency
 loss is used.
 
@@ -1527,7 +1733,7 @@ PCA loss mode: `{config.pca_loss_space}`. {objective}
 Neither the reconstruction nor the transform is detached. No second PCA loss
 or face-size normalization is applied.
 
-- Adaptation steps per image: `{config.steps}`
+- Adaptation steps per episode: `{config.steps}`
 - Adam learning rate: `{config.learning_rate}`
 - Adam weight decay: `{config.weight_decay}`
 - Adam betas: `({config.adam_beta1}, {config.adam_beta2})`
@@ -1535,7 +1741,6 @@ or face-size normalization is applied.
 - LR scheduler: `{config.lr_scheduler}`
 - Minimum learning rate: `{config.min_learning_rate}`
 - Maximum gradient norm: `{config.max_gradient_norm}` (`0` disables clipping)
-- All adapted normalizer/head weights and optimizer state are reset before every image.
 - `trajectories.csv` contains one row per image and adaptation step.
 - `image_summary.csv` contains one row per image.
 - `image_summary.csv` additionally contains before/after GT-valid NME and

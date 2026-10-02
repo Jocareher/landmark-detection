@@ -12,6 +12,9 @@ arguments:
   # HPC --normalization selects the complete variant and overrides all four fields.
   # instance_early: normalizer none + final IN true + layer1 IN true + BN heads.
   # instance_hidden: normalizer instance + final IN false + layer1 IN true + BN heads.
+  # batch_all_norms: batch norm in hidden normalizer blocks, BN backbone + BN heads.
+  # instance_all_norms: instance norm in hidden normalizer blocks, all HRNet
+  #                    BatchNorm replaced with IN, and IN heads.
   # AdaIN source moments are collected only on
   # synbaby72/train; the best checkpoint is recalibrated without augmentations.
   # For every variant, give wandb_run_name a distinct value.
@@ -22,6 +25,7 @@ arguments:
   normalizer_final_instance_norm: true
   layer1_output_instance_norm: true
   head_normalization: batch
+  backbone_normalization: batch
   wandb_run_name: train_instance_early_pca_aligned
 
   # ---------------------------------------------------------------------------
@@ -40,7 +44,9 @@ arguments:
   # Train the complete normalizer, the new post-layer1 InstanceNorm affine
   # parameters, transition3, stage4, and all task heads. Stem/layer1 convolutions
   # and their BatchNorm statistics remain frozen during source training.
-  # Backbone normalization remains BatchNorm regardless of the head variant.
+  # With backbone_normalization: instance, only the BN affine weight/bias from
+  # official pretraining transfer; BN running mean/variance have no IN equivalent.
+  # All backbone IN affine parameters train, even in frozen convolutional stages.
   pretrained_weights: /home/jocareher/Downloads/landmark-detection/weights/HR18-300W.pth
   checkpoint: null
   checkpoint_strict: true
@@ -60,7 +66,7 @@ arguments:
   # instance: InstanceNorm2d with affine parameters and no running statistics.
   # adain: per-instance normalization toward fixed synbaby72 source moments;
   # the scale/bias and moments are saved with the trained checkpoint.
-  # Other normalizer choices: none, group. Other head choice: batch.
+  # Other normalizer choices: none, group, batch. Other head choice: batch.
   # The final zero-initialized convolution preserves the initial identity mapping.
   normalizer_hidden_channels: 16
   normalizer_num_layers: 3

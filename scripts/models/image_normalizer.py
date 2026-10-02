@@ -24,6 +24,8 @@ def _build_normalization(name: str, channels: int) -> nn.Module | None:
         while channels % groups != 0:
             groups -= 1
         return nn.GroupNorm(groups, channels)
+    if name == "batch":
+        return nn.BatchNorm2d(channels, momentum=0.01)
     if name in {"layer", "instance", "adain"}:
         return build_feature_normalization(name, channels)
     raise ValueError(f"Unsupported normalizer normalization: {name}")
