@@ -24,6 +24,8 @@ from .evaluate import (
 )
 from .evaluation_modes import compute_masked_natural_per_landmark_nme
 from .metrics import decode_heatmaps_to_image_coords
+from .evaluation_reporting import clean_metrics, add_distribution_statistics
+from .heatmap_diagnostics import heatmap_image_rows, save_heatmap_diagnostics
 from .postprocessing import (
     apply_homogeneous_transform,
     extract_batched_size,
@@ -144,6 +146,7 @@ def evaluate_natural_checkpoint(
     }
     orientation_sample_counts = {orientation: 0 for orientation in orientation_names}
 
+    heatmap_rows = []
     for batch in tqdm(dataloader, desc="Evaluating", dynamic_ncols=True):
         images = batch["image"].to(device, non_blocking=True)
         metadata_batch = batch["metadata"]
@@ -155,6 +158,7 @@ def evaluate_natural_checkpoint(
             outputs = tta_adapter.adapt_batch(images=images, sample_ids=sample_ids)
 
         with torch.inference_mode():
+            heatmap_rows.extend(heatmap_image_rows(outputs["heatmaps"], sample_ids))
             predicted_landmarks_batch = decode_heatmaps_to_image_coords(
                 heatmaps=outputs["heatmaps"],
                 image_height=images.shape[2],
@@ -300,17 +304,6 @@ def evaluate_natural_checkpoint(
                             )
 
                 (
-                    visible_errors,
-                    visible_point_to_line_errors,
-                    mean_box_nme,
-                    mean_box_nme_point_to_line,
-                ) = compute_visible_only_per_landmark_nme(
-                    predicted_landmarks=predicted_landmarks_original,
-                    target_landmarks=target_landmarks_original,
-                    target_visibility=target_visibility,
-                    predicted_visibility=predicted_visibility,
-                )
-                (
                     gt_valid_errors,
                     gt_valid_point_to_line_errors,
                     mean_box_nme_gt_valid,
@@ -344,17 +337,7 @@ def evaluate_natural_checkpoint(
                     landmarks=target_landmarks_original,
                     visibility=target_visibility,
                 )
-                visible_intersection_mask = gt_valid_mask & (predicted_visibility == 1)
                 normalization_landmarks = target_landmarks_original[gt_valid_mask]
-                (
-                    hausdorff_pixel_visible,
-                    hausdorff_box_visible,
-                ) = compute_normalized_hausdorff_distance(
-                    predicted_landmarks=predicted_landmarks_original,
-                    target_landmarks=target_landmarks_original,
-                    valid_mask=visible_intersection_mask,
-                    normalization_landmarks=normalization_landmarks,
-                )
                 (
                     hausdorff_pixel_gt_valid,
                     hausdorff_box_gt_valid,
@@ -364,6 +347,12 @@ def evaluate_natural_checkpoint(
                     valid_mask=gt_valid_mask,
                     normalization_landmarks=normalization_landmarks,
                 )
+                visible_errors = gt_valid_errors
+                visible_point_to_line_errors = gt_valid_point_to_line_errors
+                mean_box_nme = mean_box_nme_gt_valid
+                mean_box_nme_point_to_line = mean_box_nme_point_to_line_gt_valid
+                hausdorff_pixel_visible = hausdorff_pixel_gt_valid
+                hausdorff_box_visible = hausdorff_box_gt_valid
                 if baseline_landmarks_original is not None:
                     (
                         _,
@@ -416,29 +405,6 @@ def evaluate_natural_checkpoint(
                     ) in visible_point_to_line_errors.items():
                         per_landmark_point_to_line_errors[landmark_index].append(
                             error_value
-                        )
-                    for landmark_index, error_value in visible_errors.items():
-                        per_image_per_landmark_nme.append(
-                            {
-                                "image_id": source_image_name,
-                                "prediction_id": sample_id,
-                                "evaluation_mode": "natural",
-                                "split": "natural",
-                                "orientation": orientation,
-                                "class_idx": class_idx if class_idx >= 0 else None,
-                                "landmark_idx": int(landmark_index),
-                                "point_to_point_nme_box": float(error_value),
-                                "point_to_line_nme_box": float(
-                                    visible_point_to_line_errors[landmark_index]
-                                ),
-                                "evaluation_landmark_inclusion": "visible_intersection",
-                                "gt_visibility": int(target_visibility[landmark_index]),
-                                "pred_visibility": int(
-                                    predicted_visibility[landmark_index]
-                                ),
-                                "landmark_count": int(len(target_visibility)),
-                                "number_of_valid_landmarks": int(len(gt_valid_errors)),
-                            }
                         )
                     for landmark_index, error_value in visible_errors.items():
                         orientation_to_errors[orientation][landmark_index].append(
@@ -519,7 +485,7 @@ def evaluate_natural_checkpoint(
         output_path=output_dir / "per_landmark_nme_point_to_line.csv",
     )
     save_per_image_nme_csv(
-        per_image_nme=per_image_nme,
+        per_image_nme=[clean_metrics(row, "babyland") for row in per_image_nme],
         output_path=output_dir / "per_image_nme.csv",
     )
     save_per_image_per_landmark_nme_csv(
@@ -818,6 +784,13 @@ def evaluate_natural_checkpoint(
         },
     }
 
+    summary = clean_metrics(summary, "babyland")
+    add_distribution_statistics(summary, [clean_metrics(row, "babyland") for row in per_image_nme])
+    poses = {str(row["sample_id"]): row.get("orientation", row.get("yaw_group", "unknown")) for row in per_image_nme}
+    for row in heatmap_rows:
+        row["orientation"] = poses.get(row["sample_id"], "unknown")
+    save_heatmap_diagnostics(heatmap_rows, output_dir, summary)
+    summary["evaluation_protocol"] = "babyland"
     summary = round_metric_value(summary)
 
     save_metrics_summary_csv(

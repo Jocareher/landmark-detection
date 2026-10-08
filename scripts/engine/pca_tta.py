@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .heatmap_diagnostics import heatmap_image_rows, save_tta_heatmap_curves, DEFINITIONS
+
 import csv
 import json
 import math
@@ -267,7 +269,9 @@ class PCAGuidedTTA:
                 with torch.no_grad():
                     normalized = self.model.normalize_images(image)
                     image_change = (normalized - image).abs().mean()
+                diagnostics = heatmap_image_rows(outputs["heatmaps"], [sample_id])[0]
                 row = {
+                    **diagnostics,
                     "sample_id": sample_id,
                     "step": int(step),
                     "pca_reconstruction_loss": float(
@@ -412,6 +416,7 @@ class PCAGuidedTTA:
             source_outputs = {
                 key: value.detach().clone() for key, value in self.model(images).items()
             }
+            source_diagnostics = heatmap_image_rows(source_outputs["heatmaps"], sample_ids)
             source_landmarks = softargmax_heatmaps_to_image_coords(
                 source_outputs["heatmaps"], images.shape[2], images.shape[3]
             )
@@ -465,8 +470,10 @@ class PCAGuidedTTA:
                     landmarks.detach() - source_landmarks, dim=-1
                 )
                 image_change = (normalized.detach() - images).abs().mean(dim=(1, 2, 3))
+                diagnostics = heatmap_image_rows(outputs["heatmaps"], sample_ids)
                 for index, sample_id in enumerate(sample_ids):
                     rows_by_sample[sample_id].append({
+                        **diagnostics[index],
                         "sample_id": sample_id,
                         "step": int(step),
                         "pca_reconstruction_loss": float(sample_losses[index].detach().item()),
@@ -543,6 +550,8 @@ class PCAGuidedTTA:
                     row["failure_message"] = failure_message
                 self.trajectory_rows.extend(rows)
                 summary = _summarize_sample_rows(rows)
+                for metric in ("entropy", "spread"):
+                    summary[f"source_mean_heatmap_{metric}"] = source_diagnostics[index][f"mean_heatmap_{metric}"]
                 self.summary_rows.append(summary)
                 self.summary_by_sample_id[sample_id] = summary
                 if self.processed_samples + index < self.config.probe_count:
@@ -782,6 +791,7 @@ class PCAGuidedTTA:
         _write_rows_csv(summary_path, self.summary_rows)
         aggregate_rows = _aggregate_trajectories(self.trajectory_rows)
         _write_rows_csv(aggregate_path, aggregate_rows)
+        save_tta_heatmap_curves(aggregate_rows, self.output_dir)
         _save_aggregate_plot(
             aggregate_rows,
             self.output_dir / "figures" / "pca_reconstruction_loss_curve.png",
@@ -799,6 +809,7 @@ class PCAGuidedTTA:
             output_dir=self.output_dir,
         )
         summary = {
+            "heatmap_diagnostics": DEFINITIONS,
             "method": "episodic_pca_reconstruction_tta",
             "adapted_module": ("external_image_normalizer" if self.config.adaptation_scope == "normalizer"
                                else self.config.adaptation_scope),
@@ -843,6 +854,7 @@ class PCAGuidedTTA:
             for row in aggregate_rows:
                 self.wandb.log(
                     {
+                        **{f"tta/{key}": value for key, value in row.items() if key.startswith("heatmap_")},
                         "tta/step": int(row["step"]),
                         "tta/pca_loss_mean": float(row["mean"]),
                         "tta/pca_loss_median": float(row["median"]),
@@ -851,9 +863,9 @@ class PCAGuidedTTA:
                     }
                 )
             if self.summary_rows:
-                columns = list(self.summary_rows[0].keys())
+                columns = list(dict.fromkeys(key for row in self.summary_rows for key in row))
                 data = [
-                    [row[column] for column in columns] for row in self.summary_rows
+                    [row.get(column) for column in columns] for row in self.summary_rows
                 ]
                 self.wandb.log(
                     {"tta/image_summary": self.wandb.Table(columns=columns, data=data)}
@@ -908,7 +920,14 @@ def _summarize_sample_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     relative_reduction = math.nan
     if math.isfinite(initial_loss) and abs(initial_loss) > 1e-12:
         relative_reduction = (initial_loss - final_loss) / initial_loss
+    diagnostic_summary = {}
+    for metric in ("entropy", "spread"):
+        key = f"mean_heatmap_{metric}"
+        initial_value = float(initial.get(key, math.nan))
+        final_value = float(final.get(key, math.nan))
+        diagnostic_summary.update({f"initial_{key}": initial_value, f"final_{key}": final_value, f"delta_{key}": final_value - initial_value})
     return {
+        **diagnostic_summary,
         "sample_id": initial["sample_id"],
         "initial_pca_reconstruction_loss": initial_loss,
         "final_pca_reconstruction_loss": final_loss,
@@ -988,6 +1007,13 @@ def _aggregate_trajectories(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "max_drift_p90_px": float(np.percentile(max_drifts, 90)),
             }
         )
+    for row in aggregate:
+        for metric in ("entropy", "spread"):
+            values = np.asarray([item.get(f"mean_heatmap_{metric}", math.nan) for item in by_step[row["step"]]], dtype=float)
+            values = values[np.isfinite(values)]
+            prefix = f"heatmap_{metric}"
+            for stat, function in (("mean", np.mean), ("std", np.std), ("median", np.median), ("p10", lambda x: np.percentile(x, 10)), ("p90", lambda x: np.percentile(x, 90))):
+                row[f"{prefix}_{stat}"] = float(function(values)) if values.size else math.nan
     return aggregate
 
 
@@ -997,7 +1023,7 @@ def _write_rows_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         path.write_text("", encoding="utf-8")
         return
     with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(handle, fieldnames=list(dict.fromkeys(key for row in rows for key in row)))
         writer.writeheader()
         writer.writerows(rows)
 
@@ -1279,6 +1305,9 @@ def _save_evaluation_analysis(
         "num_improved": int((delta < 0.0).sum()),
         "num_worsened": int((delta > 0.0).sum()),
         "num_unchanged": int((delta == 0.0).sum()),
+        "std_initial_nme_box_gt_valid": float(initial.std()),
+        "std_final_nme_box_gt_valid": float(final.std()),
+        "std_delta_nme_box_gt_valid": float(delta.std()),
         "mean_initial_nme_box_gt_valid": float(initial.mean()),
         "mean_final_nme_box_gt_valid": float(final.mean()),
         "mean_delta_nme_box_gt_valid": float(delta.mean()),
@@ -1287,6 +1316,10 @@ def _save_evaluation_analysis(
         "orientation_summary_csv": str(orientation_csv),
         "ground_truth_usage": "post_hoc_analysis_only_not_adaptation",
     }
+    for stage in ("initial", "final"):
+        values = np.asarray([row.get(f"{stage}_hausdorff_box_gt_valid", math.nan) for row in valid], dtype=float)
+        values = values[np.isfinite(values)]
+        analysis[f"std_{stage}_hausdorff_box_gt_valid"] = float(values.std()) if values.size else None
     analysis_path = output_dir / "evaluation_analysis.json"
     analysis_path.write_text(json.dumps(analysis, indent=2), encoding="utf-8")
     analysis["analysis_json"] = str(analysis_path)
@@ -1315,6 +1348,9 @@ def _summarize_evaluation_by_orientation(
             {
                 "orientation": orientation,
                 "count": int(len(current)),
+                "std_nme_before": float(initial.std()),
+                "std_nme_after": float(final.std()),
+                "std_nme_delta": float(delta.std()),
                 "mean_nme_before": float(initial.mean()),
                 "mean_nme_after": float(final.mean()),
                 "mean_nme_delta": float(delta.mean()),
@@ -1326,6 +1362,13 @@ def _summarize_evaluation_by_orientation(
                 "improvement_rate": float((delta < 0.0).mean()),
             }
         )
+    for row in result:
+        current = grouped[row["orientation"]]
+        for stage in ("initial", "final"):
+            values = np.asarray([item.get(f"{stage}_hausdorff_box_gt_valid", math.nan) for item in current], dtype=float)
+            values = values[np.isfinite(values)]
+            row[f"mean_hausdorff_{stage}"] = float(values.mean()) if values.size else math.nan
+            row[f"std_hausdorff_{stage}"] = float(values.std()) if values.size else math.nan
     return result
 
 

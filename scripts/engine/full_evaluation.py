@@ -195,6 +195,9 @@ def print_evaluation_summary(
             continue
         if key in summary:
             print(f"[INFO]   {label}: {_format_metric(summary[key])}")
+    for key in ("std_nme_box", "std_nme_box_gt_valid", "std_hausdorff_box", "std_hausdorff_box_gt_valid", "mean_heatmap_entropy", "mean_heatmap_spread"):
+        if summary.get(key) is not None:
+            print(f"[INFO]   {key}: {_format_metric(summary[key])}")
     _print_visibility_summary(summary, dataset_name)
     if summary.get("prediction_labels_dir") is not None:
         print(f"[INFO]   prediction labels: {summary['prediction_labels_dir']}")
@@ -363,7 +366,7 @@ def evaluate_infanface(
         tta_adapter=tta_adapter,
     )
     inference_summary_for_return = {
-        key: value for key, value in inference_summary.items() if key != "predictions"
+        key: value for key, value in inference_summary.items() if key not in {"predictions", "heatmap_rows"}
     }
     print(
         "[INFO] InfAnFace reprojected prediction labels saved: "
@@ -374,6 +377,7 @@ def evaluate_infanface(
     benchmark_summary = benchmark_infantface_prediction_directory(
         gt_root=gt_root,
         prediction_root=inference_summary_for_return["prediction_labels_dir"],
+        heatmap_rows=inference_summary.get("heatmap_rows"),
         output_dir=output_dir,
         use_landmark_names_in_boxplot=config.use_landmark_names_in_boxplot,
         fixed_log_y_limits=(1e-3, 1.0),

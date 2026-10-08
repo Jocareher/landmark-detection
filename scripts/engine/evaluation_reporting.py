@@ -11,6 +11,7 @@ REPORT_CATEGORIES = (
     "Coverage",
     "NME",
     "Hausdorff",
+    "Heatmaps",
     "Orientation",
     "Visibility",
     "Setup",
@@ -59,6 +60,8 @@ def collect_official_metric_rows(
                 continue
             if metric_name in coverage_keys:
                 category = "Coverage"
+            elif "heatmap" in metric_name.lower():
+                category = "Heatmaps"
             elif "hausdorff" in metric_name.lower():
                 category = "Hausdorff"
             elif "nme" in metric_name.lower():
@@ -103,6 +106,7 @@ def collect_official_metric_rows(
                     if (
                         "nme" not in metric_name.lower()
                         and "hausdorff" not in metric_name.lower()
+                        and "heatmap" not in metric_name.lower()
                     ):
                         continue
                     rows.append(
@@ -227,3 +231,82 @@ def _write_rows_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+
+
+def clean_metrics(data: dict[str, Any], protocol: str) -> dict[str, Any]:
+    """Keep the dataset's official geometry protocol; preserve classification metrics."""
+    result = {}
+    for key, value in data.items():
+        lower = key.lower()
+        if protocol in {"synbaby", "babyland"} and "non_contour" in lower:
+            continue
+        if protocol == "synbaby" and "gt_valid" in lower:
+            continue
+        if protocol == "babyland":
+            if "visible_intersection" in lower or "interocular" in lower:
+                continue
+            if ("nme" in lower or "hausdorff" in lower) and "gt_valid" not in lower and not isinstance(value, dict):
+                continue
+            if key in {"num_visible_visible_landmarks", "num_samples_with_geometric_metrics"}:
+                continue
+        result[key] = clean_metrics(value, protocol) if isinstance(value, dict) else value
+    return result
+
+
+def add_distribution_statistics(summary: dict[str, Any], rows: list[dict[str, Any]]) -> None:
+    """Population std of finite per-image errors (ddof=0), globally and by pose."""
+    metric_keys = sorted({key for row in rows for key in row if key.startswith("mean_nme_") or key.startswith("hausdorff_box")})
+    def add(target, selected):
+        for key in metric_keys:
+            values = np.asarray([row[key] for row in selected if row.get(key) is not None], dtype=float)
+            values = values[np.isfinite(values)]
+            name = key.removeprefix("mean_")
+            target[f"std_{name}"] = float(values.std()) if values.size else None
+    add(summary, rows)
+    orientations = summary.get("orientation_metrics", {})
+    for pose, metrics in orientations.items():
+        add(metrics, [row for row in rows if row.get("orientation") == pose])
+    summary["std_definition"] = "population standard deviation across finite per-image errors; ddof=0"
+
+
+def write_dataset_metric_summary(path: Path, summary: dict[str, Any]) -> None:
+    """Ordered sections, populated fields only, with a separate pose comparison table."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sections = {"Coverage": [], "NME": [], "Hausdorff": [], "Heatmaps": [], "Visibility": [], "Orientation": [], "Setup": []}
+    def section(key):
+        if "heatmap" in key: return "Heatmaps"
+        if "nme" in key: return "NME"
+        if "hausdorff" in key: return "Hausdorff"
+        if key.startswith(("num_", "images_", "total_")) or "landmarks_used" in key or key == "detection_rate": return "Coverage"
+        if key.startswith("visibility"): return "Visibility"
+        return "Setup"
+    def visit(data, prefix="", override=None):
+        for key, value in data.items():
+            if value is None: continue
+            full = f"{prefix}{key}"
+            category = override or section(key)
+            if isinstance(value, dict):
+                nested_category = "Orientation" if key in {"orientation_metrics", "yaw_metrics"} else category
+                if key in {"orientation_metrics", "yaw_metrics"}:
+                    for pose, metrics in value.items():
+                        for name, scalar in metrics.items():
+                            if scalar is not None and not isinstance(scalar, (dict, list, tuple)):
+                                sections["Orientation"].append({"section": "Orientation", "metric": f"{name}_{pose}", "value": f"{scalar:.4f}" if isinstance(scalar, float) else scalar})
+                else:
+                    visit(value, full + "_", nested_category)
+            elif not isinstance(value, (list, tuple)):
+                sections[category].append({"section": category, "metric": full, "value": f"{value:.4f}" if isinstance(value, float) else value})
+    visit(summary)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["section", "metric", "value"])
+        writer.writeheader()
+        for rows in sections.values():
+            writer.writerows(rows)
+    poses = summary.get("orientation_metrics", {})
+    if poses:
+        fields = list(dict.fromkeys(key for metrics in poses.values() for key, value in metrics.items() if value is not None and not isinstance(value, (dict, list, tuple))))
+        with (path.parent / "metrics_by_orientation.csv").open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["orientation", *fields])
+            writer.writeheader()
+            for pose, metrics in poses.items():
+                writer.writerow({"orientation": pose, **{key: metrics.get(key) for key in fields}})

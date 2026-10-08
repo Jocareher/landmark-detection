@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .heatmap_diagnostics import heatmap_image_rows
+
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +100,7 @@ def export_inference_outputs(
 
     all_predictions: list[torch.Tensor] = []
     saved_samples = 0
+    heatmap_rows = []
 
     for batch in tqdm(dataloader, desc="Inferring", dynamic_ncols=True):
         images = batch["image"].to(device, non_blocking=True)
@@ -110,6 +113,7 @@ def export_inference_outputs(
             outputs = tta_adapter.adapt_batch(images=images, sample_ids=sample_ids)
 
         with torch.inference_mode():
+            heatmap_rows.extend(heatmap_image_rows(outputs["heatmaps"], sample_ids))
             predicted_landmarks_batch = decode_heatmaps_to_image_coords(
                 heatmaps=outputs["heatmaps"],
                 image_height=images.shape[2],
@@ -224,6 +228,7 @@ def export_inference_outputs(
     )
     return {
         "num_samples": saved_samples,
+        "heatmap_rows": heatmap_rows,
         "predictions": predictions,
         "predictions_dir": str(predictions_dir),
         "prediction_labels_dir": str(prediction_labels_dir),

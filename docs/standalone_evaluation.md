@@ -165,3 +165,59 @@ predicted shape size can reduce the image-space residual without improving
 relative shape; evaluate landmark accuracy as well as reconstruction loss.
 The existing handling of degenerate alignment is retained: training raises an
 alignment error; TTA restores source weights and returns the baseline prediction.
+
+## Dataset-specific reports and heatmap diagnostics
+
+Training final evaluation and standalone/TTA evaluation share these reports:
+
+- **SynBaby:** all annotated landmarks, regardless of visibility. Box-normalized
+  NME/HD use their ordinary names; duplicate `*_gt_valid` and `non_contour`
+  entries are omitted.
+- **BabyLand:** geometry uses `*_gt_valid` exclusively. Predicted visibility does
+  not select landmarks. No visible-intersection, non-contour or interocular
+  geometric entries are exported. The visibility classifier report is retained.
+- **InfAnFace:** its existing full-face and non-contour protocols are retained.
+
+`metrics_summary.csv` retains `metric,value` and adds a `section` column to group
+coverage, NME, Hausdorff, heatmaps, visibility, orientations and setup. Unavailable
+scalar entries are omitted. `metrics_by_orientation.csv` has one row per pose.
+`summary.json` contains the same protocol and global/per-pose statistics.
+
+For BabyLand and InfAnFace, `std_*` is the **population standard deviation across
+finite per-image errors** (`ddof=0`). It is computed globally and within each pose,
+using each metric's valid images. One image gives std=0; no valid images gives
+null. It is not the standard deviation across pooled individual landmarks.
+Geometric values remain fractions, so multiply NME/HD and their std by 100 when
+presenting percentages. SynBaby also gets image-level global std.
+
+Heatmap entropy and spread are diagnostics, with fixed spatial softmax
+**temperature 1**, averaged over **all output landmark heatmaps** without a GT or
+predicted-visibility mask. They do not change the training or TTA loss:
+
+- Entropy: `-sum(p * log(p)) / log(H * W)`.
+- Spread: `2 * (Var(x) + Var(y))`, with `x=v/(W-1)` and `y=u/(H-1)`.
+
+Both are bounded by [0,1]. Spread measures spatial variance within each heatmap;
+it is not prediction variance across augmentations. Exported errors are still
+calculated after the existing coordinate reprojection; heatmap diagnostics use
+the heatmap grid before decoding/reprojection.
+
+Each evaluated dataset writes `heatmaps/per_image.csv`, `heatmaps/summary.json`,
+`figures/heatmaps/distributions.png` and `figures/heatmaps/by_orientation.png`.
+InfAnFace heatmaps are matched to evaluated prediction IDs to obtain GT poses.
+Heatmap means/std also appear in the main global and pose reports.
+
+Training records both diagnostics in train/val `results.csv`, checkpoint metrics,
+history and W&B, and writes `figures/heatmaps/training_curves.png` when training
+finishes. TTA records each image at each step in `trajectories.csv`, initial/final
+values and deltas in `image_summary.csv`, and mean/std/median/10th/90th percentiles
+in `aggregate_curves.csv`. Its curve is saved at
+`figures/heatmaps/adaptation_curves.png`, with the same [0,1] scale.
+In batch episodes, `source_mean_heatmap_*` comes from the frozen source model in
+eval mode; `initial_mean_heatmap_*` is adaptation step 0, which can differ when
+BN switches to current-batch statistics. Final dataset diagnostics describe the
+returned adapted predictions, before model restoration affects the next episode.
+
+These outputs apply automatically to new local/HPC runs; existing result files
+are not rewritten. A training CSV reused with the older header gains the two
+new columns, leaving previous rows blank for those measurements.

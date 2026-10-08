@@ -11,6 +11,8 @@ from tqdm import tqdm
 
 from .geometry_metrics import compute_per_landmark_point_to_line_distances
 from .metrics import decode_heatmaps_to_image_coords
+from .evaluation_reporting import clean_metrics, add_distribution_statistics
+from .heatmap_diagnostics import heatmap_image_rows, save_heatmap_diagnostics
 from .postprocessing import extract_batched_size, project_landmarks_to_original_size
 from ..utils.predictions import save_prediction_file
 from ..utils.visualization import (
@@ -361,271 +363,9 @@ def format_metric_value(value: Any, decimals: int = 4) -> Any:
     return value
 
 
-def save_metrics_summary_csv(
-    output_path: Path,
-    summary: dict[str, Any],
-) -> None:
-    """
-    Save a unified evaluation summary CSV.
-
-    Parameters
-    ----------
-    output_path : Path
-        Destination CSV path.
-    summary : dict[str, Any]
-        Evaluation summary dictionary.
-    """
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    has_explicit_visible_intersection = (
-        "mean_nme_box_visible_intersection" in summary
-        or "mean_nme_box_point_to_line_visible_intersection" in summary
-    )
-
-    rows: list[tuple[str, Any]] = [
-        ("num_samples", summary.get("num_samples")),
-        (
-            "num_samples_with_geometric_metrics",
-            summary.get("num_samples_with_geometric_metrics"),
-        ),
-        (
-            "num_visible_visible_landmarks",
-            summary.get("num_visible_visible_landmarks"),
-        ),
-        ("num_landmarks", summary.get("num_landmarks")),
-    ]
-    if has_explicit_visible_intersection:
-        rows.extend(
-            [
-                (
-                    "mean_nme_box_visible_intersection",
-                    summary.get("mean_nme_box_visible_intersection"),
-                ),
-                (
-                    "median_nme_box_visible_intersection",
-                    summary.get("median_nme_box_visible_intersection"),
-                ),
-                (
-                    "mean_nme_box_point_to_line_visible_intersection",
-                    summary.get("mean_nme_box_point_to_line_visible_intersection"),
-                ),
-                (
-                    "median_nme_box_point_to_line_visible_intersection",
-                    summary.get("median_nme_box_point_to_line_visible_intersection"),
-                ),
-                (
-                    "mean_hausdorff_box_visible_intersection",
-                    summary.get("mean_hausdorff_box_visible_intersection"),
-                ),
-                (
-                    "median_hausdorff_box_visible_intersection",
-                    summary.get("median_hausdorff_box_visible_intersection"),
-                ),
-                (
-                    "p90_hausdorff_box_visible_intersection",
-                    summary.get("p90_hausdorff_box_visible_intersection"),
-                ),
-                (
-                    "p95_hausdorff_box_visible_intersection",
-                    summary.get("p95_hausdorff_box_visible_intersection"),
-                ),
-                (
-                    "p99_hausdorff_box_visible_intersection",
-                    summary.get("p99_hausdorff_box_visible_intersection"),
-                ),
-            ]
-        )
-    else:
-        rows.extend(
-            [
-                ("mean_nme_box", summary.get("mean_nme_box")),
-                ("median_nme_box", summary.get("median_nme_box")),
-                (
-                    "mean_nme_box_point_to_line",
-                    summary.get("mean_nme_box_point_to_line"),
-                ),
-                (
-                    "median_nme_box_point_to_line",
-                    summary.get("median_nme_box_point_to_line"),
-                ),
-                ("mean_hausdorff_box", summary.get("mean_hausdorff_box")),
-                ("median_hausdorff_box", summary.get("median_hausdorff_box")),
-                ("p90_hausdorff_box", summary.get("p90_hausdorff_box")),
-                ("p95_hausdorff_box", summary.get("p95_hausdorff_box")),
-                ("p99_hausdorff_box", summary.get("p99_hausdorff_box")),
-            ]
-        )
-    rows.extend(
-        [
-            ("mean_nme_box_gt_valid", summary.get("mean_nme_box_gt_valid")),
-            ("median_nme_box_gt_valid", summary.get("median_nme_box_gt_valid")),
-            (
-                "mean_nme_box_point_to_line_gt_valid",
-                summary.get("mean_nme_box_point_to_line_gt_valid"),
-            ),
-            (
-                "median_nme_box_point_to_line_gt_valid",
-                summary.get("median_nme_box_point_to_line_gt_valid"),
-            ),
-            (
-                "mean_hausdorff_box_gt_valid",
-                summary.get("mean_hausdorff_box_gt_valid"),
-            ),
-            (
-                "median_hausdorff_box_gt_valid",
-                summary.get("median_hausdorff_box_gt_valid"),
-            ),
-            (
-                "p90_hausdorff_box_gt_valid",
-                summary.get("p90_hausdorff_box_gt_valid"),
-            ),
-            (
-                "p95_hausdorff_box_gt_valid",
-                summary.get("p95_hausdorff_box_gt_valid"),
-            ),
-            (
-                "p99_hausdorff_box_gt_valid",
-                summary.get("p99_hausdorff_box_gt_valid"),
-            ),
-            (
-                "mean_hausdorff_box_non_contour",
-                summary.get("mean_hausdorff_box_non_contour"),
-            ),
-            (
-                "median_hausdorff_box_non_contour",
-                summary.get("median_hausdorff_box_non_contour"),
-            ),
-            (
-                "p90_hausdorff_box_non_contour",
-                summary.get("p90_hausdorff_box_non_contour"),
-            ),
-            (
-                "p95_hausdorff_box_non_contour",
-                summary.get("p95_hausdorff_box_non_contour"),
-            ),
-            (
-                "p99_hausdorff_box_non_contour",
-                summary.get("p99_hausdorff_box_non_contour"),
-            ),
-            ("mean_nme_interocular", summary.get("mean_nme_interocular")),
-            ("landmark_loss", summary.get("landmark_loss")),
-            ("coordinate_decoder", summary.get("coordinate_decoder")),
-            (
-                "visibility_global_precision",
-                summary.get("visibility_metrics", {})
-                .get("global", {})
-                .get("precision"),
-            ),
-            (
-                "visibility_global_recall",
-                summary.get("visibility_metrics", {}).get("global", {}).get("recall"),
-            ),
-            (
-                "visibility_global_f1",
-                summary.get("visibility_metrics", {}).get("global", {}).get("f1"),
-            ),
-            (
-                "visibility_visible_precision",
-                summary.get("visibility_metrics", {})
-                .get("visible", {})
-                .get("precision"),
-            ),
-            (
-                "visibility_visible_recall",
-                summary.get("visibility_metrics", {}).get("visible", {}).get("recall"),
-            ),
-            (
-                "visibility_visible_f1",
-                summary.get("visibility_metrics", {}).get("visible", {}).get("f1"),
-            ),
-            (
-                "visibility_invisible_precision",
-                summary.get("visibility_metrics", {})
-                .get("invisible", {})
-                .get("precision"),
-            ),
-            (
-                "visibility_invisible_recall",
-                summary.get("visibility_metrics", {})
-                .get("invisible", {})
-                .get("recall"),
-            ),
-            (
-                "visibility_invisible_f1",
-                summary.get("visibility_metrics", {}).get("invisible", {}).get("f1"),
-            ),
-            ("visibility_threshold", summary.get("visibility_threshold")),
-        ]
-    )
-
-    confusion_matrix_raw = summary.get("confusion_matrix_raw")
-    confusion_matrix_normalized = summary.get("confusion_matrix_normalized")
-
-    if confusion_matrix_raw is not None:
-        rows.extend(
-            [
-                ("cm_raw_tn_invisible_invisible", confusion_matrix_raw[0][0]),
-                ("cm_raw_fp_invisible_visible", confusion_matrix_raw[0][1]),
-                ("cm_raw_fn_visible_invisible", confusion_matrix_raw[1][0]),
-                ("cm_raw_tp_visible_visible", confusion_matrix_raw[1][1]),
-            ]
-        )
-
-    if confusion_matrix_normalized is not None:
-        rows.extend(
-            [
-                ("cm_norm_tn_invisible_invisible", confusion_matrix_normalized[0][0]),
-                ("cm_norm_fp_invisible_visible", confusion_matrix_normalized[0][1]),
-                ("cm_norm_fn_visible_invisible", confusion_matrix_normalized[1][0]),
-                ("cm_norm_tp_visible_visible", confusion_matrix_normalized[1][1]),
-            ]
-        )
-
-    yaw_sample_counts = summary.get("yaw_sample_counts")
-    if yaw_sample_counts is not None:
-        for yaw_key, count in yaw_sample_counts.items():
-            rows.append((f"samples_{yaw_key}", count))
-
-    yaw_metrics = summary.get("yaw_metrics")
-    if yaw_metrics is not None:
-        for yaw_key, metrics in yaw_metrics.items():
-            rows.append((f"mean_nme_box_{yaw_key}", metrics.get("mean_nme_box")))
-            rows.append(
-                (
-                    f"mean_nme_box_point_to_line_{yaw_key}",
-                    metrics.get("mean_nme_box_point_to_line"),
-                )
-            )
-            rows.append(
-                (
-                    f"mean_nme_interocular_{yaw_key}",
-                    metrics.get("mean_nme_interocular"),
-                )
-            )
-
-    orientation_sample_counts = summary.get("orientation_sample_counts")
-    if orientation_sample_counts is not None:
-        for orientation_name, count in orientation_sample_counts.items():
-            rows.append((f"samples_{orientation_name}", count))
-
-    orientation_metrics = summary.get("orientation_metrics")
-    if orientation_metrics is not None:
-        for orientation_name, metrics in orientation_metrics.items():
-            for metric_name, metric_value in metrics.items():
-                if isinstance(metric_value, (dict, list, tuple)):
-                    continue
-                rows.append((f"{metric_name}_{orientation_name}", metric_value))
-
-    with output_path.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow(["metric", "value"])
-        for metric_name, metric_value in rows:
-            writer.writerow(
-                [
-                    metric_name,
-                    format_metric_value(round_metric_value(metric_value)),
-                ]
-            )
+def save_metrics_summary_csv(output_path: Path, summary: dict[str, Any]) -> None:
+    from .evaluation_reporting import write_dataset_metric_summary
+    write_dataset_metric_summary(output_path, summary)
 
 
 def save_per_landmark_nme_csv(
@@ -661,221 +401,14 @@ def save_per_landmark_nme_csv(
                 )
 
 
-def save_per_image_nme_csv(
-    per_image_nme: list[dict[str, Any]],
-    output_path: Path,
-) -> None:
-    """
-    Save mean NME per image to CSV.
-
-    Parameters
-    ----------
-    per_image_nme : list[dict[str, Any]]
-        Per-image NME metrics.
-    output_path : Path
-        Destination CSV path.
-    """
+def save_per_image_nme_csv(per_image_nme: list[dict[str, Any]], output_path: Path) -> None:
+    """Export only supplied metrics, retaining full numerical precision."""
     output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    with output_path.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow(
-            [
-                "sample_id",
-                "orientation",
-                "yaw_angle",
-                "yaw_group",
-                "number_of_valid_landmarks",
-                "mean_nme_box",
-                "mean_nme_box_point_to_line",
-                "hausdorff_pixel",
-                "hausdorff_box",
-                "hausdorff_pixel_visible_intersection",
-                "hausdorff_box_visible_intersection",
-                "mean_nme_box_gt_valid",
-                "mean_nme_box_point_to_line_gt_valid",
-                "hausdorff_pixel_gt_valid",
-                "hausdorff_box_gt_valid",
-                "tta_initial_nme_box_gt_valid",
-                "tta_delta_nme_box_gt_valid",
-                "tta_initial_hausdorff_box_gt_valid",
-                "tta_delta_hausdorff_box_gt_valid",
-                "mean_nme_box_non_contour",
-                "mean_nme_box_point_to_line_non_contour",
-                "hausdorff_pixel_non_contour",
-                "hausdorff_box_non_contour",
-                "mean_nme_interocular",
-            ]
-        )
-        for row in per_image_nme:
-            writer.writerow(
-                [
-                    row["sample_id"],
-                    row.get("orientation"),
-                    row.get("yaw_angle"),
-                    row.get("yaw_group"),
-                    row.get("number_of_valid_landmarks"),
-                    (
-                        format_metric_value(
-                            round_metric_value(float(row["mean_nme_box"]))
-                        )
-                        if row["mean_nme_box"] is not None
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(float(row["mean_nme_box_point_to_line"]))
-                        )
-                        if row.get("mean_nme_box_point_to_line") is not None
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(float(row["hausdorff_pixel"]))
-                        )
-                        if row.get("hausdorff_pixel") is not None
-                        and np.isfinite(row.get("hausdorff_pixel"))
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(float(row["hausdorff_box"]))
-                        )
-                        if row.get("hausdorff_box") is not None
-                        and np.isfinite(row.get("hausdorff_box"))
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(
-                                float(row["hausdorff_pixel_visible_intersection"])
-                            )
-                        )
-                        if row.get("hausdorff_pixel_visible_intersection") is not None
-                        and np.isfinite(row.get("hausdorff_pixel_visible_intersection"))
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(
-                                float(row["hausdorff_box_visible_intersection"])
-                            )
-                        )
-                        if row.get("hausdorff_box_visible_intersection") is not None
-                        and np.isfinite(row.get("hausdorff_box_visible_intersection"))
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(float(row["mean_nme_box_gt_valid"]))
-                        )
-                        if row.get("mean_nme_box_gt_valid") is not None
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(
-                                float(row["mean_nme_box_point_to_line_gt_valid"])
-                            )
-                        )
-                        if row.get("mean_nme_box_point_to_line_gt_valid") is not None
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(float(row["hausdorff_pixel_gt_valid"]))
-                        )
-                        if row.get("hausdorff_pixel_gt_valid") is not None
-                        and np.isfinite(row.get("hausdorff_pixel_gt_valid"))
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(float(row["hausdorff_box_gt_valid"]))
-                        )
-                        if row.get("hausdorff_box_gt_valid") is not None
-                        and np.isfinite(row.get("hausdorff_box_gt_valid"))
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(
-                                float(row["tta_initial_nme_box_gt_valid"])
-                            )
-                        )
-                        if row.get("tta_initial_nme_box_gt_valid") is not None
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(float(row["tta_delta_nme_box_gt_valid"]))
-                        )
-                        if row.get("tta_delta_nme_box_gt_valid") is not None
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(
-                                float(row["tta_initial_hausdorff_box_gt_valid"])
-                            )
-                        )
-                        if row.get("tta_initial_hausdorff_box_gt_valid") is not None
-                        and np.isfinite(row.get("tta_initial_hausdorff_box_gt_valid"))
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(
-                                float(row["tta_delta_hausdorff_box_gt_valid"])
-                            )
-                        )
-                        if row.get("tta_delta_hausdorff_box_gt_valid") is not None
-                        and np.isfinite(row.get("tta_delta_hausdorff_box_gt_valid"))
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(float(row["mean_nme_box_non_contour"]))
-                        )
-                        if row.get("mean_nme_box_non_contour") is not None
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(
-                                float(row["mean_nme_box_point_to_line_non_contour"])
-                            )
-                        )
-                        if row.get("mean_nme_box_point_to_line_non_contour") is not None
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(
-                                float(row["hausdorff_pixel_non_contour"])
-                            )
-                        )
-                        if row.get("hausdorff_pixel_non_contour") is not None
-                        and np.isfinite(row.get("hausdorff_pixel_non_contour"))
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(float(row["hausdorff_box_non_contour"]))
-                        )
-                        if row.get("hausdorff_box_non_contour") is not None
-                        and np.isfinite(row.get("hausdorff_box_non_contour"))
-                        else None
-                    ),
-                    (
-                        format_metric_value(
-                            round_metric_value(float(row["mean_nme_interocular"]))
-                        )
-                        if row["mean_nme_interocular"] is not None
-                        else None
-                    ),
-                ]
-            )
+    fields = list(dict.fromkeys(key for row in per_image_nme for key in row))
+    with output_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        writer.writerows(per_image_nme)
 
 
 def save_per_image_per_landmark_nme_csv(
@@ -1099,11 +632,13 @@ def evaluate_checkpoint(
 
     yaw_sample_counts: dict[str, int] = {}
 
+    heatmap_rows = []
     with torch.inference_mode():
         for batch in tqdm(dataloader, desc="Evaluating", dynamic_ncols=True):
             images = batch["image"].to(device, non_blocking=True)
             outputs = model(images)
 
+            heatmap_rows.extend(heatmap_image_rows(outputs["heatmaps"], batch["metadata"]["sample_id"]))
             predicted_landmarks_batch = decode_heatmaps_to_image_coords(
                 heatmaps=outputs["heatmaps"],
                 image_height=images.shape[2],
@@ -1306,7 +841,7 @@ def evaluate_checkpoint(
         output_path=output_dir / "per_landmark_nme_point_to_line.csv",
     )
     save_per_image_nme_csv(
-        per_image_nme=per_image_nme,
+        per_image_nme=[clean_metrics(row, "synbaby") for row in per_image_nme],
         output_path=output_dir / "per_image_nme.csv",
     )
     save_per_image_per_landmark_nme_csv(
@@ -1470,29 +1005,7 @@ def evaluate_checkpoint(
             if global_interocular_nme_values
             else None
         ),
-        "mean_nme_box_gt_valid": float(
-            np.mean([row["mean_nme_box_gt_valid"] for row in per_image_nme])
-        ),
-        "median_nme_box_gt_valid": float(
-            np.median([row["mean_nme_box_gt_valid"] for row in per_image_nme])
-        ),
-        "mean_nme_box_point_to_line_gt_valid": float(
-            np.mean(
-                [row["mean_nme_box_point_to_line_gt_valid"] for row in per_image_nme]
-            )
-        ),
-        "median_nme_box_point_to_line_gt_valid": float(
-            np.median(
-                [row["mean_nme_box_point_to_line_gt_valid"] for row in per_image_nme]
-            )
-        ),
-        **summarize_metric_distribution(
-            "hausdorff_box_gt_valid", image_hausdorff_values
-        ),
-        "evaluation_modes": {
-            "visible_intersection": "not applicable for synthetic final evaluation unless visibility masks are used",
-            "gt_valid": "all finite GT landmarks",
-        },
+        "evaluation_landmark_inclusion": "all landmarks, regardless of visibility",
         "visibility_metrics": visibility_metrics,
         "visibility_threshold": float(visibility_threshold),
         "landmark_loss": landmark_loss,
@@ -1532,6 +1045,13 @@ def evaluate_checkpoint(
         },
     }
 
+    summary = clean_metrics(summary, "synbaby")
+    add_distribution_statistics(summary, [clean_metrics(row, "synbaby") for row in per_image_nme])
+    poses = {str(row["sample_id"]): row.get("orientation", row.get("yaw_group", "unknown")) for row in per_image_nme}
+    for row in heatmap_rows:
+        row["orientation"] = poses.get(row["sample_id"], "unknown")
+    save_heatmap_diagnostics(heatmap_rows, output_dir, summary)
+    summary["evaluation_protocol"] = "synbaby"
     summary = round_metric_value(summary)
 
     save_metrics_summary_csv(

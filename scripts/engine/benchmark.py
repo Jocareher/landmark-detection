@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from .evaluation_reporting import clean_metrics, add_distribution_statistics
+from .heatmap_diagnostics import save_heatmap_diagnostics
+
 import csv
 import json
 import re
@@ -460,94 +463,8 @@ def prefixed_summary(prefix: str, values: list[float]) -> dict[str, float | None
 
 
 def save_benchmark_summary_csv(output_path: Path, summary: dict[str, Any]) -> None:
-    """Save the benchmark summary as a simple key-value CSV."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    rows = [
-        ("model_name", summary.get("model_name")),
-        ("prediction_root", summary.get("prediction_root")),
-        ("prediction_labels_dir", summary.get("prediction_labels_dir")),
-        ("model_landmark_format", summary.get("model_landmark_format")),
-        ("evaluated_landmark_count", summary.get("evaluated_landmark_count")),
-        ("total_images", summary.get("total_images")),
-        ("images_with_prediction", summary.get("images_with_prediction")),
-        ("images_without_prediction", summary.get("images_without_prediction")),
-        (
-            "images_with_invalid_prediction",
-            summary.get("images_with_invalid_prediction"),
-        ),
-        (
-            "unmatched_prediction_files_count",
-            summary.get("unmatched_prediction_files_count"),
-        ),
-        ("detection_rate", summary.get("detection_rate")),
-        ("valid_landmarks_used", summary.get("valid_landmarks_used")),
-        (
-            "valid_non_contour_landmarks_used",
-            summary.get("valid_non_contour_landmarks_used"),
-        ),
-    ]
-    metric_keys = [
-        "mean_nme_box",
-        "median_nme_box",
-        "mean_nme_box_point_to_line",
-        "median_nme_box_point_to_line",
-        "mean_hausdorff_box",
-        "median_hausdorff_box",
-        "p90_hausdorff_box",
-        "p95_hausdorff_box",
-        "p99_hausdorff_box",
-        "mean_nme_box_visible_intersection",
-        "median_nme_box_visible_intersection",
-        "mean_nme_box_point_to_line_visible_intersection",
-        "median_nme_box_point_to_line_visible_intersection",
-        "mean_hausdorff_box_visible_intersection",
-        "median_hausdorff_box_visible_intersection",
-        "p90_hausdorff_box_visible_intersection",
-        "p95_hausdorff_box_visible_intersection",
-        "p99_hausdorff_box_visible_intersection",
-        "mean_nme_box_gt_valid",
-        "median_nme_box_gt_valid",
-        "mean_nme_box_point_to_line_gt_valid",
-        "median_nme_box_point_to_line_gt_valid",
-        "mean_hausdorff_box_gt_valid",
-        "median_hausdorff_box_gt_valid",
-        "p90_hausdorff_box_gt_valid",
-        "p95_hausdorff_box_gt_valid",
-        "p99_hausdorff_box_gt_valid",
-        "mean_nme_box_non_contour",
-        "median_nme_box_non_contour",
-        "mean_nme_box_point_to_line_non_contour",
-        "median_nme_box_point_to_line_non_contour",
-        "mean_hausdorff_box_non_contour",
-        "median_hausdorff_box_non_contour",
-        "p90_hausdorff_box_non_contour",
-        "p95_hausdorff_box_non_contour",
-        "p99_hausdorff_box_non_contour",
-    ]
-    rows.extend((key, summary.get(key)) for key in metric_keys if key in summary)
-    orientation_sample_counts = summary.get("orientation_sample_counts")
-    if orientation_sample_counts is not None:
-        for orientation_name, count in orientation_sample_counts.items():
-            rows.append((f"samples_{orientation_name}", count))
-
-    orientation_metrics = summary.get("orientation_metrics")
-    if orientation_metrics is not None:
-        for orientation_name, metrics in orientation_metrics.items():
-            rows.extend(
-                (f"{key}_{orientation_name}", metrics.get(key))
-                for key in metric_keys
-                if key in metrics
-            )
-    with output_path.open("w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow(["metric", "value"])
-        for metric_name, metric_value in rows:
-            writer.writerow(
-                [
-                    metric_name,
-                    format_metric_value(round_metric_value(metric_value)),
-                ]
-            )
+    from .evaluation_reporting import write_dataset_metric_summary
+    write_dataset_metric_summary(output_path, summary)
 
 
 def benchmark_prediction_directory(
@@ -740,24 +657,6 @@ def benchmark_prediction_directory(
             )
 
             (
-                visible_errors,
-                visible_point_to_line_errors,
-                mean_box_nme,
-                mean_box_nme_point_to_line,
-            ) = compute_masked_per_landmark_metrics(
-                predicted_landmarks=parsed_prediction.landmarks,
-                target_landmarks=gt_landmarks_visible_mode,
-                valid_mask=valid_mask,
-            )
-            (
-                hausdorff_pixel_visible,
-                hausdorff_box_visible,
-            ) = compute_normalized_hausdorff_distance(
-                predicted_landmarks=parsed_prediction.landmarks,
-                target_landmarks=gt_landmarks_visible_mode,
-                valid_mask=valid_mask,
-            )
-            (
                 gt_valid_errors,
                 gt_valid_point_to_line_errors,
                 mean_box_nme_gt_valid,
@@ -775,6 +674,12 @@ def benchmark_prediction_directory(
                 target_landmarks=gt_landmarks,
                 valid_mask=gt_valid_mask,
             )
+            visible_errors = gt_valid_errors
+            visible_point_to_line_errors = gt_valid_point_to_line_errors
+            mean_box_nme = mean_box_nme_gt_valid
+            mean_box_nme_point_to_line = mean_box_nme_point_to_line_gt_valid
+            hausdorff_pixel_visible = hausdorff_pixel_gt_valid
+            hausdorff_box_visible = hausdorff_box_gt_valid
             gt_valid_landmarks_used += len(gt_valid_errors)
             if mean_box_nme_gt_valid is not None:
                 gt_valid_image_nme_values.append(mean_box_nme_gt_valid)
@@ -797,32 +702,6 @@ def benchmark_prediction_directory(
                 per_landmark_errors[landmark_index].append(error_value)
             for landmark_index, error_value in visible_point_to_line_errors.items():
                 per_landmark_point_to_line_errors[landmark_index].append(error_value)
-            for landmark_index, error_value in visible_errors.items():
-                pred_visibility_value = (
-                    int(parsed_prediction.visibility[landmark_index])
-                    if parsed_prediction.visibility is not None
-                    else None
-                )
-                per_image_per_landmark_nme.append(
-                    {
-                        "image_id": sample_id,
-                        "prediction_id": prediction_path.stem,
-                        "evaluation_mode": "sota",
-                        "split": "benchmark",
-                        "orientation": gt_orientation,
-                        "class_idx": gt_class_idx,
-                        "landmark_idx": int(landmark_index),
-                        "point_to_point_nme_box": float(error_value),
-                        "point_to_line_nme_box": float(
-                            visible_point_to_line_errors[landmark_index]
-                        ),
-                        "evaluation_landmark_inclusion": "visible_intersection",
-                        "gt_visibility": int(gt_visibility[landmark_index]),
-                        "pred_visibility": pred_visibility_value,
-                        "landmark_count": int(landmark_count),
-                        "number_of_valid_landmarks": int(len(gt_valid_errors)),
-                    }
-                )
             for landmark_index, error_value in gt_valid_errors.items():
                 pred_visibility_value = (
                     int(parsed_prediction.visibility[landmark_index])
@@ -962,7 +841,7 @@ def benchmark_prediction_directory(
         output_path=output_dir / "per_landmark_nme_point_to_line.csv",
     )
     save_per_image_nme_csv(
-        per_image_nme=per_image_nme,
+        per_image_nme=[clean_metrics(row, "babyland") for row in per_image_nme],
         output_path=output_dir / "per_image_nme.csv",
     )
     save_per_image_per_landmark_nme_csv(
@@ -1236,6 +1115,9 @@ def benchmark_prediction_directory(
         },
     }
 
+    summary = clean_metrics(summary, "babyland")
+    add_distribution_statistics(summary, [clean_metrics(row, "babyland") for row in per_image_nme])
+    summary["evaluation_protocol"] = "babyland"
     summary = round_metric_value(summary)
 
     save_benchmark_summary_csv(
@@ -1255,6 +1137,7 @@ def benchmark_infantface_prediction_directory(
     output_dir: str | Path,
     use_landmark_names_in_boxplot: bool = True,
     fixed_log_y_limits: tuple[float, float] | None = None,
+    heatmap_rows: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Benchmark one prediction directory against class-aware InfantFace 68-point GT."""
     provided_gt_root, gt_labels_dir = resolve_text_labels_dir(
@@ -1814,6 +1697,12 @@ def benchmark_infantface_prediction_directory(
         },
     }
 
+    add_distribution_statistics(summary, per_image_nme)
+    if heatmap_rows is not None:
+        poses = {str(row["sample_id"]): row["orientation"] for row in per_image_nme}
+        matched = [dict(row, orientation=poses[row["sample_id"]]) for row in heatmap_rows if row["sample_id"] in poses]
+        save_heatmap_diagnostics(matched, output_dir, summary)
+    summary["evaluation_protocol"] = "infanface"
     summary = round_metric_value(summary)
 
     save_benchmark_summary_csv(

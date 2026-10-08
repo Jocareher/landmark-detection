@@ -13,6 +13,7 @@ from .metrics import (
     AverageMeter,
     compute_box_normalized_nme,
     decode_heatmaps_to_image_coords,
+    compute_heatmap_uncertainty,
 )
 from .normalizer_experiments import compute_image_regularization
 from .normalizer_monitoring import (
@@ -131,6 +132,8 @@ def run_epoch(
     image_l1_loss_meter = AverageMeter()
     image_tv_loss_meter = AverageMeter()
     nme_meter = AverageMeter()
+    entropy_meter = AverageMeter()
+    spread_meter = AverageMeter()
     visible_nme_meter = AverageMeter()
     batch_time_meter = AverageMeter()
     autocast_device = device.type
@@ -223,6 +226,9 @@ def run_epoch(
             progress_reporter.error(f"Non-finite total loss detected during {phase}.")
 
         batch_size = images.size(0)
+        uncertainty = compute_heatmap_uncertainty(outputs["heatmaps"])
+        entropy_meter.update(float(uncertainty["entropy"].mean()), batch_size)
+        spread_meter.update(float(uncertainty["spread"].mean()), batch_size)
         total_loss_meter.update(total_loss.item(), batch_size)
         full_landmark_loss_meter.update(
             loss_dict["full_landmark_loss"].item(), batch_size
@@ -277,6 +283,8 @@ def run_epoch(
             )
 
     return {
+        "mean_heatmap_entropy": entropy_meter.avg,
+        "mean_heatmap_spread": spread_meter.avg,
         "total_loss": total_loss_meter.avg,
         "full_landmark_loss": full_landmark_loss_meter.avg,
         "visible_landmark_loss": visible_landmark_loss_meter.avg,
@@ -347,6 +355,8 @@ def initialize_results_csv(csv_path: str | Path) -> None:
                 "landmark_loss",
                 "coordinate_decoder",
                 "epoch_time",
+                "mean_heatmap_entropy",
+                "mean_heatmap_spread",
             ]
         )
 
@@ -362,27 +372,22 @@ def append_results_row(
 ) -> None:
     """Append one train or validation metrics row to the experiment CSV."""
     csv_path = Path(csv_path)
-    with csv_path.open("a", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow(
-            [
-                epoch,
-                split,
-                metrics["total_loss"],
-                metrics["full_landmark_loss"],
-                metrics["visible_landmark_loss"],
-                metrics["visibility_loss"],
-                metrics["pca_loss"],
-                metrics["image_l1_loss"],
-                metrics["image_tv_loss"],
-                metrics["nme"],
-                metrics.get("visible_nme", float("nan")),
-                lr,
-                landmark_loss,
-                coordinate_decoder,
-                metrics["epoch_time"],
-            ]
-        )
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        fields = list(reader.fieldnames or [])
+        missing = [key for key in ("mean_heatmap_entropy", "mean_heatmap_spread") if key not in fields]
+        old_rows = list(reader) if missing else []
+    if missing:
+        fields.extend(missing)
+        with csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(old_rows)
+    row = {**metrics, "epoch": epoch, "split": split, "lr": lr,
+           "landmark_loss": landmark_loss, "coordinate_decoder": coordinate_decoder}
+    with csv_path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+        writer.writerow(row)
 
 
 def _device_display_name(device: torch.device) -> str:
@@ -655,6 +660,7 @@ def train_model(
         if use_wandb and wandb is not None:
             wandb.log(
                 {
+                    **{f"{split}/{metric}": values[metric] for split, values in (("train", train_metrics), ("val", val_metrics)) for metric in ("mean_heatmap_entropy", "mean_heatmap_spread")},
                     "epoch": epoch,
                     "lr": current_lr,
                     "train/total_loss": train_metrics["total_loss"],
@@ -716,6 +722,8 @@ def train_model(
             reporter.warning(f"Early stopping triggered at epoch {epoch + 1}.")
             break
 
+    from .heatmap_diagnostics import save_training_heatmap_curves
+    save_training_heatmap_curves(history, output_dir)
     final_epoch = len(history["train"])
     if normalizer_monitor is not None:
         normalizer_monitor.capture(
