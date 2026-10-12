@@ -221,3 +221,9 @@ returned adapted predictions, before model restoration affects the next episode.
 These outputs apply automatically to new local/HPC runs; existing result files
 are not rewritten. A training CSV reused with the older header gains the two
 new columns, leaving previous rows blank for those measurements.
+
+## Alternative TTA objectives
+
+TTA now supports heatmap entropy, spatial spread, and any weighted combination
+with PCA. See [TTA signal losses](tta_signal_losses.md) for formulas, YAML fields,
+local/HPC commands, and report definitions. Defaults remain PCA-only.

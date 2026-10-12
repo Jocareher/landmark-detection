@@ -35,7 +35,8 @@ def test_snow_queues_and_real_gpu_types():
 
 @pytest.mark.parametrize('mode', ['train', 'tta'])
 @pytest.mark.parametrize('run_name', [None, 'train_hidden_aligned'])
-def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode, run_name):
+@pytest.mark.parametrize('heatmap_only', [False, True])
+def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode, run_name, heatmap_only):
     settings = json.loads((ROOT / 'configs/upf_hpc.example.json').read_text())
     for key in settings['paths']:
         path = tmp_path / key
@@ -53,6 +54,12 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode, run_nam
     if mode == 'tta':
         args.checkpoint = tmp_path / 'future.pth'
         args.afterok = '123'
+    if mode == 'tta' and heatmap_only:
+        args.tta_pca_weight = 0.0
+        args.tta_entropy_weight = 1.0
+        args.tta_spread_weight = 0.5
+        settings['paths'].pop('pca_prior')
+        settings_path.write_text(json.dumps(settings))
     commands = []
     def check_output(command, **kwargs):
         assert 'text' not in kwargs and 'capture_output' not in kwargs
@@ -94,6 +101,12 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode, run_nam
     else:
         assert resolved['pca_tta_adaptation_scope'] == 'normalizer_heads'
         assert resolved['checkpoint'] == str(args.checkpoint)
+        if heatmap_only:
+            assert resolved['tta_pca_weight'] == 0
+            assert resolved['tta_entropy_weight'] == 1
+            assert resolved['tta_spread_weight'] == 0.5
+            assert resolved['pca_prior_path'] is None
+            assert 'pca_prior' not in plan['paths']
         assert resolved['natural_source_root'] == settings['paths']['babyland_source_root']
 
 
@@ -243,3 +256,17 @@ def test_adain_hpc_uses_shared_training_yaml():
     resolved = worker.resolved_arguments(plan, base)
     assert resolved['normalizer_normalization'] == 'adain'
     assert resolved['head_normalization'] == 'adain'
+
+
+def test_tta_weights_yaml_and_cli(monkeypatch):
+    from scripts.evaluate import parse_args, build_config_from_args
+    source = "arguments:\n  tta_pca_weight: 0\n  tta_entropy_weight: 0.25 # H\n  tta_spread_weight: 2\n"
+    weights = launch.resolve_tta_weights(source, SimpleNamespace(tta_spread_weight=0.5))
+    assert weights == {'pca': 0, 'entropy': 0.25, 'spread': 0.5}
+    monkeypatch.setattr('sys.argv', ['evaluate', '--config', str(ROOT/'configs/pca_tta_evaluation.yaml'),
+                                   '--tta-pca-weight', '0', '--tta-entropy-weight', '1'])
+    config = build_config_from_args(parse_args())
+    assert config.tta_pca_weight == 0 and config.tta_entropy_weight == 1
+    assert config.tta_spread_weight == 0
+    with pytest.raises(ValueError):
+        launch.resolve_tta_weights(source, SimpleNamespace(tta_entropy_weight=0, tta_spread_weight=0))

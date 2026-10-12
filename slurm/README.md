@@ -426,3 +426,13 @@ a `adain` en `configs/normalizer_experiments.yaml`, luego ejecutá
 Para TTA local, ajustá el checkpoint, las rutas y el nombre de salida en
 `configs/pca_tta_evaluation.yaml`, luego ejecutá
 `python -m scripts.evaluate --config configs/pca_tta_evaluation.yaml`.
+
+### Heatmap entropy and spread objectives
+
+`tta_landmarks.sh` uses `tta_pca_weight`, `tta_entropy_weight`, and
+`tta_spread_weight` from the evaluation YAML. Override with
+`--tta-pca-weight`, `--tta-entropy-weight`, and `--tta-spread-weight`.
+Zero disables a signal; at least one weight must be positive. A PCA prior is
+required only for a positive PCA weight. Each submission records the resolved
+weights in its launch metadata and generated YAML. See
+[objective formulas and examples](../docs/tta_signal_losses.md).

@@ -19,7 +19,7 @@ def resolved_arguments(plan, base):
     resources, paths = plan['resources'], plan['paths']
     args.update(device='cuda', batch_size=resources['batch_size'],
                 num_workers=resources['workers'], cache_dir=str(run / 'dataset_cache'),
-                pca_prior_path=paths['pca_prior'], save_config=True,
+                pca_prior_path=paths.get('pca_prior'), save_config=True,
                 wandb_run_name=run.name)
     if plan['mode'] == 'train':
         early_instance = plan['normalization'] == 'instance_early'
@@ -52,6 +52,8 @@ def resolved_arguments(plan, base):
             args[f'{dataset_name}_source_root'] = (
                 paths[f'{dataset_name}_source_root'] if enabled else None)
     else:
+        if plan.get('tta_loss_weights') is not None:
+            args.update({f'tta_{signal}_weight': weight for signal, weight in plan['tta_loss_weights'].items()})
         args.update(eval_mode=plan['dataset'], checkpoint=plan['checkpoint'],
                     normalizer_checkpoint=plan['normalizer_checkpoint'],
                     dataset_root=paths[f'{plan["dataset"]}_crops'],

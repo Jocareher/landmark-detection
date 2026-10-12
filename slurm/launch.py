@@ -3,6 +3,7 @@
 import argparse
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import re
 import shlex
@@ -79,6 +80,9 @@ def arguments():
     parser.add_argument('--scope', choices=SCOPES, default='normalizer')
     parser.add_argument('--pca-loss-space', choices=('aligned', 'image'),
                         help='Override the PCA loss space selected in the YAML, for training or TTA.')
+    for signal in ('pca', 'entropy', 'spread'):
+        parser.add_argument(f'--tta-{signal}-weight', type=float,
+                            help='Override the TTA signal weight in the YAML; zero disables it.')
     parser.add_argument('--dataset', choices=('babyland', 'infanface'), default='babyland')
     parser.add_argument('--checkpoint', type=Path)
     parser.add_argument('--normalizer-checkpoint', type=Path)
@@ -144,6 +148,24 @@ def yaml_evaluation_enabled(source, name):
     return matches[0].lower() == 'true'
 
 
+def resolve_tta_weights(source, args):
+    """Read flat numeric YAML weights using stdlib on login nodes."""
+    weights = {}
+    for signal, default in (('pca', 1.0), ('entropy', 0.0), ('spread', 0.0)):
+        name = f'tta_{signal}_weight'
+        override = getattr(args, name, None)
+        matches = re.findall(r'^  ' + name + r':\s*([^#\n]+)', source, re.M)
+        if len(matches) > 1:
+            raise ValueError(f'Duplicate arguments.{name}')
+        value = override if override is not None else float(matches[0]) if matches else default
+        if not math.isfinite(value) or value < 0:
+            raise ValueError('TTA loss weights must be finite and nonnegative.')
+        weights[signal] = value
+    if not any(weights.values()):
+        raise ValueError('At least one TTA loss weight must be positive.')
+    return weights
+
+
 def validate_runtime_files():
     required = ('slurm/job.sh', 'slurm/ensure_lmks.sh', 'slurm/check_environment.py',
                 'slurm/run_job.py', 'scripts/utils/source_images.py',
@@ -192,6 +214,7 @@ def main():
     template = 'normalizer_experiments.yaml' if args.mode == 'train' else 'pca_tta_evaluation.yaml'
     template_path = args.config if args.config is not None else REPO / 'configs' / template
     base_yaml = template_path.read_text()
+    tta_weights = resolve_tta_weights(base_yaml, args) if args.mode == 'tta' else None
     evaluations = ({name: yaml_evaluation_enabled(base_yaml, f'evaluate_{name}')
                     for name in ('babyland', 'infanface')} if args.mode == 'train' else {})
     paths = settings['paths']
@@ -202,8 +225,9 @@ def main():
                 needed.extend((f'{dataset_name}_crops', f'{dataset_name}_labels',
                                f'{dataset_name}_source_root'))
     else:
-        needed = ['pca_prior', f'{args.dataset}_crops', f'{args.dataset}_labels',
-                  f'{args.dataset}_source_root']
+        needed = [f'{args.dataset}_crops', f'{args.dataset}_labels', f'{args.dataset}_source_root']
+        if tta_weights['pca'] > 0:
+            needed.insert(0, 'pca_prior')
     selected_paths = {name: required_path(paths[name]) for name in needed}
     checkpoint = required_path(args.checkpoint, exists=not bool(args.afterok)) if args.checkpoint else None
     separate = required_path(args.normalizer_checkpoint, exists=not bool(args.afterok)) if args.normalizer_checkpoint else None
@@ -214,7 +238,7 @@ def main():
     run = root / name
     plan = dict(mode=args.mode, normalization=args.normalization, scope=args.scope,
                 pca_loss_space=getattr(args, 'pca_loss_space', None),
-                evaluations=evaluations,
+                evaluations=evaluations, tta_loss_weights=tta_weights,
                 dataset=args.dataset, paths=selected_paths, checkpoint=checkpoint,
                 normalizer_checkpoint=separate, run_dir=str(run), resources=resources,
                 partition=partition, gpu_type=gpu, wandb_mode=settings.get('wandb_mode', 'offline'),

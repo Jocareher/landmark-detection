@@ -231,21 +231,27 @@ def compute_box_normalized_nme(
     return nme_values
 
 
-@torch.no_grad()
-def compute_heatmap_uncertainty(heatmaps: torch.Tensor) -> dict[str, torch.Tensor]:
+def heatmap_distribution_statistics(heatmaps: torch.Tensor) -> dict[str, torch.Tensor]:
     """Spatial entropy and variance, normalized to [0,1], per image/landmark.
 
     Temperature is fixed at 1. Spread is twice the trace of the spatial
     covariance in [0,1]^2, not augmentation variance or standard deviation.
-    These diagnostics never enter the adaptation objective.
+    This differentiable core is shared by diagnostics and TTA losses.
     """
     if heatmaps.ndim != 4 or min(heatmaps.shape[-2:]) < 2:
         raise ValueError("Expected heatmaps [B,K,H,W] with H,W >= 2")
     height, width = heatmaps.shape[-2:]
-    logp = heatmaps.detach().float().flatten(2).log_softmax(-1)
+    logits = heatmaps if heatmaps.dtype == torch.float64 else heatmaps.float()
+    logp = logits.flatten(2).log_softmax(-1)
     p = logp.exp()
-    y, x = torch.meshgrid(torch.linspace(0, 1, height, device=p.device), torch.linspace(0, 1, width, device=p.device), indexing="ij")
+    y, x = torch.meshgrid(torch.linspace(0, 1, height, device=p.device, dtype=p.dtype), torch.linspace(0, 1, width, device=p.device, dtype=p.dtype), indexing="ij")
     x, y = x.flatten(), y.flatten()
     entropy = -(p * logp).sum(-1) / math.log(height * width)
     variance = (p * (x.square() + y.square())).sum(-1) - (p * x).sum(-1).square() - (p * y).sum(-1).square()
     return {"entropy": entropy.clamp(0, 1), "spread": (2 * variance).clamp(0, 1)}
+
+
+@torch.no_grad()
+def compute_heatmap_uncertainty(heatmaps: torch.Tensor) -> dict[str, torch.Tensor]:
+    """Detached reporting wrapper; use the differentiable core for optimization."""
+    return heatmap_distribution_statistics(heatmaps.detach())

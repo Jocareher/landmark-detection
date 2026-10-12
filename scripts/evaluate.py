@@ -213,15 +213,19 @@ def parse_args() -> argparse.Namespace:
         default=defaults.pca_tta_enabled,
         help=(
             "Enable episodic per-image TTA. The selected normalizer/head parameters are "
-            "updated and PCA reconstruction loss is the sole objective."
+            "updated using weighted PCA, heatmap entropy and/or spread losses."
         ),
     )
     parser.add_argument(
         "--pca-prior-path",
         type=Path,
         default=defaults.pca_prior_path,
-        help="Source-trained PCA shape-prior checkpoint required by --pca-tta.",
+        help="Source-trained PCA prior; required only when tta_pca_weight > 0.",
     )
+    for signal in ("pca", "entropy", "spread"):
+        parser.add_argument(f"--tta-{signal}-weight", type=float,
+                            default=getattr(defaults, f"tta_{signal}_weight"),
+                            help=f"Nonnegative {signal} objective weight; zero disables this signal.")
     parser.add_argument(
         "--pca-loss-space", choices=["aligned", "image"],
         default=defaults.pca_loss_space,
@@ -430,6 +434,8 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.save_natural_crop_overlays = args.save_crop_overlays
     config.pca_tta_enabled = args.pca_tta
     config.pca_prior_path = args.pca_prior_path
+    for signal in ("pca", "entropy", "spread"):
+        setattr(config, f"tta_{signal}_weight", getattr(args, f"tta_{signal}_weight"))
     config.pca_loss_space = args.pca_loss_space
     if config.pca_loss_space not in {"aligned", "image"}:
         raise ValueError(f"Unsupported PCA loss space: {config.pca_loss_space}")
@@ -583,7 +589,9 @@ def main() -> None:
                 "--pca-tta requires a full normalized-model checkpoint or a "
                 "landmarker checkpoint combined with --normalizer-checkpoint."
             )
-        if config.pca_prior_path is None:
+        from scripts.engine.tta_losses import validate_tta_weights
+        validate_tta_weights(config.tta_pca_weight, config.tta_entropy_weight, config.tta_spread_weight)
+        if config.tta_pca_weight > 0 and config.pca_prior_path is None:
             raise ValueError("--pca-prior-path is required when --pca-tta is enabled.")
         if config.use_wandb:
             import wandb as wandb_module
@@ -593,14 +601,16 @@ def main() -> None:
                 name=config.wandb_run_name,
                 config=config_to_serializable_dict(config),
             )
-        pca_prior = load_pca_shape_prior(config.pca_prior_path, device=device)
+        pca_prior = (load_pca_shape_prior(config.pca_prior_path, device=device)
+                     if config.tta_pca_weight > 0 else None)
         tta_adapter = PCAGuidedTTA(
             model=model,
             pca_prior=pca_prior,
             device=device,
             output_dir=output_dir / "tta",
             config=PCATTAConfig(
-                pca_loss_space=config.pca_loss_space,
+                pca_weight=config.tta_pca_weight, entropy_weight=config.tta_entropy_weight,
+                spread_weight=config.tta_spread_weight,                pca_loss_space=config.pca_loss_space,
                 adaptation_scope=config.pca_tta_adaptation_scope,
                 steps=config.pca_tta_steps,
                 learning_rate=config.pca_tta_learning_rate,
@@ -620,7 +630,8 @@ def main() -> None:
             wandb_module=wandb_module,
         )
         print(
-            "[INFO] PCA-guided episodic TTA enabled | "
+            "[INFO] Episodic TTA enabled | "
+            f"weights(pca,entropy,spread)=({config.tta_pca_weight},{config.tta_entropy_weight},{config.tta_spread_weight}) "
             f"scope={config.pca_tta_adaptation_scope} "
             f"pca_loss_space={config.pca_loss_space} "
             f"steps={config.pca_tta_steps} "

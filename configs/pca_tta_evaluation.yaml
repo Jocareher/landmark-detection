@@ -64,12 +64,21 @@ arguments:
   save_config: true
 
   # ---------------------------------------------------------------------------
-  # PCA adaptation objective
+  # TTA objective: weighted PCA, entropy and/or spatial spread
   # ---------------------------------------------------------------------------
-  # Select ONE loss: aligned (original) or image (inverse-transformed, pixels^2).
+  # A zero weight disables a signal. At least one weight must be positive.
+  # Entropy/spread use temperature 1, ALL landmarks, and normalize to [0,1].
+  # Equal weights do not balance PCA (aligned/pixel^2) against heatmap losses.
+  # Only PCA: 1/0/0; only entropy: 0/1/0; only spread: 0/0/1.
+  # Combine by assigning positive weights to the desired signals.
+  tta_pca_weight: 1.0
+  tta_entropy_weight: 0.0
+  tta_spread_weight: 0.0
+
+  # Select ONE PCA loss: aligned (original) or image (inverse-transformed, pixels^2).
   # The existing PCA prior works for both. This choice is independent of the
   # loss used during source training; it does not alter checkpoint architecture.
-  # No extra regularization or face-size normalization. LR may need recalibration.
+  # PCA is loaded only if tta_pca_weight > 0. LR/weights may need recalibration.
   pca_loss_space: aligned
   pca_prior_path: /home/jocareher/Downloads/landmark-detection/weights/pca_prior_13y_k32.pt
 

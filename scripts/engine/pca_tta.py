@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .tta_losses import compute_tta_losses, validate_tta_weights
 from .heatmap_diagnostics import heatmap_image_rows, save_tta_heatmap_curves, DEFINITIONS
 
 import csv
@@ -16,7 +17,6 @@ import torch
 from PIL import Image, ImageDraw
 
 from .pca_shape_prior import (
-    compute_pca_projection_loss,
     softargmax_heatmaps_to_image_coords,
 )
 from ..models import NormalizedLandmarker
@@ -26,7 +26,7 @@ from ..utils.visualization import plt as plotting
 
 @dataclass(frozen=True)
 class PCATTAConfig:
-    """Configuration for episodic PCA-guided test-time adaptation."""
+    """Configuration for episodic TTA with weighted label-free signals."""
 
     adaptation_scope: str = "normalizer"
     steps: int = 20
@@ -44,9 +44,13 @@ class PCATTAConfig:
     normalization_mean: tuple[float, ...] = (0.485, 0.456, 0.406)
     normalization_std: tuple[float, ...] = (0.229, 0.224, 0.225)
     pca_loss_space: str = "image"
+    pca_weight: float = 1.0
+    entropy_weight: float = 0.0
+    spread_weight: float = 0.0
 
     def validate(self) -> None:
         """Validate values before any target image is adapted."""
+        validate_tta_weights(self.pca_weight, self.entropy_weight, self.spread_weight)
         if self.pca_loss_space not in {"aligned", "image"}:
             raise ValueError(f"Unsupported PCA loss space: {self.pca_loss_space}")
         if self.adaptation_scope not in {"normalizer", "normalizer_head_norms", "normalizer_heads",
@@ -87,7 +91,7 @@ class PCATTAConfig:
 
 
 class PCAGuidedTTA:
-    """Adapt a normalizer and optional landmarker parameters using PCA loss.
+    """Adapt selected parameters using PCA, heatmap entropy and/or spread.
 
     Adaptation is episodic: all adapted source weights and a fresh Adam
     optimizer are restored for every input image. The PCA prior remains frozen.
@@ -97,7 +101,7 @@ class PCAGuidedTTA:
     def __init__(
         self,
         model: NormalizedLandmarker,
-        pca_prior: dict[str, Any],
+        pca_prior: dict[str, Any] | None,
         device: torch.device,
         output_dir: str | Path,
         config: PCATTAConfig,
@@ -105,6 +109,8 @@ class PCAGuidedTTA:
     ) -> None:
         """Snapshot source weights and initialize trajectory reporting."""
         config.validate()
+        if config.pca_weight > 0 and pca_prior is None:
+            raise ValueError("A PCA prior is required when tta_pca_weight > 0.")
         if not isinstance(model, NormalizedLandmarker) or model.normalizer is None:
             raise TypeError(
                 "PCA-guided TTA requires a NormalizedLandmarker with an active "
@@ -152,9 +158,10 @@ class PCAGuidedTTA:
         landmarker_total = _count_parameters(self.model.landmarker.parameters())
         normalizer_total = _count_parameters(self.model.normalizer.parameters())
         print(
-            "[PCA-TTA] Parameter audit | "
+            "[TTA] Parameter audit | "
             f"landmarker_total={landmarker_total:,} "
             f"scope={self.config.adaptation_scope} "
+            f"weights(pca,entropy,spread)=({self.config.pca_weight},{self.config.entropy_weight},{self.config.spread_weight}) "
             f"pca_loss_space={self.config.pca_loss_space} "
             f"landmarker_trainable={sum(p.numel() for p in self.model.landmarker.parameters() if p.requires_grad):,} "
             f"normalizer_total={normalizer_total:,} "
@@ -227,7 +234,7 @@ class PCAGuidedTTA:
             )
         episode_number = self.processed_samples + 1
         print(
-            f"[PCA-TTA][episode={episode_number:06d}] sample={sample_id} | "
+            f"[TTA][episode={episode_number:06d}] sample={sample_id} | "
             "source_normalizer_restored=yes optimizer=fresh "
             f"scope={self.config.adaptation_scope} normalizer=trainable "
             f"landmarker_selected={len(self.adapted_landmarker_modules)}"
@@ -249,14 +256,11 @@ class PCAGuidedTTA:
                     image_height=image.shape[2],
                     image_width=image.shape[3],
                 )
-                reconstruction_loss = compute_pca_projection_loss(
-                    predicted_landmarks=landmarks,
-                    pca_prior=self.pca_prior,
-                    loss_space=self.config.pca_loss_space,
-                )
-                if not bool(torch.isfinite(reconstruction_loss).item()):
+                components = self._losses(outputs["heatmaps"], landmarks)
+                total_loss = components["sample_tta_loss"].mean()
+                if not bool(torch.isfinite(total_loss).item()):
                     raise FloatingPointError(
-                        f"Non-finite PCA reconstruction loss at step {step}."
+                        f"Non-finite TTA objective at step {step}."
                     )
                 if baseline_landmarks is None:
                     baseline_landmarks = landmarks.detach().clone()
@@ -274,10 +278,8 @@ class PCAGuidedTTA:
                     **diagnostics,
                     "sample_id": sample_id,
                     "step": int(step),
-                    "pca_reconstruction_loss": float(
-                        reconstruction_loss.detach().item()
-                    ),
-                    "total_tta_loss": float(reconstruction_loss.detach().item()),
+                    **{key: float(value[0].detach().item()) for key, value in components.items()},
+                    "total_tta_loss": float(total_loss.detach().item()),
                     "learning_rate": float(optimizer.param_groups[0]["lr"]),
                     "gradient_norm": math.nan,
                     "gradient_norm_before_clipping": math.nan,
@@ -295,7 +297,7 @@ class PCAGuidedTTA:
                             "step": step,
                             "normalized": normalized.detach().cpu().clone(),
                             "landmarks": landmarks.detach().cpu().clone(),
-                            "loss": float(reconstruction_loss.detach().item()),
+                            "loss": float(total_loss.detach().item()),
                         }
                     )
                 final_outputs = {
@@ -305,7 +307,7 @@ class PCAGuidedTTA:
                     break
 
                 optimizer.zero_grad(set_to_none=True)
-                reconstruction_loss.backward()
+                total_loss.backward()
                 gradient_norm_before_clipping = _gradient_norm(
                     self.adapted_parameters
                 )
@@ -335,7 +337,7 @@ class PCAGuidedTTA:
             failure_message = str(error)
             self.failed_samples += 1
             warnings.warn(
-                f"PCA TTA failed for '{sample_id}'; using the unadapted source "
+                f"TTA failed for '{sample_id}'; using the unadapted source "
                 f"prediction. Reason: {error}",
                 RuntimeWarning,
                 stacklevel=2,
@@ -388,10 +390,10 @@ class PCAGuidedTTA:
                 )
             self.processed_samples += 1
             print(
-                f"[PCA-TTA][episode={episode_number:06d}] sample={sample_id} | "
+                f"[TTA][episode={episode_number:06d}] sample={sample_id} | "
                 f"status={'failed' if failed else 'ok'} "
-                f"initial_loss={sample_summary['initial_pca_reconstruction_loss']:.6g} "
-                f"final_loss={sample_summary['final_pca_reconstruction_loss']:.6g} "
+                f"initial_loss={sample_summary['initial_tta_loss']:.6g} "
+                f"final_loss={sample_summary['final_tta_loss']:.6g} "
                 "source_normalizer_restored_after=yes"
             )
 
@@ -449,7 +451,7 @@ class PCAGuidedTTA:
         failure_message = ""
         episode_number = self.processed_samples + 1
         print(
-            f"[PCA-TTA][episode={episode_number:06d}] batch_size={batch_size} "
+            f"[TTA][episode={episode_number:06d}] batch_size={batch_size} "
             f"scope={self.config.adaptation_scope} source_restored=yes optimizer=fresh"
         )
         try:
@@ -459,13 +461,11 @@ class PCAGuidedTTA:
                 landmarks = softargmax_heatmaps_to_image_coords(
                     outputs["heatmaps"], images.shape[2], images.shape[3]
                 )
-                sample_losses = compute_pca_projection_loss(
-                    landmarks, self.pca_prior, loss_space=self.config.pca_loss_space,
-                    reduction="none",
-                )
+                components = self._losses(outputs["heatmaps"], landmarks)
+                sample_losses = components["sample_tta_loss"]
                 batch_loss = sample_losses.mean()
                 if not bool(torch.isfinite(sample_losses).all().item()):
-                    raise FloatingPointError(f"Non-finite PCA loss at step {step}.")
+                    raise FloatingPointError(f"Non-finite TTA loss at step {step}.")
                 drift = torch.linalg.norm(
                     landmarks.detach() - source_landmarks, dim=-1
                 )
@@ -476,7 +476,7 @@ class PCAGuidedTTA:
                         **diagnostics[index],
                         "sample_id": sample_id,
                         "step": int(step),
-                        "pca_reconstruction_loss": float(sample_losses[index].detach().item()),
+                        **{key: float(value[index].detach().item()) for key, value in components.items()},
                         "total_tta_loss": float(batch_loss.detach().item()),
                         "learning_rate": float(optimizer.param_groups[0]["lr"]),
                         "gradient_norm": math.nan,
@@ -522,7 +522,7 @@ class PCAGuidedTTA:
             failure_message = str(error)
             self.failed_samples += batch_size
             warnings.warn(
-                f"PCA TTA failed for batch {list(sample_ids)}; using source predictions. "
+                f"TTA failed for batch {list(sample_ids)}; using source predictions. "
                 f"Reason: {error}", RuntimeWarning, stacklevel=2,
             )
             final_outputs = source_outputs
@@ -564,7 +564,7 @@ class PCAGuidedTTA:
                         )
             self.processed_samples += batch_size
             print(
-                f"[PCA-TTA][episode={episode_number:06d}] batch_size={batch_size} "
+                f"[TTA][episode={episode_number:06d}] batch_size={batch_size} "
                 f"status={'failed' if failed else 'ok'} source_restored_after=yes"
             )
         assert final_outputs is not None
@@ -761,7 +761,7 @@ class PCAGuidedTTA:
                 adapted_landmarks=snapshot["landmarks"][0],
                 title=(
                     f"{sample_id} | step {snapshot['step']} | "
-                    f"PCA loss {snapshot['loss']:.6g} | "
+                    f"TTA loss {snapshot['loss']:.6g} | "
                     f"RGB MAE {difference.mean():.5f} | "
                     f"RGB max {difference.max():.5f}"
                 ),
@@ -782,6 +782,12 @@ class PCAGuidedTTA:
             for frame in frames:
                 frame.close()
 
+    def _losses(self, heatmaps, landmarks):
+        return compute_tta_losses(
+            heatmaps, landmarks, self.pca_prior,
+            pca_weight=self.config.pca_weight, entropy_weight=self.config.entropy_weight,
+            spread_weight=self.config.spread_weight, pca_loss_space=self.config.pca_loss_space)
+
     def finalize(self) -> dict[str, Any]:
         """Write raw, per-image, aggregate, plot, and interpretation artifacts."""
         trajectory_path = self.output_dir / "trajectories.csv"
@@ -792,9 +798,13 @@ class PCAGuidedTTA:
         aggregate_rows = _aggregate_trajectories(self.trajectory_rows)
         _write_rows_csv(aggregate_path, aggregate_rows)
         save_tta_heatmap_curves(aggregate_rows, self.output_dir)
+        pca_only = self.config.entropy_weight == 0 and self.config.spread_weight == 0
+        objective_label = "PCA reconstruction loss" if pca_only else "Weighted TTA objective"
+        _save_loss_components(aggregate_rows, self.output_dir / "figures" / "tta_loss_components.png")
         _save_aggregate_plot(
             aggregate_rows,
-            self.output_dir / "figures" / "pca_reconstruction_loss_curve.png",
+            self.output_dir / "figures" / ("pca_reconstruction_loss_curve.png" if pca_only else "tta_objective_curve.png"),
+            objective_label=objective_label,
         )
         _save_drift_plot(
             aggregate_rows,
@@ -803,14 +813,16 @@ class PCAGuidedTTA:
         _save_final_adaptation_distribution(
             self.summary_rows,
             self.output_dir / "figures" / "final_adaptation_distribution.png",
+            objective_label=objective_label,
         )
         evaluation_analysis = _save_evaluation_analysis(
-            self.summary_rows,
+            [{**row, "relative_loss_reduction": row["relative_pca_loss_reduction"]} for row in self.summary_rows],
             output_dir=self.output_dir,
+            pca_enabled=self.config.pca_weight > 0,
         )
         summary = {
             "heatmap_diagnostics": DEFINITIONS,
-            "method": "episodic_pca_reconstruction_tta",
+            "method": "episodic_pca_reconstruction_tta" if pca_only else "episodic_weighted_signals_tta",
             "adapted_module": ("external_image_normalizer" if self.config.adaptation_scope == "normalizer"
                                else self.config.adaptation_scope),
             "adaptation_scope": self.config.adaptation_scope,
@@ -822,7 +834,11 @@ class PCAGuidedTTA:
             "landmarker_architecture": (self.model.landmarker.architecture_config()
                                         if hasattr(self.model.landmarker, "architecture_config") else {}),
             "normalizer_architecture": self.model.normalizer.architecture_config(),
-            "loss": "pca_reconstruction_loss_only",
+            "loss": "pca_reconstruction_loss_only" if pca_only else "weighted_tta_signals",
+            "loss_weights": {"pca": self.config.pca_weight, "entropy": self.config.entropy_weight, "spread": self.config.spread_weight},
+            "heatmap_temperature": 1.0,
+            "heatmap_loss_landmarks": "all",
+            "pca_enabled": self.config.pca_weight > 0,
             "pca_loss_space": ("input_image_pixels" if self.config.pca_loss_space == "image"
                                else "aligned_procrustes"),
             "pca_loss_mode": self.config.pca_loss_space,
@@ -844,6 +860,9 @@ class PCAGuidedTTA:
             "probe_dir": str(self.output_dir / "probes"),
             "evaluation_analysis": evaluation_analysis,
         }
+        if self.config.pca_weight == 0:
+            for key in ("pca_loss_space", "pca_loss_mode", "pca_loss_reduction", "pca_alignment_gradient"):
+                summary[key] = None
         (self.output_dir / "summary.json").write_text(
             json.dumps(summary, indent=2), encoding="utf-8"
         )
@@ -856,10 +875,12 @@ class PCAGuidedTTA:
                     {
                         **{f"tta/{key}": value for key, value in row.items() if key.startswith("heatmap_")},
                         "tta/step": int(row["step"]),
-                        "tta/pca_loss_mean": float(row["mean"]),
-                        "tta/pca_loss_median": float(row["median"]),
-                        "tta/pca_loss_p25": float(row["p25"]),
-                        "tta/pca_loss_p75": float(row["p75"]),
+                        "tta/total_loss_mean": float(row["mean"]),
+                        **{f"tta/{key}": value for key, value in row.items() if key.endswith("_loss_mean")},
+                        "tta/pca_loss_mean": float(row["pca_reconstruction_loss_mean"]),
+                        "tta/pca_loss_median": float(row["pca_reconstruction_loss_median"]),
+                        "tta/pca_loss_p25": float(row["pca_reconstruction_loss_p25"]),
+                        "tta/pca_loss_p75": float(row["pca_reconstruction_loss_p75"]),
                     }
                 )
             if self.summary_rows:
@@ -907,16 +928,23 @@ def _gradient_norm(parameters: Any) -> float:
     return math.sqrt(squared_norm)
 
 
+def _objective_value(row):
+    for key in ("sample_tta_loss", "total_tta_loss", "pca_reconstruction_loss"):
+        if key in row:
+            return float(row[key])
+    return math.nan
+
+
 def _summarize_sample_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
     initial = rows[0]
     final = rows[-1]
     finite_losses = [
-        float(row["pca_reconstruction_loss"])
+        _objective_value(row)
         for row in rows
-        if math.isfinite(float(row["pca_reconstruction_loss"]))
+        if math.isfinite(_objective_value(row))
     ]
-    initial_loss = float(initial["pca_reconstruction_loss"])
-    final_loss = float(final["pca_reconstruction_loss"])
+    initial_loss = _objective_value(initial)
+    final_loss = _objective_value(final)
     relative_reduction = math.nan
     if math.isfinite(initial_loss) and abs(initial_loss) > 1e-12:
         relative_reduction = (initial_loss - final_loss) / initial_loss
@@ -926,14 +954,23 @@ def _summarize_sample_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         initial_value = float(initial.get(key, math.nan))
         final_value = float(final.get(key, math.nan))
         diagnostic_summary.update({f"initial_{key}": initial_value, f"final_{key}": final_value, f"delta_{key}": final_value - initial_value})
+    component_summary = {}
+    for key in ("pca_reconstruction_loss", "heatmap_entropy_loss", "heatmap_spread_loss",
+                "weighted_pca_loss", "weighted_entropy_loss", "weighted_spread_loss"):
+        values = [float(row.get(key, math.nan)) for row in rows]
+        finite = [v for v in values if math.isfinite(v)]
+        component_summary.update({f"initial_{key}": values[0], f"final_{key}": values[-1],
+                                  f"minimum_{key}": min(finite) if finite else math.nan})
+    pca_initial = float(initial.get("pca_reconstruction_loss", math.nan))
+    pca_final = float(final.get("pca_reconstruction_loss", math.nan))
     return {
+        **component_summary,
+        "initial_tta_loss": initial_loss, "final_tta_loss": final_loss,
+        "minimum_tta_loss": min(finite_losses) if finite_losses else math.nan,
+        "relative_pca_loss_reduction": ((pca_initial - pca_final) / pca_initial
+                                        if math.isfinite(pca_initial) and abs(pca_initial) > 1e-12 else math.nan),
         **diagnostic_summary,
         "sample_id": initial["sample_id"],
-        "initial_pca_reconstruction_loss": initial_loss,
-        "final_pca_reconstruction_loss": final_loss,
-        "minimum_pca_reconstruction_loss": min(finite_losses)
-        if finite_losses
-        else math.nan,
         "relative_loss_reduction": relative_reduction,
         "final_mean_landmark_drift_px": final["mean_landmark_drift_px"],
         "final_max_landmark_drift_px": final["max_landmark_drift_px"],
@@ -944,29 +981,29 @@ def _summarize_sample_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _aggregate_trajectories(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     initial_by_sample = {
-        str(row["sample_id"]): float(row["pca_reconstruction_loss"])
+        str(row["sample_id"]): _objective_value(row)
         for row in rows
         if int(row["step"]) == 0
         and not bool(row["failed"])
-        and math.isfinite(float(row["pca_reconstruction_loss"]))
+        and math.isfinite(_objective_value(row))
     }
     by_step: dict[int, list[dict[str, Any]]] = {}
     for row in rows:
-        value = float(row["pca_reconstruction_loss"])
+        value = _objective_value(row)
         if not bool(row["failed"]) and math.isfinite(value):
             by_step.setdefault(int(row["step"]), []).append(row)
     aggregate: list[dict[str, Any]] = []
     for step in sorted(by_step):
         step_rows = by_step[step]
         values = np.asarray(
-            [float(row["pca_reconstruction_loss"]) for row in step_rows],
+            [_objective_value(row) for row in step_rows],
             dtype=np.float64,
         )
         relative_reductions = np.asarray(
             [
                 (
                     initial_by_sample[str(row["sample_id"])]
-                    - float(row["pca_reconstruction_loss"])
+                    - _objective_value(row)
                 )
                 / initial_by_sample[str(row["sample_id"])]
                 for row in step_rows
@@ -975,6 +1012,8 @@ def _aggregate_trajectories(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ],
             dtype=np.float64,
         )
+        if not relative_reductions.size:
+            relative_reductions = np.asarray([math.nan])
         mean_drifts = np.asarray(
             [float(row["mean_landmark_drift_px"]) for row in step_rows],
             dtype=np.float64,
@@ -1008,6 +1047,13 @@ def _aggregate_trajectories(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     for row in aggregate:
+        for key in ("sample_tta_loss", "pca_reconstruction_loss", "heatmap_entropy_loss", "heatmap_spread_loss",
+                    "weighted_pca_loss", "weighted_entropy_loss", "weighted_spread_loss"):
+            values = np.asarray([item.get(key, math.nan) for item in by_step[row["step"]]], dtype=float)
+            values = values[np.isfinite(values)]
+            for stat, function in (("mean", np.mean), ("median", np.median), ("std", np.std),
+                                   ("p25", lambda x: np.percentile(x, 25)), ("p75", lambda x: np.percentile(x, 75))):
+                row[f"{key}_{stat}"] = float(function(values)) if values.size else math.nan
         for metric in ("entropy", "spread"):
             values = np.asarray([item.get(f"mean_heatmap_{metric}", math.nan) for item in by_step[row["step"]]], dtype=float)
             values = values[np.isfinite(values)]
@@ -1028,7 +1074,7 @@ def _write_rows_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _save_aggregate_plot(rows: list[dict[str, Any]], path: Path) -> None:
+def _save_aggregate_plot(rows: list[dict[str, Any]], path: Path, objective_label="PCA reconstruction loss") -> None:
     """Save a slide-ready absolute-loss and relative-improvement figure."""
     if not rows:
         return
@@ -1073,10 +1119,11 @@ def _save_aggregate_plot(rows: list[dict[str, Any]], path: Path) -> None:
         linestyle="--",
         label="Mean",
     )
-    loss_axis.set_yscale("log")
-    loss_axis.set_title("Absolute PCA reconstruction loss")
+    if np.any(values["mean"] > 0):
+        loss_axis.set_yscale("log")
+    loss_axis.set_title(f"Absolute {objective_label}")
     loss_axis.set_xlabel("TTA optimization step")
-    loss_axis.set_ylabel("PCA reconstruction loss (log scale)")
+    loss_axis.set_ylabel(objective_label)
     loss_axis.legend(loc="best")
 
     reduction_axis.fill_between(
@@ -1098,11 +1145,11 @@ def _save_aggregate_plot(rows: list[dict[str, Any]], path: Path) -> None:
     reduction_axis.yaxis.set_major_formatter(PercentFormatter(xmax=1.0))
     reduction_axis.set_title("Reduction relative to each image at step 0")
     reduction_axis.set_xlabel("TTA optimization step")
-    reduction_axis.set_ylabel("Relative PCA-loss reduction")
+    reduction_axis.set_ylabel(f"Relative {objective_label} reduction")
     reduction_axis.legend(loc="best")
 
     figure.suptitle(
-        "PCA-guided episodic test-time adaptation", fontsize=18, weight="bold"
+        "Episodic test-time adaptation", fontsize=18, weight="bold"
     )
     figure.tight_layout(rect=(0, 0, 1, 0.94))
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1191,6 +1238,7 @@ def _save_drift_plot(rows: list[dict[str, Any]], path: Path) -> None:
 def _save_final_adaptation_distribution(
     rows: list[dict[str, Any]],
     path: Path,
+    objective_label="PCA reconstruction loss",
 ) -> None:
     """Show final loss-reduction and landmark-drift distributions."""
     valid = [row for row in rows if not bool(row.get("failed", False))]
@@ -1220,7 +1268,7 @@ def _save_final_adaptation_distribution(
         np.median(reductions), color="#9B2226", linewidth=2.5, label="Median"
     )
     axes[0].xaxis.set_major_formatter(PercentFormatter(xmax=1.0))
-    axes[0].set_title("PCA-loss reduction per image")
+    axes[0].set_title(f"{objective_label} reduction per image")
     axes[0].set_xlabel("Relative reduction from step 0")
     axes[0].set_ylabel("Number of images")
     axes[0].legend()
@@ -1253,6 +1301,7 @@ def _save_evaluation_analysis(
     rows: list[dict[str, Any]],
     *,
     output_dir: Path,
+    pca_enabled: bool = True,
 ) -> dict[str, Any] | None:
     """Save GT-only post-hoc analyses after adaptation has fully completed."""
     required = {
@@ -1287,11 +1336,12 @@ def _save_evaluation_analysis(
     )
     correlation = _spearman_correlation(pca_reduction, delta)
     _save_nme_before_after_scatter(valid, figures_dir / "nme_before_after_scatter.png")
-    _save_pca_vs_nme_scatter(
-        valid,
-        correlation=correlation,
-        path=figures_dir / "pca_loss_reduction_vs_nme_change.png",
-    )
+    if pca_enabled:
+        _save_pca_vs_nme_scatter(
+            valid,
+            correlation=correlation,
+            path=figures_dir / "pca_loss_reduction_vs_nme_change.png",
+        )
     _save_orientation_nme_plot(
         orientation_rows,
         path=figures_dir / "nme_before_after_by_orientation.png",
@@ -1758,7 +1808,7 @@ def _tta_readme(config: PCATTAConfig) -> str:
         "Each image is an independent episode; adapted parameters and optimizer "
         "state reset before the next image."
     )
-    return f"""# PCA-guided episodic TTA
+    return f"""# Episodic TTA objectives
 
 Adaptation scope: `{config.adaptation_scope}`. The complete normalizer is updated;
 `normalizer_head_norms` additionally updates head normalization affine parameters,
@@ -1768,11 +1818,19 @@ InstanceNorm, and `normalizer_layer1_instance` updates just that new InstanceNor
 `normalizer_all_norms` updates all landmarker normalization layers in batches;
 `normalizer_all_instance_norms` updates all landmarker InstanceNorm affine
 parameters, one image at a time. Other landmarker parameters and the PCA prior
-remain frozen. {episode} The sole optimization objective is PCA reconstruction loss; no
+remain frozen. {episode} The objective is a weighted sum of PCA, heatmap entropy and heatmap spread; no
 target ground truth, image regularizer, parameter regularizer, or consistency
 loss is used.
 
-PCA loss mode: `{config.pca_loss_space}`. {objective}
+Weights (PCA, entropy, spread): `({config.pca_weight}, {config.entropy_weight}, {config.spread_weight})`.
+Zero disables a signal. A PCA prior is needed only when PCA weight is positive.
+Spatial probabilities use softmax with temperature 1. Entropy is `-sum(p log p)/log(HW)`;
+spread is `2 sum(p ||r-E[r]||^2)` with coordinates `r` in `[0,1]^2`.
+Both average all landmarks and images and are normalized to `[0,1]`.
+Raw components, weighted components, and per-image objective are saved separately.
+For batch episodes `total_tta_loss` is the batch mean; `sample_tta_loss` is per image.
+PCA and heatmap terms have different scales; equal weights do not imply balanced gradients.
+PCA loss mode (when enabled): `{config.pca_loss_space}`. {objective}
 Neither the reconstruction nor the transform is detached. No second PCA loss
 or face-size normalization is applied.
 
@@ -1808,3 +1866,27 @@ or face-size normalization is applied.
 Ground-truth metrics are computed only after adaptation by the standard dataset
 evaluator and never feed the optimizer.
 """
+
+
+def _save_loss_components(rows, path):
+    """Raw signals and weighted contributions on separate axes."""
+    if not rows or plotting is None:
+        return
+    figure, axes = plotting.subplots(1, 2, figsize=(14, 5))
+    steps = [row["step"] for row in rows]
+    for signal, raw in (("PCA", "pca_reconstruction_loss"),
+                        ("Entropy", "heatmap_entropy_loss"), ("Spread", "heatmap_spread_loss")):
+        values = np.asarray([row.get(f"{raw}_mean", math.nan) for row in rows])
+        if np.isfinite(values).any():
+            axes[0].plot(steps, values, label=signal)
+        axes[1].plot(steps, [row[f"weighted_{signal.lower()}_loss_mean"] for row in rows], label=signal)
+    axes[0].set_title("Raw loss signals (different units)")
+    axes[1].set_title("Weighted contributions to the objective")
+    for axis in axes:
+        axis.set_xlabel("TTA optimization step")
+        axis.set_ylabel("Mean loss")
+        axis.legend()
+        axis.grid(alpha=0.2)
+    figure.tight_layout()
+    figure.savefig(path, dpi=180)
+    plotting.close(figure)
