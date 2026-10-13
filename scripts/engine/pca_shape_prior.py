@@ -298,7 +298,7 @@ def load_pca_shape_prior(
     prior_path: str | Path,
     device: torch.device | str,
 ) -> dict[str, Any]:
-    """Load a saved global PCA prior and move tensor fields to device."""
+    """Load a global/pose PCA payload and move all prior tensors to device."""
     payload = torch.load(prior_path, map_location=device, weights_only=False)
     required_keys = {"global_prior", "alignment"}
     missing_keys = required_keys.difference(payload)
@@ -312,19 +312,11 @@ def load_pca_shape_prior(
             f"Expected '{PCA_ALIGNMENT_METHOD}'."
         )
 
-    global_prior = payload["global_prior"]
-    for key in (
-        "mean_shape",
-        "components",
-        "explained_variance",
-        "explained_variance_ratio",
-        "all_explained_variance",
-        "all_explained_variance_ratio",
-        "reference_shape",
-    ):
-        if key in global_prior and isinstance(global_prior[key], torch.Tensor):
-            global_prior[key] = global_prior[key].to(device=device, dtype=torch.float32)
-    payload["global_prior"] = global_prior
+    priors = [payload["global_prior"], *payload.get("pose_priors", {}).values()]
+    for prior in priors:
+        for key, value in prior.items():
+            if isinstance(value, torch.Tensor):
+                prior[key] = value.to(device=device, dtype=torch.float32)
     return payload
 
 
@@ -448,3 +440,79 @@ def compute_pca_projection_loss(
 
     losses = torch.stack(sample_losses)
     return losses.mean() if reduction == "mean" else losses
+
+
+PCA_POSE_ANGLES = {
+    "pose5": (-75, -45, 0, 45, 75),
+    "pose13": (-75, -65, -55, -45, -30, -15, 0, 15, 30, 45, 55, 65, 75),
+}
+
+
+def build_pose_pca_shape_prior_payload(landmarks, yaw_angles, mode="pose5",
+                                      num_components=32, explained_variance_threshold=None,
+                                      allow_reflection=False, eps=PCA_ALIGNMENT_EPS):
+    """Fit exact-angle train priors in a common Procrustes coordinate frame.
+
+    The five-angle mode excludes all other angles, rather than merging them.
+    A global prior on the same selected samples is retained for compatibility.
+    """
+    if mode not in PCA_POSE_ANGLES:
+        raise ValueError(f"Unsupported pose PCA mode: {mode}")
+    angles = PCA_POSE_ANGLES[mode]
+    yaw = torch.as_tensor(yaw_angles, device=landmarks.device).flatten()
+    if yaw.numel() != landmarks.shape[0] or not torch.isfinite(yaw).all():
+        raise ValueError("Pose priors require a finite yaw label for every training shape.")
+    finite = torch.isfinite(landmarks).all(dim=-1).all(dim=-1)
+    selected = finite & torch.stack([yaw == angle for angle in angles]).any(0)
+    selected_yaw = yaw[selected]
+    for angle in angles:
+        count = int((selected_yaw == angle).sum())
+        if count < 2:
+            raise ValueError(f"Pose {angle} requires at least two finite training shapes, got {count}.")
+    payload, aligned = build_global_pca_shape_prior_payload(
+        landmarks[selected], num_components, explained_variance_threshold, allow_reflection, eps)
+    global_prior = payload["global_prior"]
+    pose_priors = {}
+    aligned_by_pose = {}
+    for angle in angles:
+        shapes = aligned[selected_yaw.cpu() == angle]
+        vectors = flatten_landmark_shapes(shapes)
+        mean = vectors.mean(0)
+        _, singular, vh = torch.linalg.svd(vectors - mean, full_matrices=False)
+        variance = singular.square() / (vectors.shape[0] - 1)
+        ratio = variance / variance.sum().clamp_min(eps)
+        maximum = min(vh.shape[0], vectors.shape[0] - 1, vectors.shape[1])
+        k = _select_num_components(ratio, maximum, num_components, explained_variance_threshold)
+        label = str(angle)
+        pose_priors[label] = {
+            "scope": "pose", "yaw_angle": angle, "mean_shape": mean,
+            "components": vh[:k], "reference_shape": global_prior["reference_shape"].clone(),
+            "explained_variance": variance[:k], "explained_variance_ratio": ratio[:k],
+            "all_explained_variance": variance, "all_explained_variance_ratio": ratio,
+            "num_components": k, "requested_num_components": num_components,
+            "explained_variance_threshold": explained_variance_threshold,
+            "num_samples": vectors.shape[0], "num_landmarks": landmarks.shape[1],
+            "shape_vector_size": vectors.shape[1],
+        }
+        aligned_by_pose[label] = shapes
+    payload.update(prior_mode=mode, pose_priors=pose_priors, pose_classes=list(pose_priors),
+                   pose_selection="exact_yaw", num_excluded_samples=int((~selected).sum()),
+                   pose_alignment="shared_global_reference")
+    return payload, aligned, aligned_by_pose
+
+
+def compute_min_pose_pca_loss(predicted_landmarks, pca_prior, loss_space="image"):
+    """Choose the minimum per image, keeping the winning residual differentiable."""
+    priors = pca_prior.get("pose_priors", {})
+    if not priors:
+        raise ValueError("min_pose requires a prior file containing pose_priors; rebuild using pose5 or pose13.")
+    labels = list(priors)
+    losses = torch.stack([
+        compute_pca_projection_loss(predicted_landmarks,
+                                    {"alignment": pca_prior["alignment"], "global_prior": priors[label]},
+                                    loss_space=loss_space, reduction="none")
+        for label in labels], dim=1)
+    if not bool(torch.isfinite(losses).all()):
+        raise FloatingPointError("Non-finite candidate pose PCA loss.")
+    minimum, indices = losses.min(dim=1)
+    return minimum, indices, losses, labels

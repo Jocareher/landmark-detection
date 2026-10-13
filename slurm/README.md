@@ -436,3 +436,8 @@ Zero disables a signal; at least one weight must be positive. A PCA prior is
 required only for a positive PCA weight. Each submission records the resolved
 weights in its launch metadata and generated YAML. See
 [objective formulas and examples](../docs/tta_signal_losses.md).
+
+For minimum reconstruction loss across pose PCA models, use
+`--pca-prior-mode min_pose --pca-tta-episode-unit batch`. Point the JSON
+`paths.pca_prior` to a bank built using `--prior-mode pose5` or `pose13`.
+See [pose-conditioned PCA experiments](../docs/pose_pca_tta.md).

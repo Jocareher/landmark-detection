@@ -16,15 +16,16 @@ from scripts.config import build_config
 from scripts.dataset import Resize, SyntheticLandmarkDataset
 from scripts.engine.pca_shape_prior import (
     build_global_pca_shape_prior_payload,
+    build_pose_pca_shape_prior_payload,
     flatten_landmark_shapes,
 )
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse CLI arguments for offline global PCA prior creation."""
+    """Parse CLI arguments for offline global or exact-pose PCA prior creation."""
     defaults = build_config()
     parser = argparse.ArgumentParser(
-        description="Fit one global PCA shape prior from the synthetic train split only.",
+        description="Fit global or exact-angle pose PCA shape priors from the synthetic train split only.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
@@ -93,12 +94,15 @@ def parse_args() -> argparse.Namespace:
             "Defaults to output_path.parent / 'previews'."
         ),
     )
+    parser.add_argument("--prior-mode", choices=("global", "pose5", "pose13"), default="global",
+                        help="Global or exact-angle pose priors. pose5 selects -75,-45,0,45,75 only.")
     return parser.parse_args()
 
 
 def collect_train_landmarks(
     args: argparse.Namespace,
-) -> torch.Tensor:
+    include_yaw: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     """Load train-only GT landmarks in resized crop space."""
     transform = Resize(size=(args.image_height, args.image_width))
     cache_file = None
@@ -116,10 +120,16 @@ def collect_train_landmarks(
         show_progress=True,
     )
     shapes = []
+    yaw = []
     for index in range(len(dataset)):
         sample = dataset[index]
         shapes.append(sample["landmarks"].float())
-    return torch.stack(shapes, dim=0)
+        if include_yaw:
+            yaw.append(float(sample["yaw_angle"]))
+    if not shapes:
+        raise ValueError("No training samples found.")
+    landmarks = torch.stack(shapes, dim=0)
+    return (landmarks, torch.tensor(yaw)) if include_yaw else landmarks
 
 
 def save_pca_analysis_plots(
@@ -232,17 +242,23 @@ def save_pca_analysis_plots(
 
 
 def main() -> None:
-    """Fit and save the train-only global PCA shape prior."""
+    """Fit and save train-only global or pose-conditioned PCA priors."""
     args = parse_args()
     if args.pca_num_components is not None and args.pca_num_components < 1:
         raise ValueError("--pca-num-components must be at least 1.")
 
-    landmarks = collect_train_landmarks(args)
-    prior_payload, aligned_shapes = build_global_pca_shape_prior_payload(
-        landmarks=landmarks,
-        num_components=args.pca_num_components,
-        explained_variance_threshold=args.pca_explained_variance,
-    )
+    aligned_by_pose = {}
+    if args.prior_mode == "global":
+        landmarks = collect_train_landmarks(args)
+        prior_payload, aligned_shapes = build_global_pca_shape_prior_payload(
+            landmarks=landmarks, num_components=args.pca_num_components,
+            explained_variance_threshold=args.pca_explained_variance)
+        prior_payload["prior_mode"] = "global"
+    else:
+        landmarks, yaw = collect_train_landmarks(args, include_yaw=True)
+        prior_payload, aligned_shapes, aligned_by_pose = build_pose_pca_shape_prior_payload(
+            landmarks, yaw, mode=args.prior_mode, num_components=args.pca_num_components,
+            explained_variance_threshold=args.pca_explained_variance)
     prior_payload["dataset_root"] = str(args.dataset_root)
     prior_payload["source_split"] = "train"
     prior_payload["image_size"] = (int(args.image_height), int(args.image_width))
@@ -256,6 +272,21 @@ def main() -> None:
         aligned_shapes=aligned_shapes,
         previews_dir=previews_dir,
     )
+    for label, shapes in aligned_by_pose.items():
+        prior = prior_payload["pose_priors"][label]
+        save_pca_analysis_plots({"global_prior": prior}, shapes, previews_dir / f"yaw_{label}")
+        print(f"[INFO] Pose {label}: samples={prior['num_samples']} components={prior['num_components']}")
+    if aligned_by_pose:
+        summary = {"prior_mode": args.prior_mode, "selection": "exact_yaw",
+                   "excluded_samples": prior_payload["num_excluded_samples"],
+                   "poses": [{"yaw": label, "num_samples": prior["num_samples"],
+                              "num_components": prior["num_components"]}
+                             for label, prior in prior_payload["pose_priors"].items()]}
+        (previews_dir / "pose_pca_summary.json").write_text(json.dumps(summary, indent=2))
+        counts = {prior["num_components"] for prior in prior_payload["pose_priors"].values()}
+        if len(counts) > 1:
+            print("[WARNING] Pose priors have different component counts; inspect flexibility before comparing minima.")
+        print(f"[INFO] Excluded samples: {prior_payload['num_excluded_samples']}")
     print(f"[INFO] Saved PCA prior: {args.output_path}")
     print(f"[INFO] Saved PCA previews: {previews_dir}")
 

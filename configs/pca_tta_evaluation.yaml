@@ -79,6 +79,12 @@ arguments:
   # The existing PCA prior works for both. This choice is independent of the
   # loss used during source training; it does not alter checkpoint architecture.
   # PCA is loaded only if tta_pca_weight > 0. LR/weights may need recalibration.
+  # global: historical single prior. min_pose: minimum over all pose priors per image.
+  # min_pose requires a file built with --prior-mode pose5 or pose13.
+  pca_prior_mode: global
+  # auto: historical behavior; batch: shared optimizer for the loader batch.
+  # Choose batch for the min_pose batch experiment (scope remains independent).
+  pca_tta_episode_unit: auto
   pca_loss_space: aligned
   pca_prior_path: /home/jocareher/Downloads/landmark-detection/weights/pca_prior_13y_k32.pt
 

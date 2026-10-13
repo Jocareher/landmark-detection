@@ -15,6 +15,10 @@ def resolved_arguments(plan, base):
     args = dict(base)
     if plan.get('pca_loss_space') is not None:
         args['pca_loss_space'] = plan['pca_loss_space']
+    if plan['mode'] == 'tta':
+        for key in ('pca_prior_mode', 'pca_tta_episode_unit'):
+            if plan.get(key) is not None:
+                args[key] = plan[key]
     run = Path(plan['run_dir'])
     resources, paths = plan['resources'], plan['paths']
     args.update(device='cuda', batch_size=resources['batch_size'],

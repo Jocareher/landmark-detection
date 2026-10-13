@@ -4,8 +4,8 @@ All objectives are available on `research-tta` through
 `configs/pca_tta_evaluation.yaml`, `scripts.evaluate`, and `slurm/tta_landmarks.sh`.
 The historical `pca_tta: true` switch enables the adapter for **all** signal
 combinations. No retraining or new checkpoint architecture is required.
-Training objectives are unchanged. Selection between different PCA priors is
-not implemented here; one prior is used when PCA is enabled.
+Training objectives are unchanged. The default uses one global PCA; minimum selection across pose priors is
+available through `pca_prior_mode: min_pose` (see the pose PCA guide below).
 
 ## Definitions
 
@@ -127,3 +127,7 @@ figures. PCA-only runs retain the historical PCA curve filename; mixed or
 heatmap-only runs use `tta_objective_curve.png`. PCA-versus-NME figures are
 created only when PCA is enabled. GT-valid metrics remain post-hoc evaluation
 and never enter the optimizer.
+
+Pose-conditioned PCA banks and minimum-loss selection are described in
+[pose PCA TTA](pose_pca_tta.md). Select `pca_prior_mode: min_pose`; the minimum
+is taken per image before batch averaging, independently of entropy/spread.

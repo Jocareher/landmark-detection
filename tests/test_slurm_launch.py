@@ -50,7 +50,8 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode, run_nam
                            scope='normalizer_heads', dataset='babyland', checkpoint=None,
                            normalizer_checkpoint=None, afterok=None, time=None,
                            partition=None, gpu_type=None, epochs=None, steps=None,
-                           batch_size=None, dry_run=False)
+                           batch_size=None, dry_run=False,
+                           pca_prior_mode='min_pose', pca_tta_episode_unit='batch')
     if mode == 'tta':
         args.checkpoint = tmp_path / 'future.pth'
         args.afterok = '123'
@@ -100,6 +101,8 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode, run_nam
         assert Path(resolved['output_dir']) / resolved['wandb_run_name'] == run
     else:
         assert resolved['pca_tta_adaptation_scope'] == 'normalizer_heads'
+        assert resolved['pca_prior_mode'] == 'min_pose'
+        assert resolved['pca_tta_episode_unit'] == 'batch'
         assert resolved['checkpoint'] == str(args.checkpoint)
         if heatmap_only:
             assert resolved['tta_pca_weight'] == 0
@@ -264,9 +267,11 @@ def test_tta_weights_yaml_and_cli(monkeypatch):
     weights = launch.resolve_tta_weights(source, SimpleNamespace(tta_spread_weight=0.5))
     assert weights == {'pca': 0, 'entropy': 0.25, 'spread': 0.5}
     monkeypatch.setattr('sys.argv', ['evaluate', '--config', str(ROOT/'configs/pca_tta_evaluation.yaml'),
-                                   '--tta-pca-weight', '0', '--tta-entropy-weight', '1'])
+                                   '--tta-pca-weight', '0', '--tta-entropy-weight', '1',
+                                   '--pca-prior-mode', 'min_pose', '--pca-tta-episode-unit', 'batch'])
     config = build_config_from_args(parse_args())
     assert config.tta_pca_weight == 0 and config.tta_entropy_weight == 1
     assert config.tta_spread_weight == 0
+    assert config.pca_prior_mode == 'min_pose' and config.pca_tta_episode_unit == 'batch'
     with pytest.raises(ValueError):
         launch.resolve_tta_weights(source, SimpleNamespace(tta_entropy_weight=0, tta_spread_weight=0))

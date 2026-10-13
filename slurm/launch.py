@@ -83,6 +83,8 @@ def arguments():
     for signal in ('pca', 'entropy', 'spread'):
         parser.add_argument(f'--tta-{signal}-weight', type=float,
                             help='Override the TTA signal weight in the YAML; zero disables it.')
+    parser.add_argument('--pca-prior-mode', choices=('global', 'min_pose'), help='Override the YAML prior selection mode.')
+    parser.add_argument('--pca-tta-episode-unit', choices=('auto', 'image', 'batch'), help='Override the YAML episode unit.')
     parser.add_argument('--dataset', choices=('babyland', 'infanface'), default='babyland')
     parser.add_argument('--checkpoint', type=Path)
     parser.add_argument('--normalizer-checkpoint', type=Path)
@@ -238,6 +240,8 @@ def main():
     run = root / name
     plan = dict(mode=args.mode, normalization=args.normalization, scope=args.scope,
                 pca_loss_space=getattr(args, 'pca_loss_space', None),
+                pca_prior_mode=getattr(args, 'pca_prior_mode', None),
+                pca_tta_episode_unit=getattr(args, 'pca_tta_episode_unit', None),
                 evaluations=evaluations, tta_loss_weights=tta_weights,
                 dataset=args.dataset, paths=selected_paths, checkpoint=checkpoint,
                 normalizer_checkpoint=separate, run_dir=str(run), resources=resources,

@@ -335,6 +335,8 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "lambda_pca_projection": LAMBDA_PCA_PROJECTION,
     "pca_loss_space": PCA_LOSS_SPACE,
     "pca_tta_enabled": PCA_TTA_ENABLED,
+    "pca_prior_mode": "global",
+    "pca_tta_episode_unit": "auto",
     "tta_pca_weight": 1.0,
     "tta_entropy_weight": 0.0,
     "tta_spread_weight": 0.0,

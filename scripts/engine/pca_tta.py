@@ -44,6 +44,8 @@ class PCATTAConfig:
     normalization_mean: tuple[float, ...] = (0.485, 0.456, 0.406)
     normalization_std: tuple[float, ...] = (0.229, 0.224, 0.225)
     pca_loss_space: str = "image"
+    pca_prior_mode: str = "global"
+    episode_unit: str = "auto"
     pca_weight: float = 1.0
     entropy_weight: float = 0.0
     spread_weight: float = 0.0
@@ -51,6 +53,12 @@ class PCATTAConfig:
     def validate(self) -> None:
         """Validate values before any target image is adapted."""
         validate_tta_weights(self.pca_weight, self.entropy_weight, self.spread_weight)
+        if self.pca_prior_mode not in {"global", "min_pose"}:
+            raise ValueError(f"Unsupported PCA prior mode: {self.pca_prior_mode}")
+        if self.episode_unit not in {"auto", "image", "batch"}:
+            raise ValueError(f"Unsupported TTA episode unit: {self.episode_unit}")
+        if self.episode_unit == "image" and self.adaptation_scope == "normalizer_all_norms":
+            raise ValueError("normalizer_all_norms requires batch or auto episode unit.")
         if self.pca_loss_space not in {"aligned", "image"}:
             raise ValueError(f"Unsupported PCA loss space: {self.pca_loss_space}")
         if self.adaptation_scope not in {"normalizer", "normalizer_head_norms", "normalizer_heads",
@@ -111,6 +119,8 @@ class PCAGuidedTTA:
         config.validate()
         if config.pca_weight > 0 and pca_prior is None:
             raise ValueError("A PCA prior is required when tta_pca_weight > 0.")
+        if config.pca_weight > 0 and config.pca_prior_mode == "min_pose" and not pca_prior.get("pose_priors"):
+            raise ValueError("min_pose requires pose_priors; build a pose5 or pose13 prior first.")
         if not isinstance(model, NormalizedLandmarker) or model.normalizer is None:
             raise TypeError(
                 "PCA-guided TTA requires a NormalizedLandmarker with an active "
@@ -162,6 +172,7 @@ class PCAGuidedTTA:
             f"landmarker_total={landmarker_total:,} "
             f"scope={self.config.adaptation_scope} "
             f"weights(pca,entropy,spread)=({self.config.pca_weight},{self.config.entropy_weight},{self.config.spread_weight}) "
+            f"pca_prior_mode={self.config.pca_prior_mode} episode_unit={self._episode_unit()} "
             f"pca_loss_space={self.config.pca_loss_space} "
             f"landmarker_trainable={sum(p.numel() for p in self.model.landmarker.parameters() if p.requires_grad):,} "
             f"normalizer_total={normalizer_total:,} "
@@ -190,7 +201,7 @@ class PCAGuidedTTA:
             raise ValueError("sample_ids length must match the image batch size.")
         if self.config.adaptation_scope == "normalizer_all_instance_norms" and images.shape[0] != 1:
             raise ValueError("InstanceNorm-only TTA requires batch_size=1.")
-        if self.config.adaptation_scope == "normalizer_all_norms":
+        if self._episode_unit() == "batch":
             self.episode_batch_sizes.append(images.shape[0])
             return self._adapt_batch_episode(images, ids)
 
@@ -782,11 +793,17 @@ class PCAGuidedTTA:
             for frame in frames:
                 frame.close()
 
+    def _episode_unit(self):
+        if self.config.episode_unit != "auto":
+            return self.config.episode_unit
+        return "batch" if self.config.adaptation_scope == "normalizer_all_norms" else "image"
+
     def _losses(self, heatmaps, landmarks):
         return compute_tta_losses(
             heatmaps, landmarks, self.pca_prior,
             pca_weight=self.config.pca_weight, entropy_weight=self.config.entropy_weight,
-            spread_weight=self.config.spread_weight, pca_loss_space=self.config.pca_loss_space)
+            spread_weight=self.config.spread_weight, pca_loss_space=self.config.pca_loss_space,
+            pca_prior_mode=self.config.pca_prior_mode)
 
     def finalize(self) -> dict[str, Any]:
         """Write raw, per-image, aggregate, plot, and interpretation artifacts."""
@@ -826,8 +843,9 @@ class PCAGuidedTTA:
             "adapted_module": ("external_image_normalizer" if self.config.adaptation_scope == "normalizer"
                                else self.config.adaptation_scope),
             "adaptation_scope": self.config.adaptation_scope,
-            "adaptation_unit": ("batch" if self.config.adaptation_scope == "normalizer_all_norms"
-                                else "image"),
+            "adaptation_unit": self._episode_unit(),
+            "pca_prior_mode": self.config.pca_prior_mode,
+            "pca_pose_classes": list(self.pca_prior.get("pose_priors", {})) if self.pca_prior else [],
             "episode_batch_sizes": self.episode_batch_sizes,
             "adapted_parameter_names": self.adapted_parameter_names,
             "adapted_parameter_count": sum(p.numel() for p in self.adapted_parameters),
@@ -876,7 +894,7 @@ class PCAGuidedTTA:
                         **{f"tta/{key}": value for key, value in row.items() if key.startswith("heatmap_")},
                         "tta/step": int(row["step"]),
                         "tta/total_loss_mean": float(row["mean"]),
-                        **{f"tta/{key}": value for key, value in row.items() if key.endswith("_loss_mean")},
+                        **{f"tta/{key}": value for key, value in row.items() if key.endswith("_loss_mean") or key.startswith(("pca_candidate_loss_", "pca_selected_count_"))},
                         "tta/pca_loss_mean": float(row["pca_reconstruction_loss_mean"]),
                         "tta/pca_loss_median": float(row["pca_reconstruction_loss_median"]),
                         "tta/pca_loss_p25": float(row["pca_reconstruction_loss_p25"]),
@@ -961,6 +979,11 @@ def _summarize_sample_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         finite = [v for v in values if math.isfinite(v)]
         component_summary.update({f"initial_{key}": values[0], f"final_{key}": values[-1],
                                   f"minimum_{key}": min(finite) if finite else math.nan})
+    if "pca_selected_yaw" in initial:
+        component_summary.update(initial_pca_selected_yaw=initial["pca_selected_yaw"],
+                                 final_pca_selected_yaw=final["pca_selected_yaw"],
+                                 pca_selection_changes=sum(a.get("pca_selected_yaw") != b.get("pca_selected_yaw")
+                                                           for a, b in zip(rows, rows[1:])))
     pca_initial = float(initial.get("pca_reconstruction_loss", math.nan))
     pca_final = float(final.get("pca_reconstruction_loss", math.nan))
     return {
@@ -1047,8 +1070,13 @@ def _aggregate_trajectories(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             }
         )
     for row in aggregate:
+        candidate_keys = sorted({key for item in by_step[row["step"]] for key in item if key.startswith("pca_candidate_loss_")})
+        winners = [item["pca_selected_yaw"] for item in by_step[row["step"]] if "pca_selected_yaw" in item]
+        for key in candidate_keys:
+            yaw = float(key.split("_yaw_", 1)[1])
+            row[f"pca_selected_count_yaw_{int(yaw)}"] = winners.count(yaw)
         for key in ("sample_tta_loss", "pca_reconstruction_loss", "heatmap_entropy_loss", "heatmap_spread_loss",
-                    "weighted_pca_loss", "weighted_entropy_loss", "weighted_spread_loss"):
+                    "weighted_pca_loss", "weighted_entropy_loss", "weighted_spread_loss", *candidate_keys):
             values = np.asarray([item.get(key, math.nan) for item in by_step[row["step"]]], dtype=float)
             values = values[np.isfinite(values)]
             for stat, function in (("mean", np.mean), ("median", np.median), ("std", np.std),
@@ -1804,7 +1832,7 @@ def _tta_readme(config: PCATTAConfig) -> str:
         "One episode uses the entire loader batch. Selected BatchNorm layers use "
         "batch statistics and update their running buffers during adaptation. "
         "All parameters, buffers, and optimizer state reset before the next batch."
-        if config.adaptation_scope == "normalizer_all_norms" else
+        if config.episode_unit == "batch" or (config.episode_unit == "auto" and config.adaptation_scope == "normalizer_all_norms") else
         "Each image is an independent episode; adapted parameters and optimizer "
         "state reset before the next image."
     )
@@ -1821,6 +1849,11 @@ parameters, one image at a time. Other landmarker parameters and the PCA prior
 remain frozen. {episode} The objective is a weighted sum of PCA, heatmap entropy and heatmap spread; no
 target ground truth, image regularizer, parameter regularizer, or consistency
 loss is used.
+
+PCA prior mode: `{config.pca_prior_mode}`. `min_pose` evaluates every pose prior,
+selects the minimum for EACH image at EACH step, and then averages the batch.
+Only the winning residual contributes PCA gradients; pose labels are never read.
+Candidate losses and winning yaw are recorded in trajectories.
 
 Weights (PCA, entropy, spread): `({config.pca_weight}, {config.entropy_weight}, {config.spread_weight})`.
 Zero disables a signal. A PCA prior is needed only when PCA weight is positive.

@@ -231,6 +231,10 @@ def parse_args() -> argparse.Namespace:
         default=defaults.pca_loss_space,
         help="Select original aligned PCA loss or inverse-transformed image-space loss for TTA.",
     )
+    parser.add_argument("--pca-prior-mode", choices=("global", "min_pose"), default=defaults.pca_prior_mode,
+                        help="Use global prior or minimum reconstruction loss across pose priors, per image.")
+    parser.add_argument("--pca-tta-episode-unit", choices=("auto", "image", "batch"), default=defaults.pca_tta_episode_unit,
+                        help="Adapt each image or a whole batch. auto preserves the scope's historical behavior.")
     parser.add_argument(
         "--pca-tta-adaptation-scope",
         choices=["normalizer", "normalizer_head_norms", "normalizer_heads",
@@ -436,6 +440,8 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.pca_prior_path = args.pca_prior_path
     for signal in ("pca", "entropy", "spread"):
         setattr(config, f"tta_{signal}_weight", getattr(args, f"tta_{signal}_weight"))
+    config.pca_prior_mode = args.pca_prior_mode
+    config.pca_tta_episode_unit = args.pca_tta_episode_unit
     config.pca_loss_space = args.pca_loss_space
     if config.pca_loss_space not in {"aligned", "image"}:
         raise ValueError(f"Unsupported PCA loss space: {config.pca_loss_space}")
@@ -610,7 +616,8 @@ def main() -> None:
             output_dir=output_dir / "tta",
             config=PCATTAConfig(
                 pca_weight=config.tta_pca_weight, entropy_weight=config.tta_entropy_weight,
-                spread_weight=config.tta_spread_weight,                pca_loss_space=config.pca_loss_space,
+                spread_weight=config.tta_spread_weight, pca_loss_space=config.pca_loss_space,
+                pca_prior_mode=config.pca_prior_mode, episode_unit=config.pca_tta_episode_unit,
                 adaptation_scope=config.pca_tta_adaptation_scope,
                 steps=config.pca_tta_steps,
                 learning_rate=config.pca_tta_learning_rate,
