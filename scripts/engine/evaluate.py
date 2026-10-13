@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .runtime_reporting import PredictionTiming, project_prediction_batch
+
 import csv
 import json
 from pathlib import Path
@@ -632,27 +634,36 @@ def evaluate_checkpoint(
 
     yaw_sample_counts: dict[str, int] = {}
 
+    timing = PredictionTiming(device)
     heatmap_rows = []
     with torch.inference_mode():
         for batch in tqdm(dataloader, desc="Evaluating", dynamic_ncols=True):
-            images = batch["image"].to(device, non_blocking=True)
-            outputs = model(images)
+            timing.begin(batch["metadata"]["sample_id"], adaptation=False)
+            with timing.stage("transfer"):
+                images = batch["image"].to(device, non_blocking=True)
+            with timing.stage("inference"):
+                outputs = model(images)
 
+            with timing.stage("decode"):
+                predicted_landmarks_batch = decode_heatmaps_to_image_coords(
+                    heatmaps=outputs["heatmaps"],
+                    image_height=images.shape[2],
+                    image_width=images.shape[3],
+                    use_subpixel=True,
+                    decoder=coordinate_decoder,
+                    softmax_temperature=wasserstein_softmax_temperature,
+                ).cpu()
+                predicted_visibility_logits = outputs["visibility_logits"].cpu()
+                predicted_visibility_scores = torch.sigmoid(predicted_visibility_logits)
+                predicted_visibility_batch = (
+                    predicted_visibility_scores >= visibility_threshold
+                ).to(torch.int64)
+            with timing.stage("reprojection"):
+                projected_predictions = project_prediction_batch(predicted_landmarks_batch, batch["metadata"], affine=False)
+            timing.finish(original_coordinates=True)
             heatmap_rows.extend(heatmap_image_rows(outputs["heatmaps"], batch["metadata"]["sample_id"]))
-            predicted_landmarks_batch = decode_heatmaps_to_image_coords(
-                heatmaps=outputs["heatmaps"],
-                image_height=images.shape[2],
-                image_width=images.shape[3],
-                use_subpixel=True,
-                decoder=coordinate_decoder,
-                softmax_temperature=wasserstein_softmax_temperature,
-            ).cpu()
 
-            predicted_visibility_logits = outputs["visibility_logits"].cpu()
-            predicted_visibility_scores = torch.sigmoid(predicted_visibility_logits)
-            predicted_visibility_batch = (
-                predicted_visibility_scores >= visibility_threshold
-            ).to(torch.int64)
+
 
             target_landmarks_batch = batch["landmarks"].cpu()
             target_visibility_batch = batch["visibility"].cpu()
@@ -694,11 +705,7 @@ def evaluate_checkpoint(
                     batched_size=metadata_batch["transformed_size"],
                     sample_index=sample_index,
                 )
-                predicted_landmarks_original = project_landmarks_to_original_size(
-                    landmarks=predicted_landmarks_batch[sample_index],
-                    transformed_size=transformed_size,
-                    original_size=original_size,
-                ).numpy()
+                predicted_landmarks_original = projected_predictions[sample_index][1]
 
                 target_landmarks_original = project_landmarks_to_original_size(
                     landmarks=target_landmarks_batch[sample_index],
@@ -1052,6 +1059,7 @@ def evaluate_checkpoint(
         row["orientation"] = poses.get(row["sample_id"], "unknown")
     save_heatmap_diagnostics(heatmap_rows, output_dir, summary)
     summary["evaluation_protocol"] = "synbaby"
+    summary["timing"] = timing.save(output_dir)
     summary = round_metric_value(summary)
 
     save_metrics_summary_csv(

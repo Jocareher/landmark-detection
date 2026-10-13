@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .runtime_reporting import clock, distribution, write_rows, save_tta_curves
 from .tta_losses import compute_tta_losses, validate_tta_weights
 from .heatmap_diagnostics import heatmap_image_rows, save_tta_heatmap_curves, DEFINITIONS
 
@@ -131,6 +132,9 @@ class PCAGuidedTTA:
         self.device = device
         self.output_dir = Path(output_dir)
         self.config = config
+        self.runtime_started = clock(device)
+        self.adaptation_timings = []
+        self.forward_timings = []
         self.wandb = wandb_module
         self.source_normalizer_state = {
             key: value.detach().cpu().clone()
@@ -179,7 +183,27 @@ class PCAGuidedTTA:
             f"normalizer_trainable={normalizer_total:,}"
         )
 
-    def adapt_batch(
+    def adapt_batch(self, images, sample_ids=None):
+        started = clock(self.device)
+        start_count = self.processed_samples
+        result = self._adapt_batch_impl(images, sample_ids)
+        self.adaptation_timings.append({"call_index": len(self.adaptation_timings),
+            "batch_size": images.shape[0], "adaptation_seconds": clock(self.device)-started,
+            "scope": self.config.adaptation_scope, "episode_unit": self._episode_unit(),
+            "sample_ids": "|".join(str(x) for x in sample_ids) if sample_ids is not None else
+                          "|".join(f"sample_{start_count+i:06d}" for i in range(images.shape[0]))})
+        return result
+
+    def _timed_forward(self, images, step=None, sample_ids=None):
+        started = clock(self.device)
+        outputs = self.model(images)
+        self.forward_timings.append({"forward_index": len(self.forward_timings), "step": step,
+            "batch_size": images.shape[0], "gradient_enabled": torch.is_grad_enabled(),
+            "inference_seconds": clock(self.device)-started,
+            "sample_ids": "|".join(str(x) for x in sample_ids) if sample_ids else ""})
+        return outputs
+
+    def _adapt_batch_impl(
         self,
         images: torch.Tensor,
         sample_ids: Sequence[str] | None = None,
@@ -261,7 +285,7 @@ class PCAGuidedTTA:
 
         try:
             for step in range(self.config.steps + 1):
-                outputs = self.model(image)
+                outputs = self._timed_forward(image, step, [sample_id])
                 landmarks = softargmax_heatmaps_to_image_coords(
                     heatmaps=outputs["heatmaps"],
                     image_height=image.shape[2],
@@ -467,8 +491,13 @@ class PCAGuidedTTA:
         )
         try:
             for step in range(self.config.steps + 1):
+                inference_started = clock(self.device)
                 normalized = self.model.normalize_images(images)
                 outputs = self.model.forward_normalized(normalized)
+                self.forward_timings.append({"forward_index": len(self.forward_timings), "step": step,
+                    "batch_size": batch_size, "gradient_enabled": torch.is_grad_enabled(),
+                    "inference_seconds": clock(self.device)-inference_started,
+                    "sample_ids": "|".join(sample_ids)})
                 landmarks = softargmax_heatmaps_to_image_coords(
                     outputs["heatmaps"], images.shape[2], images.shape[3]
                 )
@@ -815,6 +844,7 @@ class PCAGuidedTTA:
         aggregate_rows = _aggregate_trajectories(self.trajectory_rows)
         _write_rows_csv(aggregate_path, aggregate_rows)
         save_tta_heatmap_curves(aggregate_rows, self.output_dir)
+        save_tta_curves(self.trajectory_rows, aggregate_rows, self.output_dir)
         pca_only = self.config.entropy_weight == 0 and self.config.spread_weight == 0
         objective_label = "PCA reconstruction loss" if pca_only else "Weighted TTA objective"
         _save_loss_components(aggregate_rows, self.output_dir / "figures" / "tta_loss_components.png")
@@ -881,6 +911,26 @@ class PCAGuidedTTA:
         if self.config.pca_weight == 0:
             for key in ("pca_loss_space", "pca_loss_mode", "pca_loss_reduction", "pca_alignment_gradient"):
                 summary[key] = None
+        timing_dir = self.output_dir/"timing"
+        timing_dir.mkdir(parents=True, exist_ok=True)
+        write_rows(timing_dir/"adaptation_batches.csv", self.adaptation_timings)
+        write_rows(timing_dir/"model_forwards.csv", self.forward_timings)
+        runtime = {"total_tta_seconds": clock(self.device)-self.runtime_started,
+                   "adaptation": distribution([row["adaptation_seconds"] for row in self.adaptation_timings]),
+                   "inference": distribution([row["inference_seconds"] for row in self.forward_timings]),
+                   "forward_boundary": "normalizer + landmarker forward at each adaptation step, with gradients enabled; excludes loss/backward/optimizer",
+                   "adaptation_boundary": "adapt_batch including reset, optimization, monitoring and probes; excludes decoding/reprojection by evaluator",
+                   "total_boundary": "adapter initialization through adaptation and final artifacts; includes time between adapter calls"}
+        forward_images = sum(row["batch_size"] for row in self.forward_timings)
+        if runtime["inference"] is not None:
+            runtime["inference"]["amortized_seconds_per_forward_image"] = runtime["inference"]["total_seconds"]/forward_images
+            runtime["inference"]["num_forward_images"] = forward_images
+        if runtime["adaptation"] is not None:
+            adapted_images = sum(row["batch_size"] for row in self.adaptation_timings)
+            runtime["adaptation"]["amortized_seconds_per_image"] = runtime["adaptation"]["total_seconds"]/adapted_images
+        (timing_dir/"summary.json").write_text(json.dumps(runtime, indent=2))
+        summary["timing"] = runtime
+        print(f"[TIMING] TTA total: {runtime['total_tta_seconds']:.2f} s")
         (self.output_dir / "summary.json").write_text(
             json.dumps(summary, indent=2), encoding="utf-8"
         )

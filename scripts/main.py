@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 import copy
 import json
 import os
@@ -948,6 +949,7 @@ def calibrate_adain_source(model, train_loader, config, device) -> int:
 
 
 def main() -> None:
+    run_started = time.perf_counter()
     """Execute the end-to-end experiment pipeline from the command line."""
     args = parse_args()
     from scripts.engine import run_full_evaluation, smoke_test_single_batch, train_model
@@ -1102,6 +1104,8 @@ def main() -> None:
                 else None,
                 evaluation_summary=full_evaluation_summary,
             )
+            from scripts.engine.runtime_reporting import save_run_timing
+            save_run_timing(config.output_dir, run_started, "identity_sanity_evaluation", device)
             return
 
         print("[INFO] Building optimizer, scheduler, and losses...")
@@ -1257,6 +1261,9 @@ def main() -> None:
                 else None,
                 evaluation_summary=full_evaluation_summary,
             )
+
+        from scripts.engine.runtime_reporting import save_run_timing
+        save_run_timing(config.output_dir, run_started, "training", device)
 
 
 if __name__ == "__main__":

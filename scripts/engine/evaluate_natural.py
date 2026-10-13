@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .runtime_reporting import PredictionTiming, project_prediction_batch
+
 import json
 from pathlib import Path
 from typing import Any
@@ -146,27 +148,42 @@ def evaluate_natural_checkpoint(
     }
     orientation_sample_counts = {orientation: 0 for orientation in orientation_names}
 
+    timing = PredictionTiming(device)
     heatmap_rows = []
     for batch in tqdm(dataloader, desc="Evaluating", dynamic_ncols=True):
-        images = batch["image"].to(device, non_blocking=True)
+        timing.begin(batch["metadata"]["sample_id"], adaptation=tta_adapter is not None)
+        with timing.stage("transfer"):
+            images = batch["image"].to(device, non_blocking=True)
         metadata_batch = batch["metadata"]
         sample_ids = [str(value) for value in metadata_batch["sample_id"]]
         if tta_adapter is None:
             with torch.inference_mode():
-                outputs = model(images)
+                with timing.stage("inference"):
+                    outputs = model(images)
         else:
-            outputs = tta_adapter.adapt_batch(images=images, sample_ids=sample_ids)
+            with timing.stage("adaptation"):
+                outputs = tta_adapter.adapt_batch(images=images, sample_ids=sample_ids)
 
         with torch.inference_mode():
+            with timing.stage("decode"):
+                predicted_landmarks_batch = decode_heatmaps_to_image_coords(
+                    heatmaps=outputs["heatmaps"],
+                    image_height=images.shape[2],
+                    image_width=images.shape[3],
+                    use_subpixel=True,
+                    decoder=coordinate_decoder,
+                    softmax_temperature=wasserstein_softmax_temperature,
+                ).cpu()
+                predicted_visibility_logits = outputs["visibility_logits"].cpu()
+                predicted_visibility_scores = torch.sigmoid(predicted_visibility_logits)
+                predicted_visibility_batch = (
+                    predicted_visibility_scores >= visibility_threshold
+                ).to(torch.int64)
+            with timing.stage("reprojection"):
+                projected_predictions = project_prediction_batch(predicted_landmarks_batch, batch["metadata"], affine=True)
+            timing.finish(original_coordinates=True)
             heatmap_rows.extend(heatmap_image_rows(outputs["heatmaps"], sample_ids))
-            predicted_landmarks_batch = decode_heatmaps_to_image_coords(
-                heatmaps=outputs["heatmaps"],
-                image_height=images.shape[2],
-                image_width=images.shape[3],
-                use_subpixel=True,
-                decoder=coordinate_decoder,
-                softmax_temperature=wasserstein_softmax_temperature,
-            ).cpu()
+
 
             baseline_landmarks_batch = None
             baseline_visibility_batch = None
@@ -184,11 +201,6 @@ def evaluate_natural_checkpoint(
                     >= visibility_threshold
                 ).to(torch.int64)
 
-            predicted_visibility_logits = outputs["visibility_logits"].cpu()
-            predicted_visibility_scores = torch.sigmoid(predicted_visibility_logits)
-            predicted_visibility_batch = (
-                predicted_visibility_scores >= visibility_threshold
-            ).to(torch.int64)
 
             target_landmarks_batch = batch["landmarks"].cpu()
             target_visibility_batch = batch["visibility"].cpu()
@@ -228,15 +240,7 @@ def evaluate_natural_checkpoint(
                     sample_index
                 ]
 
-                predicted_landmarks_crop = project_landmarks_between_sizes(
-                    landmarks=predicted_landmarks_batch[sample_index],
-                    source_size=network_input_size,
-                    target_size=crop_size,
-                )
-                predicted_landmarks_original = apply_homogeneous_transform(
-                    landmarks=predicted_landmarks_crop,
-                    transform_matrix=transform_crop_to_orig,
-                )
+                predicted_landmarks_crop, predicted_landmarks_original = projected_predictions[sample_index]
                 baseline_landmarks_original = None
                 baseline_visibility = None
                 if baseline_landmarks_batch is not None:
@@ -791,6 +795,7 @@ def evaluate_natural_checkpoint(
         row["orientation"] = poses.get(row["sample_id"], "unknown")
     save_heatmap_diagnostics(heatmap_rows, output_dir, summary)
     summary["evaluation_protocol"] = "babyland"
+    summary["timing"] = timing.save(output_dir)
     summary = round_metric_value(summary)
 
     save_metrics_summary_csv(

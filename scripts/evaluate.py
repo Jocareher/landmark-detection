@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import time
 import json
 import sys
 from pathlib import Path
@@ -516,6 +517,7 @@ def _normalizer_architecture_from_config(config: ExperimentConfig) -> dict[str, 
 
 
 def main() -> None:
+    run_started = time.perf_counter()
     """
     Run standalone evaluation.
     """
@@ -781,6 +783,9 @@ def main() -> None:
     print_evaluation_summary(display_name, terminal_summary, output_dir)
     if wandb_module is not None:
         wandb_module.finish()
+
+    from scripts.engine.runtime_reporting import save_run_timing
+    save_run_timing(config.output_dir, run_started, "tta_evaluation" if tta_adapter is not None else "evaluation", device)
 
 
 if __name__ == "__main__":

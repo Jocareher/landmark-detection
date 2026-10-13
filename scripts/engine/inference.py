@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .runtime_reporting import PredictionTiming, project_prediction_batch
+
 from .heatmap_diagnostics import heatmap_image_rows
 
 from pathlib import Path
@@ -100,35 +102,46 @@ def export_inference_outputs(
 
     all_predictions: list[torch.Tensor] = []
     saved_samples = 0
+    timing = PredictionTiming(device)
     heatmap_rows = []
 
     for batch in tqdm(dataloader, desc="Inferring", dynamic_ncols=True):
-        images = batch["image"].to(device, non_blocking=True)
+        timing.begin(batch["metadata"]["sample_id"], adaptation=tta_adapter is not None)
+        with timing.stage("transfer"):
+            images = batch["image"].to(device, non_blocking=True)
         metadata_batch = batch["metadata"]
         sample_ids = [str(value) for value in metadata_batch["sample_id"]]
         if tta_adapter is None:
             with torch.inference_mode():
-                outputs = model(images)
+                with timing.stage("inference"):
+                    outputs = model(images)
         else:
-            outputs = tta_adapter.adapt_batch(images=images, sample_ids=sample_ids)
+            with timing.stage("adaptation"):
+                outputs = tta_adapter.adapt_batch(images=images, sample_ids=sample_ids)
 
         with torch.inference_mode():
+            with timing.stage("decode"):
+                predicted_landmarks_batch = decode_heatmaps_to_image_coords(
+                    heatmaps=outputs["heatmaps"],
+                    image_height=images.shape[2],
+                    image_width=images.shape[3],
+                    use_subpixel=True,
+                    decoder=coordinate_decoder,
+                    softmax_temperature=wasserstein_softmax_temperature,
+                ).cpu()
+                predicted_visibility_logits = outputs["visibility_logits"].cpu()
+                predicted_visibility_scores = torch.sigmoid(predicted_visibility_logits)
+                predicted_visibility_batch = (
+                    predicted_visibility_scores >= visibility_threshold
+                ).to(torch.int64)
+            with timing.stage("reprojection"):
+                projected_predictions = project_prediction_batch(predicted_landmarks_batch, batch["metadata"], affine=project_to_original)
+            timing.finish(original_coordinates=project_to_original)
             heatmap_rows.extend(heatmap_image_rows(outputs["heatmaps"], sample_ids))
-            predicted_landmarks_batch = decode_heatmaps_to_image_coords(
-                heatmaps=outputs["heatmaps"],
-                image_height=images.shape[2],
-                image_width=images.shape[3],
-                use_subpixel=True,
-                decoder=coordinate_decoder,
-                softmax_temperature=wasserstein_softmax_temperature,
-            ).cpu()
+
             all_predictions.append(predicted_landmarks_batch)
 
-            predicted_visibility_logits = outputs["visibility_logits"].cpu()
-            predicted_visibility_scores = torch.sigmoid(predicted_visibility_logits)
-            predicted_visibility_batch = (
-                predicted_visibility_scores >= visibility_threshold
-            ).to(torch.int64)
+
 
             batch_size = images.shape[0]
 
@@ -164,25 +177,13 @@ def export_inference_outputs(
                     transform_crop_to_orig = metadata_batch["transform_crop_to_orig"][
                         sample_index
                     ]
-                    predicted_landmarks_crop = project_landmarks_between_sizes(
-                        landmarks=predicted_landmarks_batch[sample_index],
-                        source_size=transformed_size,
-                        target_size=crop_size,
-                    )
-                    predicted_landmarks_output = apply_homogeneous_transform(
-                        landmarks=predicted_landmarks_crop,
-                        transform_matrix=transform_crop_to_orig,
-                    )
+                    predicted_landmarks_crop, predicted_landmarks_output = projected_predictions[sample_index]
                     overlay_image_path = Path(
                         metadata_batch["source_image_path"][sample_index]
                     )
                     overlay_output_path = prediction_overlays_dir / f"{sample_id}.jpg"
                 else:
-                    predicted_landmarks_output = project_landmarks_to_original_size(
-                        landmarks=predicted_landmarks_batch[sample_index],
-                        transformed_size=transformed_size,
-                        original_size=original_size,
-                    ).numpy()
+                    predicted_landmarks_output = projected_predictions[sample_index][1]
                     overlay_image_path = image_path
                     overlay_output_path = prediction_overlays_dir / f"{sample_id}.png"
 
@@ -226,7 +227,9 @@ def export_inference_outputs(
     predictions = (
         torch.cat(all_predictions, dim=0) if all_predictions else torch.empty(0)
     )
+    timing_summary = timing.save(output_dir)
     return {
+        "timing": timing_summary,
         "num_samples": saved_samples,
         "heatmap_rows": heatmap_rows,
         "predictions": predictions,

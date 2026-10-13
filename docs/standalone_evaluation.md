@@ -227,3 +227,10 @@ new columns, leaving previous rows blank for those measurements.
 TTA now supports heatmap entropy, spatial spread, and any weighted combination
 with PCA. See [TTA signal losses](tta_signal_losses.md) for formulas, YAML fields,
 local/HPC commands, and report definitions. Defaults remain PCA-only.
+
+## Runtime and loss-curve artifacts
+
+Prediction timing is saved automatically under each dataset's `timing/`
+directory, separating forward/adaptation, decode, original-coordinate
+reprojection and batch end-to-end latency. Training/TTA also save all loss
+curves under `curves/`. See [measurement boundaries and output files](runtime_and_curves.md).

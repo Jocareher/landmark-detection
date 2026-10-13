@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+import json
+from .runtime_reporting import clock, save_training_curves
 import math
 import time
 from pathlib import Path
@@ -137,7 +139,9 @@ def run_epoch(
     visible_nme_meter = AverageMeter()
     batch_time_meter = AverageMeter()
     autocast_device = device.type
-    epoch_start_time = time.time()
+    epoch_start_time = clock(device)
+    validation_inference_seconds = 0.0
+    validation_inference_images = 0
 
     for batch in dataloader:
         batch_start_time = time.time()
@@ -195,9 +199,12 @@ def run_epoch(
         else:
             with torch.inference_mode():
                 with torch.autocast(device_type=autocast_device, enabled=use_amp):
+                    forward_started = clock(device)
                     outputs, normalized_images = _forward_with_normalized_images(
                         model, images
                     )
+                    validation_inference_seconds += clock(device)-forward_started
+                    validation_inference_images += images.shape[0]
                     loss_dict = compute_multitask_loss(
                         outputs=outputs,
                         batch=batch_on_device,
@@ -297,7 +304,11 @@ def run_epoch(
             visible_nme_meter.avg if visible_nme_meter.count else float("nan")
         ),
         "batch_time": batch_time_meter.avg,
-        "epoch_time": time.time() - epoch_start_time,
+        "epoch_time": clock(device) - epoch_start_time,
+        "validation_forward_images": validation_inference_images if not training else None,
+        "validation_inference_seconds": validation_inference_seconds if not training else None,
+        "validation_inference_seconds_per_image": (validation_inference_seconds/validation_inference_images
+                                                   if validation_inference_images else None),
     }
 
 
@@ -452,6 +463,7 @@ def train_model(
     pca_loss_space: str = "image",
 ) -> dict[str, Any]:
     """Execute the full training pipeline, including validation and checkpointing."""
+    training_started = clock(device)
     if pca_loss_space not in {"aligned", "image"}:
         raise ValueError(f"Unsupported PCA loss space: {pca_loss_space}")
     wandb = None
@@ -602,6 +614,7 @@ def train_model(
 
         history["train"].append(train_metrics)
         history["val"].append(val_metrics)
+        save_training_curves(history, output_dir, plot=False)
         append_results_row(
             results_csv_path,
             epoch,
@@ -724,6 +737,7 @@ def train_model(
 
     from .heatmap_diagnostics import save_training_heatmap_curves
     save_training_heatmap_curves(history, output_dir)
+    save_training_curves(history, output_dir)
     final_epoch = len(history["train"])
     if normalizer_monitor is not None:
         normalizer_monitor.capture(
@@ -752,7 +766,18 @@ def train_model(
     if use_wandb and wandb is not None and finish_wandb:
         wandb.finish()
 
+    runtime = {"training_total_seconds": clock(device)-training_started,
+               "train_epoch_seconds": sum(row["epoch_time"] for row in history["train"]),
+               "val_epoch_seconds": sum(row["epoch_time"] for row in history["val"]),
+               "completed_epochs": len(history["train"]),
+               "validation_inference_seconds": sum(row["validation_inference_seconds"] for row in history["val"]),
+               "validation_forward_images": sum(row["validation_forward_images"] for row in history["val"]),
+               "boundary": "train_model entry through train/val, checkpoints, monitoring and final curves; excludes subsequent test evaluation"}
+    (output_dir/"timing").mkdir(parents=True, exist_ok=True)
+    (output_dir/"timing"/"training_summary.json").write_text(json.dumps(runtime, indent=2))
+    print(f"[TIMING] Training total: {runtime['training_total_seconds']:.2f} s")
     return {
+        "timing": runtime,
         "best_val_loss": best_val_loss,
         "pca_loss_space": pca_loss_space,
         "best_val_nme": best_val_nme,
