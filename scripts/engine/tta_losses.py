@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import torch
 from .metrics import heatmap_distribution_statistics
-from .pca_shape_prior import compute_pca_projection_loss, compute_min_pose_pca_loss
+from .pca_shape_prior import compute_pca_projection_terms, validate_pca_mahalanobis
 
 
 def validate_tta_weights(pca_weight: float, entropy_weight: float, spread_weight: float) -> None:
@@ -16,7 +16,9 @@ def validate_tta_weights(pca_weight: float, entropy_weight: float, spread_weight
 
 
 def compute_tta_losses(heatmaps, landmarks, pca_prior, *, pca_weight=1.0,
-                       entropy_weight=0.0, spread_weight=0.0, pca_loss_space="image", pca_prior_mode="global"):
+                       entropy_weight=0.0, spread_weight=0.0, pca_loss_space="image", pca_prior_mode="global",
+                       pca_mahalanobis_enabled=False, pca_mahalanobis_weight=1.0,
+                       pca_mahalanobis_c=10.0, pca_mahalanobis_eps=1e-8):
     """Return [B] raw signals, weighted contributions and their sum.
 
     p = spatial softmax(logits), with temperature fixed at 1.
@@ -25,6 +27,11 @@ def compute_tta_losses(heatmaps, landmarks, pca_prior, *, pca_weight=1.0,
     A zero PCA weight bypasses the prior and projection entirely.
     """
     validate_tta_weights(pca_weight, entropy_weight, spread_weight)
+    validate_pca_mahalanobis(pca_mahalanobis_enabled, pca_mahalanobis_weight,
+                            pca_mahalanobis_c, pca_mahalanobis_eps)
+    options = dict(mahalanobis_enabled=pca_mahalanobis_enabled,
+                   mahalanobis_weight=pca_mahalanobis_weight,
+                   mahalanobis_c=pca_mahalanobis_c, mahalanobis_eps=pca_mahalanobis_eps)
     if pca_prior_mode not in {"global", "min_pose"}:
         raise ValueError(f"Unsupported PCA prior mode: {pca_prior_mode}")
     statistics = heatmap_distribution_statistics(heatmaps)
@@ -36,18 +43,36 @@ def compute_tta_losses(heatmaps, landmarks, pca_prior, *, pca_weight=1.0,
         if pca_prior is None:
             raise ValueError("A PCA prior is required when tta_pca_weight > 0.")
         if pca_prior_mode == "min_pose":
-            minimum, indices, candidates, labels = compute_min_pose_pca_loss(landmarks, pca_prior, pca_loss_space)
-            raw["pca_reconstruction_loss"] = minimum
+            priors = pca_prior.get("pose_priors", {})
+            if not priors:
+                raise ValueError("min_pose requires a prior containing pose_priors.")
+            labels = list(priors)
+            candidates_terms = [compute_pca_projection_terms(
+                landmarks, {"alignment": pca_prior["alignment"], "global_prior": priors[label]},
+                loss_space=pca_loss_space, reduction="none", **options) for label in labels]
+            candidates = torch.stack([term["loss"] for term in candidates_terms], dim=1)
+            if not bool(torch.isfinite(candidates).all()):
+                raise FloatingPointError("Non-finite candidate pose PCA loss.")
+            _, indices = candidates.min(dim=1)
+            terms = {key: torch.stack([term[key] for term in candidates_terms], dim=1)
+                     .gather(1, indices[:, None]).squeeze(1) for key in candidates_terms[0]}
             selection["pca_selected_yaw"] = torch.tensor([float(label) for label in labels], device=indices.device)[indices]
             for index, label in enumerate(labels):
                 selection[f"pca_candidate_loss_yaw_{label}"] = candidates[:, index]
         else:
-            raw["pca_reconstruction_loss"] = compute_pca_projection_loss(
-                landmarks, pca_prior, loss_space=pca_loss_space, reduction="none")
+            terms = compute_pca_projection_terms(
+                landmarks, pca_prior, loss_space=pca_loss_space, reduction="none", **options)
+        for key, source in (("pca_loss", "loss"), ("pca_reconstruction_loss", "reconstruction"),
+                            ("pca_mahalanobis_squared", "mahalanobis_squared"),
+                            ("pca_mahalanobis_penalty", "mahalanobis_penalty"),
+                            ("weighted_pca_mahalanobis_loss", "weighted_mahalanobis")):
+            raw[key] = terms[source]
     else:
-        raw["pca_reconstruction_loss"] = torch.full_like(zero, math.nan)
+        for key in ("pca_loss", "pca_reconstruction_loss", "pca_mahalanobis_squared",
+                    "pca_mahalanobis_penalty", "weighted_pca_mahalanobis_loss"):
+            raw[key] = torch.full_like(zero, math.nan)
     result = {**raw, **selection}
-    for signal, weight, key in (("pca", pca_weight, "pca_reconstruction_loss"),
+    for signal, weight, key in (("pca", pca_weight, "pca_loss"),
                                ("entropy", entropy_weight, "heatmap_entropy_loss"),
                                ("spread", spread_weight, "heatmap_spread_loss")):
         result[f"weighted_{signal}_loss"] = raw[key] * weight if weight > 0 else zero

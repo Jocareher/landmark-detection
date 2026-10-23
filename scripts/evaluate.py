@@ -227,6 +227,12 @@ def parse_args() -> argparse.Namespace:
         parser.add_argument(f"--tta-{signal}-weight", type=float,
                             default=getattr(defaults, f"tta_{signal}_weight"),
                             help=f"Nonnegative {signal} objective weight; zero disables this signal.")
+    parser.add_argument("--pca-mahalanobis-enabled", action=argparse.BooleanOptionalAction,
+                        default=defaults.pca_mahalanobis_enabled,
+                        help="Add beta * max(squared Mahalanobis distance - c, 0) to PCA reconstruction.")
+    parser.add_argument("--pca-mahalanobis-weight", type=float, default=defaults.pca_mahalanobis_weight)
+    parser.add_argument("--pca-mahalanobis-c", type=float, default=defaults.pca_mahalanobis_c)
+    parser.add_argument("--pca-mahalanobis-eps", type=float, default=defaults.pca_mahalanobis_eps)
     parser.add_argument(
         "--pca-loss-space", choices=["aligned", "image"],
         default=defaults.pca_loss_space,
@@ -444,6 +450,13 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.pca_prior_mode = args.pca_prior_mode
     config.pca_tta_episode_unit = args.pca_tta_episode_unit
     config.pca_loss_space = args.pca_loss_space
+    config.pca_mahalanobis_enabled = args.pca_mahalanobis_enabled
+    config.pca_mahalanobis_weight = args.pca_mahalanobis_weight
+    config.pca_mahalanobis_c = args.pca_mahalanobis_c
+    config.pca_mahalanobis_eps = args.pca_mahalanobis_eps
+
+    from scripts.engine.pca_shape_prior import validate_pca_mahalanobis
+    validate_pca_mahalanobis(config.pca_mahalanobis_enabled, config.pca_mahalanobis_weight, config.pca_mahalanobis_c, config.pca_mahalanobis_eps)
     if config.pca_loss_space not in {"aligned", "image"}:
         raise ValueError(f"Unsupported PCA loss space: {config.pca_loss_space}")
     config.pca_tta_adaptation_scope = args.pca_tta_adaptation_scope
@@ -619,6 +632,10 @@ def main() -> None:
             config=PCATTAConfig(
                 pca_weight=config.tta_pca_weight, entropy_weight=config.tta_entropy_weight,
                 spread_weight=config.tta_spread_weight, pca_loss_space=config.pca_loss_space,
+                pca_mahalanobis_enabled=config.pca_mahalanobis_enabled,
+                pca_mahalanobis_weight=config.pca_mahalanobis_weight,
+                pca_mahalanobis_c=config.pca_mahalanobis_c,
+                pca_mahalanobis_eps=config.pca_mahalanobis_eps,
                 pca_prior_mode=config.pca_prior_mode, episode_unit=config.pca_tta_episode_unit,
                 adaptation_scope=config.pca_tta_adaptation_scope,
                 steps=config.pca_tta_steps,

@@ -401,6 +401,7 @@ def save_modular_checkpoints(
                     or model.normalizer.state_dict(),
                     "architecture": model.normalizer.architecture_config(),
                     "pca_loss_space": checkpoint_payloads[full_name].get("pca_loss_space"),
+                    **{key: checkpoint_payloads[full_name].get(key) for key in ('pca_mahalanobis_enabled', 'pca_mahalanobis_weight', 'pca_mahalanobis_c', 'pca_mahalanobis_eps')},
                 },
                 target,
             )
@@ -425,6 +426,7 @@ def save_modular_checkpoints(
                 "landmarker_architecture": checkpoint_payloads[full_name].get("landmarker_architecture", {}),
                 "source_full_checkpoint": str(checkpoints_dir / full_name),
                 "pca_loss_space": checkpoint_payloads[full_name].get("pca_loss_space"),
+                **{key: checkpoint_payloads[full_name].get(key) for key in ('pca_mahalanobis_enabled', 'pca_mahalanobis_weight', 'pca_mahalanobis_c', 'pca_mahalanobis_eps')},
             },
             target,
         )

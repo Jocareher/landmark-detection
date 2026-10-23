@@ -334,6 +334,11 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "pca_prior_path": PCA_PRIOR_PATH,
     "lambda_pca_projection": LAMBDA_PCA_PROJECTION,
     "pca_loss_space": PCA_LOSS_SPACE,
+    "pca_mahalanobis_enabled": False,
+    "pca_mahalanobis_weight": 1.0,
+    "pca_mahalanobis_c": 10.0,
+    "pca_mahalanobis_eps": 1e-8,
+
     "pca_tta_enabled": PCA_TTA_ENABLED,
     "pca_prior_mode": "global",
     "pca_tta_episode_unit": "auto",

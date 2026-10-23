@@ -2,6 +2,12 @@
 
 ## Elegir la pérdida PCA
 
+El término opcional de coeficientes `beta * max(D² - c, 0)` se configura en ambos
+YAML con `pca_mahalanobis_enabled`, `pca_mahalanobis_weight`,
+`pca_mahalanobis_c` y `pca_mahalanobis_eps`. Por defecto está desactivado.
+El launcher conserva estas opciones del YAML en la copia de cada job, sin cambios
+en el JSON del HPC. Ver [configuración y fórmula](../docs/pca_mahalanobis.md).
+
 En los YAML de entrenamiento y TTA, `arguments.pca_loss_space` admite:
 
 - `aligned`: pérdida original, MSE entre la predicción alineada por Procrustes

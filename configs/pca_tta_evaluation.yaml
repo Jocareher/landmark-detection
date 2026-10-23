@@ -86,6 +86,12 @@ arguments:
   # Choose batch for the min_pose batch experiment (scope remains independent).
   pca_tta_episode_unit: auto
   pca_loss_space: aligned
+  # Optional coefficient prior: L_PCA = reconstruction + beta * max(D^2 - c, 0).
+  # c is subtracted directly (no square root, no division by component count).
+  pca_mahalanobis_enabled: false
+  pca_mahalanobis_weight: 1.0  # beta; tune separately from the reconstruction weight
+  pca_mahalanobis_c: 10.0
+  pca_mahalanobis_eps: 1.0e-8  # floor for PCA component variances
   pca_prior_path: /home/jocareher/Downloads/landmark-detection/weights/pca_prior_13y_k32.pt
 
   # ---------------------------------------------------------------------------

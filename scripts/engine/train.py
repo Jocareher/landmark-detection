@@ -116,6 +116,10 @@ def run_epoch(
     progress_reporter: TrainingProgressReporter | None = None,
     learning_rate: float = 0.0,
     pca_loss_space: str = "image",
+    pca_mahalanobis_enabled: bool = False,
+    pca_mahalanobis_weight: float = 1.0,
+    pca_mahalanobis_c: float = 10.0,
+    pca_mahalanobis_eps: float = 1e-8,
 ) -> dict[str, float]:
     """Run one full training or validation epoch and aggregate split metrics."""
     if training and optimizer is None:
@@ -131,6 +135,7 @@ def run_epoch(
     visible_landmark_loss_meter = AverageMeter()
     visibility_loss_meter = AverageMeter()
     pca_projection_loss_meter = AverageMeter()
+    pca_term_meters = {key: AverageMeter() for key in ('pca_reconstruction_loss', 'pca_mahalanobis_squared', 'pca_mahalanobis_penalty', 'weighted_pca_mahalanobis_loss')}
     image_l1_loss_meter = AverageMeter()
     image_tv_loss_meter = AverageMeter()
     nme_meter = AverageMeter()
@@ -173,6 +178,10 @@ def run_epoch(
                     lambda_lmk_full=lambda_lmk_full,
                     lambda_pca_projection=lambda_pca_projection,
                     pca_loss_space=pca_loss_space,
+                    pca_mahalanobis_enabled=pca_mahalanobis_enabled,
+                    pca_mahalanobis_weight=pca_mahalanobis_weight,
+                    pca_mahalanobis_c=pca_mahalanobis_c,
+                    pca_mahalanobis_eps=pca_mahalanobis_eps,
                     pca_shape_prior=pca_shape_prior,
                     image_height=images.shape[2],
                     image_width=images.shape[3],
@@ -215,6 +224,10 @@ def run_epoch(
                         lambda_lmk_full=lambda_lmk_full,
                         lambda_pca_projection=lambda_pca_projection,
                         pca_loss_space=pca_loss_space,
+                        pca_mahalanobis_enabled=pca_mahalanobis_enabled,
+                        pca_mahalanobis_weight=pca_mahalanobis_weight,
+                        pca_mahalanobis_c=pca_mahalanobis_c,
+                        pca_mahalanobis_eps=pca_mahalanobis_eps,
                         pca_shape_prior=pca_shape_prior,
                         image_height=images.shape[2],
                         image_width=images.shape[3],
@@ -245,6 +258,8 @@ def run_epoch(
         )
         visibility_loss_meter.update(loss_dict["visibility_loss"].item(), batch_size)
         pca_projection_loss_meter.update(loss_dict["pca_loss"].item(), batch_size)
+        for key, meter in pca_term_meters.items():
+            meter.update(loss_dict[key].item(), batch_size)
         image_l1_loss_meter.update(loss_dict["image_l1_loss"].item(), batch_size)
         image_tv_loss_meter.update(loss_dict["image_tv_loss"].item(), batch_size)
 
@@ -297,6 +312,7 @@ def run_epoch(
         "visible_landmark_loss": visible_landmark_loss_meter.avg,
         "visibility_loss": visibility_loss_meter.avg,
         "pca_loss": pca_projection_loss_meter.avg,
+        **{key: meter.avg for key, meter in pca_term_meters.items()},
         "image_l1_loss": image_l1_loss_meter.avg,
         "image_tv_loss": image_tv_loss_meter.avg,
         "nme": nme_meter.avg if nme_meter.count else float("nan"),
@@ -319,6 +335,10 @@ def save_checkpoint(
     optimizer: torch.optim.Optimizer | None,
     metrics: dict[str, Any],
     pca_loss_space: str | None = None,
+    pca_mahalanobis_enabled: bool = False,
+    pca_mahalanobis_weight: float = 1.0,
+    pca_mahalanobis_c: float = 10.0,
+    pca_mahalanobis_eps: float = 1e-8,
 ) -> None:
     """Save a model checkpoint with optimizer state and tracked metrics."""
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -333,6 +353,11 @@ def save_checkpoint(
     }
     if pca_loss_space is not None:
         payload["pca_loss_space"] = pca_loss_space
+    payload["pca_mahalanobis_enabled"] = pca_mahalanobis_enabled
+    payload["pca_mahalanobis_weight"] = pca_mahalanobis_weight
+    payload["pca_mahalanobis_c"] = pca_mahalanobis_c
+    payload["pca_mahalanobis_eps"] = pca_mahalanobis_eps
+
     if isinstance(model, NormalizedLandmarker) and model.normalizer is not None:
         payload["normalizer_architecture"] = model.normalizer.architecture_config()
     landmarker = model.landmarker if isinstance(model, NormalizedLandmarker) else model
@@ -461,8 +486,14 @@ def train_model(
     normalization_std: tuple[float, ...] = (0.229, 0.224, 0.225),
     progress_reporter: TrainingProgressReporter | None = None,
     pca_loss_space: str = "image",
+    pca_mahalanobis_enabled: bool = False,
+    pca_mahalanobis_weight: float = 1.0,
+    pca_mahalanobis_c: float = 10.0,
+    pca_mahalanobis_eps: float = 1e-8,
 ) -> dict[str, Any]:
     """Execute the full training pipeline, including validation and checkpointing."""
+    from .pca_shape_prior import validate_pca_mahalanobis
+    validate_pca_mahalanobis(pca_mahalanobis_enabled, pca_mahalanobis_weight, pca_mahalanobis_c, pca_mahalanobis_eps)
     training_started = clock(device)
     if pca_loss_space not in {"aligned", "image"}:
         raise ValueError(f"Unsupported PCA loss space: {pca_loss_space}")
@@ -543,6 +574,9 @@ def train_model(
         if not pca_prior_path.exists():
             raise FileNotFoundError(f"PCA prior file not found: {pca_prior_path}")
         pca_shape_prior = load_pca_shape_prior(pca_prior_path, device=device)
+        if lambda_pca_projection > 0 and pca_mahalanobis_enabled:
+            from .pca_shape_prior import validate_pca_mahalanobis_prior
+            validate_pca_mahalanobis_prior(pca_shape_prior)
     if lambda_pca_projection > 0.0 and pca_shape_prior is None:
         raise ValueError("lambda_pca_projection > 0 requires a valid pca_prior_path.")
 
@@ -571,6 +605,10 @@ def train_model(
             lambda_lmk_full=lambda_lmk_full,
             lambda_pca_projection=lambda_pca_projection,
             pca_loss_space=pca_loss_space,
+            pca_mahalanobis_enabled=pca_mahalanobis_enabled,
+            pca_mahalanobis_weight=pca_mahalanobis_weight,
+            pca_mahalanobis_c=pca_mahalanobis_c,
+            pca_mahalanobis_eps=pca_mahalanobis_eps,
             lambda_image_l1=lambda_image_l1,
             lambda_image_tv=lambda_image_tv,
             pca_shape_prior=pca_shape_prior,
@@ -598,6 +636,10 @@ def train_model(
             lambda_lmk_full=lambda_lmk_full,
             lambda_pca_projection=lambda_pca_projection,
             pca_loss_space=pca_loss_space,
+            pca_mahalanobis_enabled=pca_mahalanobis_enabled,
+            pca_mahalanobis_weight=pca_mahalanobis_weight,
+            pca_mahalanobis_c=pca_mahalanobis_c,
+            pca_mahalanobis_eps=pca_mahalanobis_eps,
             lambda_image_l1=lambda_image_l1,
             lambda_image_tv=lambda_image_tv,
             pca_shape_prior=pca_shape_prior,
@@ -638,6 +680,10 @@ def train_model(
         save_checkpoint(
             output_dir / "last_model.pth", epoch, model, optimizer, metrics_payload,
             pca_loss_space=pca_loss_space,
+            pca_mahalanobis_enabled=pca_mahalanobis_enabled,
+            pca_mahalanobis_weight=pca_mahalanobis_weight,
+            pca_mahalanobis_c=pca_mahalanobis_c,
+            pca_mahalanobis_eps=pca_mahalanobis_eps,
         )
         reporter.report_checkpoint(output_dir / "last_model.pth", is_best=False)
 
@@ -649,6 +695,10 @@ def train_model(
             save_checkpoint(
                 output_dir / "best_model.pth", epoch, model, optimizer, metrics_payload,
                 pca_loss_space=pca_loss_space,
+                pca_mahalanobis_enabled=pca_mahalanobis_enabled,
+                pca_mahalanobis_weight=pca_mahalanobis_weight,
+                pca_mahalanobis_c=pca_mahalanobis_c,
+                pca_mahalanobis_eps=pca_mahalanobis_eps,
             )
             reporter.report_checkpoint(output_dir / "best_model.pth", is_best=True)
         else:
@@ -683,6 +733,11 @@ def train_model(
                     ],
                     "train/visibility_loss": train_metrics["visibility_loss"],
                     "train/pca_loss": train_metrics["pca_loss"],
+                    "train/pca_reconstruction_loss": train_metrics["pca_reconstruction_loss"],
+                    "train/pca_mahalanobis_squared": train_metrics["pca_mahalanobis_squared"],
+                    "train/pca_mahalanobis_penalty": train_metrics["pca_mahalanobis_penalty"],
+                    "train/weighted_pca_mahalanobis_loss": train_metrics["weighted_pca_mahalanobis_loss"],
+
                     "train/image_l1_loss": train_metrics["image_l1_loss"],
                     "train/image_tv_loss": train_metrics["image_tv_loss"],
                     "train/nme": train_metrics["nme"],
@@ -692,6 +747,11 @@ def train_model(
                     "val/visible_landmark_loss": val_metrics["visible_landmark_loss"],
                     "val/visibility_loss": val_metrics["visibility_loss"],
                     "val/pca_loss": val_metrics["pca_loss"],
+                    "val/pca_reconstruction_loss": val_metrics["pca_reconstruction_loss"],
+                    "val/pca_mahalanobis_squared": val_metrics["pca_mahalanobis_squared"],
+                    "val/pca_mahalanobis_penalty": val_metrics["pca_mahalanobis_penalty"],
+                    "val/weighted_pca_mahalanobis_loss": val_metrics["weighted_pca_mahalanobis_loss"],
+
                     "val/image_l1_loss": val_metrics["image_l1_loss"],
                     "val/image_tv_loss": val_metrics["image_tv_loss"],
                     "val/nme": val_metrics["nme"],
@@ -780,6 +840,11 @@ def train_model(
         "timing": runtime,
         "best_val_loss": best_val_loss,
         "pca_loss_space": pca_loss_space,
+        "pca_mahalanobis_enabled": pca_mahalanobis_enabled,
+        "pca_mahalanobis_weight": pca_mahalanobis_weight,
+        "pca_mahalanobis_c": pca_mahalanobis_c,
+        "pca_mahalanobis_eps": pca_mahalanobis_eps,
+
         "best_val_nme": best_val_nme,
         "best_nme_epoch": best_nme_epoch,
         "best_epoch": best_epoch,
@@ -804,6 +869,10 @@ def smoke_test_single_batch(
     coordinate_decoder: str = "argmax_subpixel",
     wasserstein_softmax_temperature: float = 1.0,
     pca_loss_space: str = "image",
+    pca_mahalanobis_enabled: bool = False,
+    pca_mahalanobis_weight: float = 1.0,
+    pca_mahalanobis_c: float = 10.0,
+    pca_mahalanobis_eps: float = 1e-8,
 ) -> None:
     """Run a single optimization step to validate the end-to-end training path."""
     model.train()
@@ -815,6 +884,9 @@ def smoke_test_single_batch(
     pca_shape_prior = None
     if pca_prior_path is not None:
         pca_shape_prior = load_pca_shape_prior(pca_prior_path, device=device)
+        if lambda_pca_projection > 0 and pca_mahalanobis_enabled:
+            from .pca_shape_prior import validate_pca_mahalanobis_prior
+            validate_pca_mahalanobis_prior(pca_shape_prior)
     if lambda_pca_projection > 0.0 and pca_shape_prior is None:
         raise ValueError("lambda_pca_projection > 0 requires a valid pca_prior_path.")
     outputs = model(images)
@@ -831,6 +903,10 @@ def smoke_test_single_batch(
         lambda_lmk_full=lambda_lmk_full,
         lambda_pca_projection=lambda_pca_projection,
         pca_loss_space=pca_loss_space,
+        pca_mahalanobis_enabled=pca_mahalanobis_enabled,
+        pca_mahalanobis_weight=pca_mahalanobis_weight,
+        pca_mahalanobis_c=pca_mahalanobis_c,
+        pca_mahalanobis_eps=pca_mahalanobis_eps,
         pca_shape_prior=pca_shape_prior,
         image_height=images.shape[2],
         image_width=images.shape[3],

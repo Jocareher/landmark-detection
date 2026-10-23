@@ -318,6 +318,12 @@ def parse_args() -> argparse.Namespace:
         default=defaults.lambda_pca_projection,
         help="Weight assigned to the PCA projection loss on final landmarks.",
     )
+    parser.add_argument("--pca-mahalanobis-enabled", action=argparse.BooleanOptionalAction,
+                        default=defaults.pca_mahalanobis_enabled,
+                        help="Add beta * max(squared Mahalanobis distance - c, 0) to PCA reconstruction.")
+    parser.add_argument("--pca-mahalanobis-weight", type=float, default=defaults.pca_mahalanobis_weight)
+    parser.add_argument("--pca-mahalanobis-c", type=float, default=defaults.pca_mahalanobis_c)
+    parser.add_argument("--pca-mahalanobis-eps", type=float, default=defaults.pca_mahalanobis_eps)
     parser.add_argument(
         "--pca-loss-space", choices=["aligned", "image"],
         default=defaults.pca_loss_space,
@@ -645,6 +651,8 @@ def validate_full_evaluation_paths(config: ExperimentConfig) -> None:
 
 def validate_experiment_config(config: ExperimentConfig) -> None:
     """Validate and resolve invariants of the normalizer experiment modes."""
+    from scripts.engine.pca_shape_prior import validate_pca_mahalanobis
+    validate_pca_mahalanobis(config.pca_mahalanobis_enabled, config.pca_mahalanobis_weight, config.pca_mahalanobis_c, config.pca_mahalanobis_eps)
     if config.pca_loss_space not in {"aligned", "image"}:
         raise ValueError(f"Unsupported PCA loss space: {config.pca_loss_space}")
     if config.experiment_mode == "none":
@@ -1165,6 +1173,10 @@ def main() -> None:
                 lambda_lmk_full=config.lambda_lmk_full,
                 lambda_pca_projection=config.lambda_pca_projection,
                 pca_loss_space=config.pca_loss_space,
+                pca_mahalanobis_enabled=config.pca_mahalanobis_enabled,
+                pca_mahalanobis_weight=config.pca_mahalanobis_weight,
+                pca_mahalanobis_c=config.pca_mahalanobis_c,
+                pca_mahalanobis_eps=config.pca_mahalanobis_eps,
                 pca_prior_path=config.pca_prior_path,
                 coordinate_decoder=config.coordinate_decoder,
                 wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
@@ -1187,6 +1199,10 @@ def main() -> None:
             lambda_lmk_full=config.lambda_lmk_full,
             lambda_pca_projection=config.lambda_pca_projection,
             pca_loss_space=config.pca_loss_space,
+            pca_mahalanobis_enabled=config.pca_mahalanobis_enabled,
+            pca_mahalanobis_weight=config.pca_mahalanobis_weight,
+            pca_mahalanobis_c=config.pca_mahalanobis_c,
+            pca_mahalanobis_eps=config.pca_mahalanobis_eps,
             lambda_image_l1=config.normalizer_lambda_l1,
             lambda_image_tv=config.normalizer_lambda_tv,
             pca_prior_path=config.pca_prior_path,

@@ -6,7 +6,7 @@ import torch
 
 from .landmark_losses import PerLandmarkHeatmapLoss, compute_masked_heatmap_loss
 from .pca_shape_prior import (
-    compute_pca_projection_loss,
+    compute_pca_projection_terms,
     softargmax_heatmaps_to_image_coords,
 )
 
@@ -24,6 +24,10 @@ def compute_multitask_loss(
     image_height: int | None = None,
     image_width: int | None = None,
     pca_loss_space: str = "image",
+    pca_mahalanobis_enabled: bool = False,
+    pca_mahalanobis_weight: float = 1.0,
+    pca_mahalanobis_c: float = 10.0,
+    pca_mahalanobis_eps: float = 1e-8,
 ) -> dict[str, torch.Tensor]:
     """Compute the experiment loss for visibility, visible landmarks, and full landmarks."""
     predicted_full_heatmaps = outputs["heatmaps"]
@@ -46,6 +50,8 @@ def compute_multitask_loss(
     )
     visibility_loss = visibility_loss_fn(predicted_visibility_logits, target_visibility)
     pca_projection_loss = predicted_full_heatmaps.new_zeros(())
+    pca_terms = {key: predicted_full_heatmaps.new_zeros(()) for key in (
+        "reconstruction", "mahalanobis_squared", "mahalanobis_penalty", "weighted_mahalanobis")}
     if pca_shape_prior is not None and lambda_pca_projection > 0.0:
         if image_height is None or image_width is None:
             raise ValueError(
@@ -58,14 +64,17 @@ def compute_multitask_loss(
                 image_height=image_height,
                 image_width=image_width,
             )
-            pca_projection_loss = compute_pca_projection_loss(
+            pca_terms = compute_pca_projection_terms(
                 predicted_landmarks=predicted_landmarks,
                 pca_prior=pca_shape_prior,
                 loss_space=pca_loss_space,
+                mahalanobis_enabled=pca_mahalanobis_enabled,
+                mahalanobis_weight=pca_mahalanobis_weight,
+                mahalanobis_c=pca_mahalanobis_c,
+                mahalanobis_eps=pca_mahalanobis_eps,
             )
-        pca_projection_loss = pca_projection_loss.to(
-            dtype=predicted_full_heatmaps.dtype
-        )
+        # Keep the potentially large coefficient penalty in FP32 under AMP.
+        pca_projection_loss = pca_terms["loss"]
     total_loss = (
         lambda_vis * visibility_loss
         + lambda_lmk_vis * visible_landmark_loss
@@ -78,4 +87,8 @@ def compute_multitask_loss(
         "visible_landmark_loss": visible_landmark_loss,
         "visibility_loss": visibility_loss,
         "pca_loss": pca_projection_loss,
+        "pca_reconstruction_loss": pca_terms["reconstruction"],
+        "pca_mahalanobis_squared": pca_terms["mahalanobis_squared"],
+        "pca_mahalanobis_penalty": pca_terms["mahalanobis_penalty"],
+        "weighted_pca_mahalanobis_loss": pca_terms["weighted_mahalanobis"],
     }

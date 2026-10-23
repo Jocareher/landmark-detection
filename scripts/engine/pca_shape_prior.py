@@ -361,12 +361,43 @@ def softargmax_heatmaps_to_image_coords(
     return landmarks
 
 
-def compute_pca_projection_loss(
+def validate_pca_mahalanobis(enabled=False, weight=1.0, c=10.0, eps=1e-8):
+    """The threshold applies directly to squared distance, not its square root."""
+    import math
+    if not isinstance(enabled, bool):
+        raise ValueError("pca_mahalanobis_enabled must be a boolean.")
+    if any(not math.isfinite(v) or v < 0 for v in (weight, c)):
+        raise ValueError("PCA Mahalanobis weight and c must be finite and nonnegative.")
+    if not math.isfinite(eps) or eps <= 0:
+        raise ValueError("PCA Mahalanobis variance epsilon must be finite and positive.")
+
+
+def validate_pca_mahalanobis_prior(pca_prior, mode="global"):
+    """Reject incompatible priors before starting an adaptation episode."""
+    priors = pca_prior.get("pose_priors", {}) if mode == "min_pose" else {"global": pca_prior["global_prior"]}
+    if not priors:
+        raise ValueError("Mahalanobis PCA requires nonempty pose priors in min_pose mode.")
+    for label, prior in priors.items():
+        if "explained_variance" not in prior:
+            raise ValueError(f"Mahalanobis PCA prior {label} requires explained_variance; rebuild the prior.")
+        variance = prior["explained_variance"]
+        if variance.numel() != prior["components"].shape[0]:
+            raise ValueError("PCA explained_variance must match the retained component count.")
+        if not bool(torch.isfinite(variance).all()) or bool((variance < 0).any()):
+            raise ValueError("PCA explained_variance must be finite and nonnegative.")
+
+
+def compute_pca_projection_terms(
     predicted_landmarks: torch.Tensor,
     pca_prior: dict[str, Any],
     loss_space: str = "image",
     reduction: str = "mean",
-) -> torch.Tensor:
+    *,
+    mahalanobis_enabled: bool = False,
+    mahalanobis_weight: float = 1.0,
+    mahalanobis_c: float = 10.0,
+    mahalanobis_eps: float = 1e-8,
+) -> dict[str, torch.Tensor]:
     """Measure PCA reconstruction MSE in aligned or input-image coordinates.
 
     Align X with T(X), reconstruct in PCA space, then compare X against
@@ -377,7 +408,12 @@ def compute_pca_projection_loss(
     additional aligned-space loss. Image-coordinate inputs yield pixel^2.
     With loss_space='aligned', use the original MSE between T(X) and its
     PCA reconstruction instead, without applying the inverse transformation.
+    When enabled, add beta * max(sum(b_j^2 / max(variance_j, eps)) - c, 0).
+    This coefficient term is dimensionless in both reconstruction spaces and
+    is summed over components, then averaged over images only.
     """
+    validate_pca_mahalanobis(mahalanobis_enabled, mahalanobis_weight,
+                             mahalanobis_c, mahalanobis_eps)
     if loss_space not in {"aligned", "image"}:
         raise ValueError(f"Unsupported PCA loss space: {loss_space}. Use aligned or image.")
     if reduction not in {"mean", "none"}:
@@ -397,6 +433,7 @@ def compute_pca_projection_loss(
     expected_landmarks = int(global_prior["num_landmarks"])
 
     sample_losses: list[torch.Tensor] = []
+    squared_distances: list[torch.Tensor] = []
     for sample_index in range(predicted_landmarks.shape[0]):
         current_shape = predicted_landmarks[sample_index]
         if current_shape.shape[0] != expected_landmarks:
@@ -429,6 +466,19 @@ def compute_pca_projection_loss(
         )
         centered = shape_vector - mean_shape
         coefficients = centered @ components.T
+        distance = coefficients.new_zeros(())
+        if mahalanobis_enabled:
+            if "explained_variance" not in global_prior:
+                raise ValueError("Mahalanobis PCA requires explained_variance in the prior; rebuild the prior.")
+            variance = global_prior["explained_variance"].to(
+                device=coefficients.device, dtype=coefficients.dtype).reshape(-1)
+            if variance.numel() != coefficients.shape[-1]:
+                raise ValueError("PCA explained_variance must match the retained component count.")
+            if not bool(torch.isfinite(variance).all()) or bool((variance < 0).any()):
+                raise ValueError("PCA explained_variance must be finite and nonnegative.")
+            # Diagonal covariance: no dense inverse, no division by component count.
+            distance = (coefficients.square() / variance.clamp_min(mahalanobis_eps)).sum()
+        squared_distances.append(distance)
         reconstructed = mean_shape + coefficients @ components
         if loss_space == "aligned":
             sample_losses.append(F.mse_loss(shape_vector, reconstructed))
@@ -438,8 +488,21 @@ def compute_pca_projection_loss(
             )
             sample_losses.append(F.mse_loss(current_shape, reconstructed_image_shape))
 
-    losses = torch.stack(sample_losses)
-    return losses.mean() if reduction == "mean" else losses
+    reconstruction = torch.stack(sample_losses)
+    squared = torch.stack(squared_distances)
+    penalty = (squared - mahalanobis_c).clamp_min(0) if mahalanobis_enabled else torch.zeros_like(squared)
+    weighted = mahalanobis_weight * penalty
+    terms = {"loss": reconstruction + weighted,
+             "reconstruction": reconstruction, "mahalanobis_squared": squared,
+             "mahalanobis_penalty": penalty, "weighted_mahalanobis": weighted}
+    return {key: value.mean() if reduction == "mean" else value for key, value in terms.items()}
+
+
+def compute_pca_projection_loss(predicted_landmarks, pca_prior, loss_space="image",
+                                reduction="mean", **kwargs):
+    """Reconstruction + beta * max(b.T Lambda^-1 b - c, 0), when enabled."""
+    return compute_pca_projection_terms(predicted_landmarks, pca_prior, loss_space,
+                                        reduction, **kwargs)["loss"]
 
 
 PCA_POSE_ANGLES = {
@@ -501,7 +564,7 @@ def build_pose_pca_shape_prior_payload(landmarks, yaw_angles, mode="pose5",
     return payload, aligned, aligned_by_pose
 
 
-def compute_min_pose_pca_loss(predicted_landmarks, pca_prior, loss_space="image"):
+def compute_min_pose_pca_loss(predicted_landmarks, pca_prior, loss_space="image", **kwargs):
     """Choose the minimum per image, keeping the winning residual differentiable."""
     priors = pca_prior.get("pose_priors", {})
     if not priors:
@@ -510,7 +573,7 @@ def compute_min_pose_pca_loss(predicted_landmarks, pca_prior, loss_space="image"
     losses = torch.stack([
         compute_pca_projection_loss(predicted_landmarks,
                                     {"alignment": pca_prior["alignment"], "global_prior": priors[label]},
-                                    loss_space=loss_space, reduction="none")
+                                    loss_space=loss_space, reduction="none", **kwargs)
         for label in labels], dim=1)
     if not bool(torch.isfinite(losses).all()):
         raise FloatingPointError("Non-finite candidate pose PCA loss.")

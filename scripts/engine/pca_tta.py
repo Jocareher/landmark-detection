@@ -45,6 +45,11 @@ class PCATTAConfig:
     normalization_mean: tuple[float, ...] = (0.485, 0.456, 0.406)
     normalization_std: tuple[float, ...] = (0.229, 0.224, 0.225)
     pca_loss_space: str = "image"
+    pca_mahalanobis_enabled: bool = False
+    pca_mahalanobis_weight: float = 1.0
+    pca_mahalanobis_c: float = 10.0
+    pca_mahalanobis_eps: float = 1e-8
+
     pca_prior_mode: str = "global"
     episode_unit: str = "auto"
     pca_weight: float = 1.0
@@ -54,6 +59,8 @@ class PCATTAConfig:
     def validate(self) -> None:
         """Validate values before any target image is adapted."""
         validate_tta_weights(self.pca_weight, self.entropy_weight, self.spread_weight)
+        from .pca_shape_prior import validate_pca_mahalanobis
+        validate_pca_mahalanobis(self.pca_mahalanobis_enabled, self.pca_mahalanobis_weight, self.pca_mahalanobis_c, self.pca_mahalanobis_eps)
         if self.pca_prior_mode not in {"global", "min_pose"}:
             raise ValueError(f"Unsupported PCA prior mode: {self.pca_prior_mode}")
         if self.episode_unit not in {"auto", "image", "batch"}:
@@ -118,6 +125,9 @@ class PCAGuidedTTA:
     ) -> None:
         """Snapshot source weights and initialize trajectory reporting."""
         config.validate()
+        if config.pca_weight > 0 and config.pca_mahalanobis_enabled and pca_prior is not None:
+            from .pca_shape_prior import validate_pca_mahalanobis_prior
+            validate_pca_mahalanobis_prior(pca_prior, config.pca_prior_mode)
         if config.pca_weight > 0 and pca_prior is None:
             raise ValueError("A PCA prior is required when tta_pca_weight > 0.")
         if config.pca_weight > 0 and config.pca_prior_mode == "min_pose" and not pca_prior.get("pose_priors"):
@@ -832,6 +842,10 @@ class PCAGuidedTTA:
             heatmaps, landmarks, self.pca_prior,
             pca_weight=self.config.pca_weight, entropy_weight=self.config.entropy_weight,
             spread_weight=self.config.spread_weight, pca_loss_space=self.config.pca_loss_space,
+            pca_mahalanobis_enabled=self.config.pca_mahalanobis_enabled,
+            pca_mahalanobis_weight=self.config.pca_mahalanobis_weight,
+            pca_mahalanobis_c=self.config.pca_mahalanobis_c,
+            pca_mahalanobis_eps=self.config.pca_mahalanobis_eps,
             pca_prior_mode=self.config.pca_prior_mode)
 
     def finalize(self) -> dict[str, Any]:
@@ -845,7 +859,8 @@ class PCAGuidedTTA:
         _write_rows_csv(aggregate_path, aggregate_rows)
         save_tta_heatmap_curves(aggregate_rows, self.output_dir)
         save_tta_curves(self.trajectory_rows, aggregate_rows, self.output_dir)
-        pca_only = self.config.entropy_weight == 0 and self.config.spread_weight == 0
+        pca_only = (self.config.entropy_weight == 0 and self.config.spread_weight == 0
+                    and not self.config.pca_mahalanobis_enabled)
         objective_label = "PCA reconstruction loss" if pca_only else "Weighted TTA objective"
         _save_loss_components(aggregate_rows, self.output_dir / "figures" / "tta_loss_components.png")
         _save_aggregate_plot(
@@ -890,7 +905,13 @@ class PCAGuidedTTA:
             "pca_loss_space": ("input_image_pixels" if self.config.pca_loss_space == "image"
                                else "aligned_procrustes"),
             "pca_loss_mode": self.config.pca_loss_space,
-            "pca_loss_reduction": "mean_squared_error",
+            "pca_mahalanobis_enabled": self.config.pca_mahalanobis_enabled,
+            "pca_mahalanobis_weight": self.config.pca_mahalanobis_weight,
+            "pca_mahalanobis_c": self.config.pca_mahalanobis_c,
+            "pca_mahalanobis_eps": self.config.pca_mahalanobis_eps,
+
+            "pca_loss_reduction": ("mse_plus_weighted_mahalanobis_hinge"
+                                   if self.config.pca_mahalanobis_enabled else "mean_squared_error"),
             "pca_alignment_gradient": "full",
             "steps": self.config.steps,
             "learning_rate": self.config.learning_rate,
@@ -945,10 +966,10 @@ class PCAGuidedTTA:
                         "tta/step": int(row["step"]),
                         "tta/total_loss_mean": float(row["mean"]),
                         **{f"tta/{key}": value for key, value in row.items() if key.endswith("_loss_mean") or key.startswith(("pca_candidate_loss_", "pca_selected_count_"))},
-                        "tta/pca_loss_mean": float(row["pca_reconstruction_loss_mean"]),
-                        "tta/pca_loss_median": float(row["pca_reconstruction_loss_median"]),
-                        "tta/pca_loss_p25": float(row["pca_reconstruction_loss_p25"]),
-                        "tta/pca_loss_p75": float(row["pca_reconstruction_loss_p75"]),
+                        "tta/pca_loss_mean": float(row["pca_loss_mean"]),
+                        "tta/pca_loss_median": float(row["pca_loss_median"]),
+                        "tta/pca_loss_p25": float(row["pca_loss_p25"]),
+                        "tta/pca_loss_p75": float(row["pca_loss_p75"]),
                     }
                 )
             if self.summary_rows:
@@ -1023,7 +1044,8 @@ def _summarize_sample_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
         final_value = float(final.get(key, math.nan))
         diagnostic_summary.update({f"initial_{key}": initial_value, f"final_{key}": final_value, f"delta_{key}": final_value - initial_value})
     component_summary = {}
-    for key in ("pca_reconstruction_loss", "heatmap_entropy_loss", "heatmap_spread_loss",
+    for key in ("pca_loss", "pca_mahalanobis_squared", "pca_mahalanobis_penalty",
+                "weighted_pca_mahalanobis_loss", "pca_reconstruction_loss", "heatmap_entropy_loss", "heatmap_spread_loss",
                 "weighted_pca_loss", "weighted_entropy_loss", "weighted_spread_loss"):
         values = [float(row.get(key, math.nan)) for row in rows]
         finite = [v for v in values if math.isfinite(v)]
@@ -1125,7 +1147,8 @@ def _aggregate_trajectories(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         for key in candidate_keys:
             yaw = float(key.split("_yaw_", 1)[1])
             row[f"pca_selected_count_yaw_{int(yaw)}"] = winners.count(yaw)
-        for key in ("sample_tta_loss", "pca_reconstruction_loss", "heatmap_entropy_loss", "heatmap_spread_loss",
+        for key in ("sample_tta_loss", "pca_loss", "pca_mahalanobis_squared", "pca_mahalanobis_penalty",
+                    "weighted_pca_mahalanobis_loss", "pca_reconstruction_loss", "heatmap_entropy_loss", "heatmap_spread_loss",
                     "weighted_pca_loss", "weighted_entropy_loss", "weighted_spread_loss", *candidate_keys):
             values = np.asarray([item.get(key, math.nan) for item in by_step[row["step"]]], dtype=float)
             values = values[np.isfinite(values)]
@@ -1914,8 +1937,16 @@ Raw components, weighted components, and per-image objective are saved separatel
 For batch episodes `total_tta_loss` is the batch mean; `sample_tta_loss` is per image.
 PCA and heatmap terms have different scales; equal weights do not imply balanced gradients.
 PCA loss mode (when enabled): `{config.pca_loss_space}`. {objective}
-Neither the reconstruction nor the transform is detached. No second PCA loss
-or face-size normalization is applied.
+Optional coefficient term: enabled=`{config.pca_mahalanobis_enabled}`,
+weight (beta)=`{config.pca_mahalanobis_weight}`, c=`{config.pca_mahalanobis_c}`,
+variance floor=`{config.pca_mahalanobis_eps}`. The PCA objective adds
+`beta * max(sum(b_j^2 / max(variance_j, eps)) - c, 0)` per image.
+The threshold c is subtracted directly from squared distance.
+`pca_reconstruction_loss` remains reconstruction alone, `pca_loss` includes
+the coefficient term, and `weighted_pca_loss` also includes the outer PCA weight.
+Minimum-pose selection uses this complete PCA objective for every candidate.
+Neither the reconstruction nor the transform is detached. No extra reconstruction
+loss or face-size normalization is applied.
 
 - Adaptation steps per episode: `{config.steps}`
 - Adam learning rate: `{config.learning_rate}`
