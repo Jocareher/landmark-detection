@@ -18,7 +18,7 @@ import torch
 from PIL import Image, ImageDraw
 
 from .pca_shape_prior import (
-    softargmax_heatmaps_to_image_coords,
+    pca_mahalanobis_threshold, softargmax_heatmaps_to_image_coords,
 )
 from ..models import NormalizedLandmarker
 from ..models.normalization import SourceAdaptiveInstanceNorm2d
@@ -48,6 +48,7 @@ class PCATTAConfig:
     pca_mahalanobis_enabled: bool = False
     pca_mahalanobis_weight: float = 1.0
     pca_mahalanobis_c: float = 10.0
+    pca_mahalanobis_percentile: float | None = None
     pca_mahalanobis_eps: float = 1e-8
 
     pca_prior_mode: str = "global"
@@ -60,7 +61,7 @@ class PCATTAConfig:
         """Validate values before any target image is adapted."""
         validate_tta_weights(self.pca_weight, self.entropy_weight, self.spread_weight)
         from .pca_shape_prior import validate_pca_mahalanobis
-        validate_pca_mahalanobis(self.pca_mahalanobis_enabled, self.pca_mahalanobis_weight, self.pca_mahalanobis_c, self.pca_mahalanobis_eps)
+        validate_pca_mahalanobis(self.pca_mahalanobis_enabled, self.pca_mahalanobis_weight, self.pca_mahalanobis_c, self.pca_mahalanobis_eps, self.pca_mahalanobis_percentile)
         if self.pca_prior_mode not in {"global", "min_pose"}:
             raise ValueError(f"Unsupported PCA prior mode: {self.pca_prior_mode}")
         if self.episode_unit not in {"auto", "image", "batch"}:
@@ -845,6 +846,7 @@ class PCAGuidedTTA:
             pca_mahalanobis_enabled=self.config.pca_mahalanobis_enabled,
             pca_mahalanobis_weight=self.config.pca_mahalanobis_weight,
             pca_mahalanobis_c=self.config.pca_mahalanobis_c,
+            pca_mahalanobis_percentile=self.config.pca_mahalanobis_percentile,
             pca_mahalanobis_eps=self.config.pca_mahalanobis_eps,
             pca_prior_mode=self.config.pca_prior_mode)
 
@@ -908,6 +910,15 @@ class PCAGuidedTTA:
             "pca_mahalanobis_enabled": self.config.pca_mahalanobis_enabled,
             "pca_mahalanobis_weight": self.config.pca_mahalanobis_weight,
             "pca_mahalanobis_c": self.config.pca_mahalanobis_c,
+            "pca_mahalanobis_percentile": self.config.pca_mahalanobis_percentile,
+            "pca_mahalanobis_effective_thresholds": (
+                {label: pca_mahalanobis_threshold(prior, self.config.pca_mahalanobis_c,
+                                                  self.config.pca_mahalanobis_percentile)
+                 for label, prior in (self.pca_prior['pose_priors'].items()
+                                      if self.config.pca_prior_mode == 'min_pose'
+                                      else [('global', self.pca_prior['global_prior'])])}
+                if self.config.pca_weight > 0 and self.config.pca_mahalanobis_enabled
+                else {}),
             "pca_mahalanobis_eps": self.config.pca_mahalanobis_eps,
 
             "pca_loss_reduction": ("mse_plus_weighted_mahalanobis_hinge"
@@ -1938,10 +1949,11 @@ For batch episodes `total_tta_loss` is the batch mean; `sample_tta_loss` is per 
 PCA and heatmap terms have different scales; equal weights do not imply balanced gradients.
 PCA loss mode (when enabled): `{config.pca_loss_space}`. {objective}
 Optional coefficient term: enabled=`{config.pca_mahalanobis_enabled}`,
-weight (beta)=`{config.pca_mahalanobis_weight}`, c=`{config.pca_mahalanobis_c}`,
+weight (beta)=`{config.pca_mahalanobis_weight}`, manual c=`{config.pca_mahalanobis_c}`,
+chi-square percentile=`{config.pca_mahalanobis_percentile}` (overrides manual c),
 variance floor=`{config.pca_mahalanobis_eps}`. The PCA objective adds
-`beta * max(sum(b_j^2 / max(variance_j, eps)) - c, 0)` per image.
-The threshold c is subtracted directly from squared distance.
+`beta * max(sum(b_j^2 / max(variance_j, eps)) - threshold, 0)` per image.
+The resolved threshold is subtracted directly from squared distance.
 `pca_reconstruction_loss` remains reconstruction alone, `pca_loss` includes
 the coefficient term, and `weighted_pca_loss` also includes the outer PCA weight.
 Minimum-pose selection uses this complete PCA objective for every candidate.

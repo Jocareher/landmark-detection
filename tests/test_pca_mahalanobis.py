@@ -5,8 +5,9 @@ import pytest
 import torch
 
 from scripts.engine.pca_shape_prior import (
-    compute_pca_projection_loss, compute_pca_projection_terms,
-    validate_pca_mahalanobis, validate_pca_mahalanobis_prior,
+    chi_square_critical_value, compute_pca_projection_loss, compute_pca_projection_terms,
+    pca_mahalanobis_threshold, validate_pca_mahalanobis,
+    validate_pca_mahalanobis_prior,
 )
 from scripts.engine.tta_losses import compute_tta_losses
 from test_pca_image_space_loss import _example
@@ -18,6 +19,41 @@ def example():
     prior['global_prior']['components'] = torch.eye(10)
     prior['global_prior']['explained_variance'] = torch.full((10,), 1e-4)
     return x, prior
+
+
+def test_theoretical_critical_value_and_percentile_override():
+    assert chi_square_critical_value(32, 95.0) == pytest.approx(46.19425952, rel=1e-8)
+    assert chi_square_critical_value(2, 95.0) == pytest.approx(5.99146455, rel=1e-8)
+    assert chi_square_critical_value(1, 95.0) == pytest.approx(3.84145882, rel=1e-8)
+    x, prior = example()
+    terms = compute_pca_projection_terms(
+        x, prior, 'aligned', mahalanobis_enabled=True,
+        mahalanobis_c=1e9, mahalanobis_percentile=95.0)
+    critical = chi_square_critical_value(10, 95.0)
+    torch.testing.assert_close(
+        terms['mahalanobis_penalty'],
+        (terms['mahalanobis_squared'] - critical).clamp_min(0))
+    assert terms['mahalanobis_penalty'] > 0  # The manual c=1e9 was overridden.
+
+
+def test_pose_candidates_use_their_own_component_counts():
+    x, prior = example()
+    narrow = deepcopy(prior['global_prior'])
+    wide = deepcopy(narrow)
+    narrow['components'] = narrow['components'][:2]
+    narrow['explained_variance'] = narrow['explained_variance'][:2]
+    prior['pose_priors'] = {'-75': narrow, '75': wide}
+    assert pca_mahalanobis_threshold(narrow, 10, 95.0) == pytest.approx(5.99146455)
+    assert pca_mahalanobis_threshold(wide, 10, 95.0) == pytest.approx(18.30703805)
+    results = compute_tta_losses(
+        torch.randn(1, 5, 8, 8), x, prior, pca_prior_mode='min_pose',
+        pca_mahalanobis_enabled=True, pca_mahalanobis_percentile=95.0)
+    for label, candidate in prior['pose_priors'].items():
+        expected = compute_pca_projection_loss(
+            x, {'alignment': prior['alignment'], 'global_prior': candidate},
+            mahalanobis_enabled=True, mahalanobis_percentile=95.0,
+            reduction='none')
+        torch.testing.assert_close(results[f'pca_candidate_loss_yaw_{label}'], expected)
 
 
 @pytest.mark.parametrize('space', ['aligned', 'image'])
@@ -90,7 +126,9 @@ def test_min_pose_selects_complete_objective_and_correct_winner_gradient():
 
 
 @pytest.mark.parametrize('kwargs', [{'c': -1}, {'c': float('nan')}, {'weight': -1},
-                                   {'weight': float('inf')}, {'eps': 0}, {'enabled': 'true'}])
+                                   {'weight': float('inf')}, {'eps': 0}, {'enabled': 'true'},
+                                   {'percentile': 0}, {'percentile': 100},
+                                   {'percentile': float('nan')}])
 def test_invalid_options(kwargs):
     with pytest.raises(ValueError):
         validate_pca_mahalanobis(**kwargs)
@@ -111,11 +149,13 @@ def test_yaml_options_and_hpc_preservation(tmp_path, monkeypatch):
     config = load_yaml_config('configs/normalizer_experiments.yaml')
     assert config.pca_mahalanobis_enabled is False
     assert config.pca_mahalanobis_c == 10
+    assert config.pca_mahalanobis_percentile == 95.0
     spec = importlib.util.spec_from_file_location('run_job', 'slurm/run_job.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     original = yaml.safe_load(Path('configs/pca_tta_evaluation.yaml').read_text())
     original['arguments'].update(pca_mahalanobis_enabled=True, pca_mahalanobis_c=5,
+                                 pca_mahalanobis_percentile=90.0,
                                  pca_mahalanobis_weight=.0001)
     plan = dict(mode='tta', run_dir=str(tmp_path/'run'), scope='normalizer',
                 checkpoint='/weights/model.pth', normalizer_checkpoint=None,
@@ -129,11 +169,14 @@ def test_yaml_options_and_hpc_preservation(tmp_path, monkeypatch):
     loaded = build_config_from_args(parse_args())
     assert loaded.pca_mahalanobis_enabled is True
     assert loaded.pca_mahalanobis_c == 5
+    assert loaded.pca_mahalanobis_percentile == 90.0
     assert loaded.pca_mahalanobis_weight == .0001
     monkeypatch.setattr('sys.argv', ['evaluate', '--config', str(snapshot),
-                                   '--no-pca-mahalanobis-enabled', '--pca-mahalanobis-c', '10'])
+                                   '--no-pca-mahalanobis-enabled', '--pca-mahalanobis-c', '10',
+                                   '--pca-mahalanobis-percentile', '99'])
     loaded = build_config_from_args(parse_args())
     assert loaded.pca_mahalanobis_enabled is False and loaded.pca_mahalanobis_c == 10
+    assert loaded.pca_mahalanobis_percentile == 99.0
 
 
 def test_enabled_tta_records_components_and_restores_source(tmp_path):

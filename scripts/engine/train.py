@@ -22,7 +22,7 @@ from .normalizer_monitoring import (
     NormalizerProbeMonitor,
     should_capture_source_step,
 )
-from .pca_shape_prior import load_pca_shape_prior
+from .pca_shape_prior import load_pca_shape_prior, pca_mahalanobis_threshold
 from ..models import NormalizedLandmarker
 from ..utils.training_progress import TrainingProgressReporter
 
@@ -119,6 +119,7 @@ def run_epoch(
     pca_mahalanobis_enabled: bool = False,
     pca_mahalanobis_weight: float = 1.0,
     pca_mahalanobis_c: float = 10.0,
+    pca_mahalanobis_percentile: float | None = None,
     pca_mahalanobis_eps: float = 1e-8,
 ) -> dict[str, float]:
     """Run one full training or validation epoch and aggregate split metrics."""
@@ -181,6 +182,7 @@ def run_epoch(
                     pca_mahalanobis_enabled=pca_mahalanobis_enabled,
                     pca_mahalanobis_weight=pca_mahalanobis_weight,
                     pca_mahalanobis_c=pca_mahalanobis_c,
+                    pca_mahalanobis_percentile=pca_mahalanobis_percentile,
                     pca_mahalanobis_eps=pca_mahalanobis_eps,
                     pca_shape_prior=pca_shape_prior,
                     image_height=images.shape[2],
@@ -227,6 +229,7 @@ def run_epoch(
                         pca_mahalanobis_enabled=pca_mahalanobis_enabled,
                         pca_mahalanobis_weight=pca_mahalanobis_weight,
                         pca_mahalanobis_c=pca_mahalanobis_c,
+                        pca_mahalanobis_percentile=pca_mahalanobis_percentile,
                         pca_mahalanobis_eps=pca_mahalanobis_eps,
                         pca_shape_prior=pca_shape_prior,
                         image_height=images.shape[2],
@@ -338,6 +341,7 @@ def save_checkpoint(
     pca_mahalanobis_enabled: bool = False,
     pca_mahalanobis_weight: float = 1.0,
     pca_mahalanobis_c: float = 10.0,
+    pca_mahalanobis_percentile: float | None = None,
     pca_mahalanobis_eps: float = 1e-8,
 ) -> None:
     """Save a model checkpoint with optimizer state and tracked metrics."""
@@ -356,6 +360,7 @@ def save_checkpoint(
     payload["pca_mahalanobis_enabled"] = pca_mahalanobis_enabled
     payload["pca_mahalanobis_weight"] = pca_mahalanobis_weight
     payload["pca_mahalanobis_c"] = pca_mahalanobis_c
+    payload["pca_mahalanobis_percentile"] = pca_mahalanobis_percentile
     payload["pca_mahalanobis_eps"] = pca_mahalanobis_eps
 
     if isinstance(model, NormalizedLandmarker) and model.normalizer is not None:
@@ -489,11 +494,12 @@ def train_model(
     pca_mahalanobis_enabled: bool = False,
     pca_mahalanobis_weight: float = 1.0,
     pca_mahalanobis_c: float = 10.0,
+    pca_mahalanobis_percentile: float | None = None,
     pca_mahalanobis_eps: float = 1e-8,
 ) -> dict[str, Any]:
     """Execute the full training pipeline, including validation and checkpointing."""
     from .pca_shape_prior import validate_pca_mahalanobis
-    validate_pca_mahalanobis(pca_mahalanobis_enabled, pca_mahalanobis_weight, pca_mahalanobis_c, pca_mahalanobis_eps)
+    validate_pca_mahalanobis(pca_mahalanobis_enabled, pca_mahalanobis_weight, pca_mahalanobis_c, pca_mahalanobis_eps, pca_mahalanobis_percentile)
     training_started = clock(device)
     if pca_loss_space not in {"aligned", "image"}:
         raise ValueError(f"Unsupported PCA loss space: {pca_loss_space}")
@@ -608,6 +614,7 @@ def train_model(
             pca_mahalanobis_enabled=pca_mahalanobis_enabled,
             pca_mahalanobis_weight=pca_mahalanobis_weight,
             pca_mahalanobis_c=pca_mahalanobis_c,
+            pca_mahalanobis_percentile=pca_mahalanobis_percentile,
             pca_mahalanobis_eps=pca_mahalanobis_eps,
             lambda_image_l1=lambda_image_l1,
             lambda_image_tv=lambda_image_tv,
@@ -639,6 +646,7 @@ def train_model(
             pca_mahalanobis_enabled=pca_mahalanobis_enabled,
             pca_mahalanobis_weight=pca_mahalanobis_weight,
             pca_mahalanobis_c=pca_mahalanobis_c,
+            pca_mahalanobis_percentile=pca_mahalanobis_percentile,
             pca_mahalanobis_eps=pca_mahalanobis_eps,
             lambda_image_l1=lambda_image_l1,
             lambda_image_tv=lambda_image_tv,
@@ -683,6 +691,7 @@ def train_model(
             pca_mahalanobis_enabled=pca_mahalanobis_enabled,
             pca_mahalanobis_weight=pca_mahalanobis_weight,
             pca_mahalanobis_c=pca_mahalanobis_c,
+            pca_mahalanobis_percentile=pca_mahalanobis_percentile,
             pca_mahalanobis_eps=pca_mahalanobis_eps,
         )
         reporter.report_checkpoint(output_dir / "last_model.pth", is_best=False)
@@ -698,6 +707,7 @@ def train_model(
                 pca_mahalanobis_enabled=pca_mahalanobis_enabled,
                 pca_mahalanobis_weight=pca_mahalanobis_weight,
                 pca_mahalanobis_c=pca_mahalanobis_c,
+                pca_mahalanobis_percentile=pca_mahalanobis_percentile,
                 pca_mahalanobis_eps=pca_mahalanobis_eps,
             )
             reporter.report_checkpoint(output_dir / "best_model.pth", is_best=True)
@@ -843,6 +853,11 @@ def train_model(
         "pca_mahalanobis_enabled": pca_mahalanobis_enabled,
         "pca_mahalanobis_weight": pca_mahalanobis_weight,
         "pca_mahalanobis_c": pca_mahalanobis_c,
+        "pca_mahalanobis_percentile": pca_mahalanobis_percentile,
+        "pca_mahalanobis_effective_c": (
+            pca_mahalanobis_threshold(pca_shape_prior['global_prior'], pca_mahalanobis_c,
+                                      pca_mahalanobis_percentile)
+            if pca_mahalanobis_enabled and pca_shape_prior is not None else None),
         "pca_mahalanobis_eps": pca_mahalanobis_eps,
 
         "best_val_nme": best_val_nme,
@@ -872,6 +887,7 @@ def smoke_test_single_batch(
     pca_mahalanobis_enabled: bool = False,
     pca_mahalanobis_weight: float = 1.0,
     pca_mahalanobis_c: float = 10.0,
+    pca_mahalanobis_percentile: float | None = None,
     pca_mahalanobis_eps: float = 1e-8,
 ) -> None:
     """Run a single optimization step to validate the end-to-end training path."""
@@ -906,6 +922,7 @@ def smoke_test_single_batch(
         pca_mahalanobis_enabled=pca_mahalanobis_enabled,
         pca_mahalanobis_weight=pca_mahalanobis_weight,
         pca_mahalanobis_c=pca_mahalanobis_c,
+        pca_mahalanobis_percentile=pca_mahalanobis_percentile,
         pca_mahalanobis_eps=pca_mahalanobis_eps,
         pca_shape_prior=pca_shape_prior,
         image_height=images.shape[2],

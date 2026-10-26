@@ -27,6 +27,7 @@ def compute_multitask_loss(
     pca_mahalanobis_enabled: bool = False,
     pca_mahalanobis_weight: float = 1.0,
     pca_mahalanobis_c: float = 10.0,
+    pca_mahalanobis_percentile: float | None = None,
     pca_mahalanobis_eps: float = 1e-8,
 ) -> dict[str, torch.Tensor]:
     """Compute the experiment loss for visibility, visible landmarks, and full landmarks."""
@@ -71,6 +72,7 @@ def compute_multitask_loss(
                 mahalanobis_enabled=pca_mahalanobis_enabled,
                 mahalanobis_weight=pca_mahalanobis_weight,
                 mahalanobis_c=pca_mahalanobis_c,
+                mahalanobis_percentile=pca_mahalanobis_percentile,
                 mahalanobis_eps=pca_mahalanobis_eps,
             )
         # Keep the potentially large coefficient penalty in FP32 under AMP.

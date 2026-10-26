@@ -232,6 +232,9 @@ def parse_args() -> argparse.Namespace:
                         help="Add beta * max(squared Mahalanobis distance - c, 0) to PCA reconstruction.")
     parser.add_argument("--pca-mahalanobis-weight", type=float, default=defaults.pca_mahalanobis_weight)
     parser.add_argument("--pca-mahalanobis-c", type=float, default=defaults.pca_mahalanobis_c)
+    parser.add_argument("--pca-mahalanobis-percentile", type=float,
+                        default=defaults.pca_mahalanobis_percentile,
+                        help="Chi-square percentile in (0, 100); overrides --pca-mahalanobis-c when enabled.")
     parser.add_argument("--pca-mahalanobis-eps", type=float, default=defaults.pca_mahalanobis_eps)
     parser.add_argument(
         "--pca-loss-space", choices=["aligned", "image"],
@@ -453,10 +456,11 @@ def build_config_from_args(args: argparse.Namespace) -> ExperimentConfig:
     config.pca_mahalanobis_enabled = args.pca_mahalanobis_enabled
     config.pca_mahalanobis_weight = args.pca_mahalanobis_weight
     config.pca_mahalanobis_c = args.pca_mahalanobis_c
+    config.pca_mahalanobis_percentile = args.pca_mahalanobis_percentile
     config.pca_mahalanobis_eps = args.pca_mahalanobis_eps
 
     from scripts.engine.pca_shape_prior import validate_pca_mahalanobis
-    validate_pca_mahalanobis(config.pca_mahalanobis_enabled, config.pca_mahalanobis_weight, config.pca_mahalanobis_c, config.pca_mahalanobis_eps)
+    validate_pca_mahalanobis(config.pca_mahalanobis_enabled, config.pca_mahalanobis_weight, config.pca_mahalanobis_c, config.pca_mahalanobis_eps, config.pca_mahalanobis_percentile)
     if config.pca_loss_space not in {"aligned", "image"}:
         raise ValueError(f"Unsupported PCA loss space: {config.pca_loss_space}")
     config.pca_tta_adaptation_scope = args.pca_tta_adaptation_scope
@@ -635,6 +639,7 @@ def main() -> None:
                 pca_mahalanobis_enabled=config.pca_mahalanobis_enabled,
                 pca_mahalanobis_weight=config.pca_mahalanobis_weight,
                 pca_mahalanobis_c=config.pca_mahalanobis_c,
+                pca_mahalanobis_percentile=config.pca_mahalanobis_percentile,
                 pca_mahalanobis_eps=config.pca_mahalanobis_eps,
                 pca_prior_mode=config.pca_prior_mode, episode_unit=config.pca_tta_episode_unit,
                 adaptation_scope=config.pca_tta_adaptation_scope,

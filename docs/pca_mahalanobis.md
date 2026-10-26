@@ -6,9 +6,9 @@ then averaged over images. `R` is the existing reconstruction MSE and
 
 Coefficients `b` come from the aligned, mean-centered predicted shape. Eigenvalues
 come from the fixed source prior, not the test batch. No dense inverse is needed.
-The distance sums over components without division by their count. `c` is
-subtracted directly, not squared or square-rooted. It is an experimental threshold,
-with no automatic chi-square confidence-level interpretation.
+The distance sums over components without division by their count. The selected
+threshold is subtracted directly, not squared or square-rooted. It can be a
+manual experimental value or a theoretical chi-square quantile.
 
 Use the following under `arguments` in either normalizer_experiments.yaml or
 pca_tta_evaluation.yaml:
@@ -17,9 +17,20 @@ pca_tta_evaluation.yaml:
 pca_loss_space: aligned
 pca_mahalanobis_enabled: true
 pca_mahalanobis_c: 10.0
+pca_mahalanobis_percentile: 95.0
 pca_mahalanobis_weight: 1.0
 pca_mahalanobis_eps: 1.0e-8
 ```
+
+When `pca_mahalanobis_percentile` is set, `c` is the theoretical chi-square
+quantile for the prior's retained component count `K` (one degree of freedom
+per component). The setting uses a percentage in `(0, 100)`: `95.0` gives
+`chi2.ppf(0.95, K)`, approximately `46.1943` for `K=32`. It overrides the
+manual `pca_mahalanobis_c` value. Set it to `null` to use the manual value.
+In `min_pose` mode, each candidate gets a threshold from its own `K`.
+This is a theoretical reference under approximately Gaussian PCA coefficients,
+not guaranteed empirical coverage. The percentage here is independent of the
+PCA explained-variance target used to choose `K`.
 
 Disabled by default. Set `pca_mahalanobis_enabled: false` to preserve the original
 loss. Zero beta also removes its contribution, but enabled mode still validates
@@ -28,7 +39,8 @@ not as a calibrated recommendation: tune it separately from c, especially when
 aligned reconstruction MSE is small. c controls activation; beta controls strength.
 
 CLI equivalents: `--pca-mahalanobis-enabled`, `--no-pca-mahalanobis-enabled`,
-`--pca-mahalanobis-c`, `--pca-mahalanobis-weight`, `--pca-mahalanobis-eps`.
+`--pca-mahalanobis-c`, `--pca-mahalanobis-percentile`,
+`--pca-mahalanobis-weight`, `--pca-mahalanobis-eps`.
 The Slurm launcher preserves these YAML arguments in the run snapshot, so no
 new HPC JSON paths or dependencies are required.
 
@@ -36,6 +48,8 @@ Training multiplies the complete PCA objective by `lambda_pca_projection`; TTA
 multiplies it by `tta_pca_weight`. If the outer PCA weight is zero, no coefficient
 loss participates in optimization. The checkpoint architecture is unchanged.
 Training metadata never overrides the explicit objective selected for TTA.
+Training summaries and TTA summaries include the resolved threshold, so the
+manual `c` is not mistaken for the active value when a percentile is set.
 
 Both reconstruction modes remain available. With `aligned`, R uses aligned
 coordinates. With `image`, R uses input-crop pixels squared. The coefficient term

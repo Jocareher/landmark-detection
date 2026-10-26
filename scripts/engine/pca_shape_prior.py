@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import lru_cache
+import math
 from pathlib import Path
 from typing import Any
 
@@ -361,15 +363,50 @@ def softargmax_heatmaps_to_image_coords(
     return landmarks
 
 
-def validate_pca_mahalanobis(enabled=False, weight=1.0, c=10.0, eps=1e-8):
+def validate_pca_mahalanobis(enabled=False, weight=1.0, c=10.0, eps=1e-8,
+                             percentile=None):
     """The threshold applies directly to squared distance, not its square root."""
-    import math
     if not isinstance(enabled, bool):
         raise ValueError("pca_mahalanobis_enabled must be a boolean.")
     if any(not math.isfinite(v) or v < 0 for v in (weight, c)):
         raise ValueError("PCA Mahalanobis weight and c must be finite and nonnegative.")
     if not math.isfinite(eps) or eps <= 0:
         raise ValueError("PCA Mahalanobis variance epsilon must be finite and positive.")
+    if percentile is not None and (not math.isfinite(percentile) or not 0 < percentile < 100):
+        raise ValueError("PCA Mahalanobis percentile must be in (0, 100).")
+
+
+@lru_cache(maxsize=None)
+def chi_square_critical_value(num_components: int, percentile: float) -> float:
+    """Chi-square quantile with one degree of freedom per retained PCA component."""
+    if num_components < 1:
+        raise ValueError("Chi-square threshold requires at least one PCA component.")
+    validate_pca_mahalanobis(percentile=percentile)
+    probability = percentile / 100.0
+    shape = torch.tensor(num_components / 2.0, dtype=torch.float64)
+
+    def cdf(value: float) -> float:
+        argument = torch.tensor(value / 2.0, dtype=torch.float64)
+        return float(torch.special.gammainc(shape, argument))
+
+    low, high = 0.0, float(num_components)
+    while cdf(high) < probability:
+        high *= 2.0
+    for _ in range(80):
+        middle = (low + high) / 2.0
+        if cdf(middle) < probability:
+            low = middle
+        else:
+            high = middle
+    return (low + high) / 2.0
+
+
+def pca_mahalanobis_threshold(prior: dict[str, Any], manual_c: float,
+                              percentile: float | None) -> float:
+    """Resolve the manual threshold or the prior-specific chi-square quantile."""
+    if percentile is None:
+        return manual_c
+    return chi_square_critical_value(prior["components"].shape[0], percentile)
 
 
 def validate_pca_mahalanobis_prior(pca_prior, mode="global"):
@@ -397,6 +434,7 @@ def compute_pca_projection_terms(
     mahalanobis_weight: float = 1.0,
     mahalanobis_c: float = 10.0,
     mahalanobis_eps: float = 1e-8,
+    mahalanobis_percentile: float | None = None,
 ) -> dict[str, torch.Tensor]:
     """Measure PCA reconstruction MSE in aligned or input-image coordinates.
 
@@ -413,7 +451,7 @@ def compute_pca_projection_terms(
     is summed over components, then averaged over images only.
     """
     validate_pca_mahalanobis(mahalanobis_enabled, mahalanobis_weight,
-                             mahalanobis_c, mahalanobis_eps)
+                             mahalanobis_c, mahalanobis_eps, mahalanobis_percentile)
     if loss_space not in {"aligned", "image"}:
         raise ValueError(f"Unsupported PCA loss space: {loss_space}. Use aligned or image.")
     if reduction not in {"mean", "none"}:
@@ -430,6 +468,10 @@ def compute_pca_projection_terms(
     allow_reflection = bool(alignment_config.get("allow_reflection", False))
     eps = float(alignment_config.get("eps", PCA_ALIGNMENT_EPS))
     global_prior = pca_prior["global_prior"]
+    threshold = (
+        pca_mahalanobis_threshold(global_prior, mahalanobis_c, mahalanobis_percentile)
+        if mahalanobis_enabled else mahalanobis_c
+    )
     expected_landmarks = int(global_prior["num_landmarks"])
 
     sample_losses: list[torch.Tensor] = []
@@ -490,7 +532,7 @@ def compute_pca_projection_terms(
 
     reconstruction = torch.stack(sample_losses)
     squared = torch.stack(squared_distances)
-    penalty = (squared - mahalanobis_c).clamp_min(0) if mahalanobis_enabled else torch.zeros_like(squared)
+    penalty = (squared - threshold).clamp_min(0) if mahalanobis_enabled else torch.zeros_like(squared)
     weighted = mahalanobis_weight * penalty
     terms = {"loss": reconstruction + weighted,
              "reconstruction": reconstruction, "mahalanobis_squared": squared,

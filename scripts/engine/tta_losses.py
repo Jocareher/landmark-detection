@@ -18,7 +18,8 @@ def validate_tta_weights(pca_weight: float, entropy_weight: float, spread_weight
 def compute_tta_losses(heatmaps, landmarks, pca_prior, *, pca_weight=1.0,
                        entropy_weight=0.0, spread_weight=0.0, pca_loss_space="image", pca_prior_mode="global",
                        pca_mahalanobis_enabled=False, pca_mahalanobis_weight=1.0,
-                       pca_mahalanobis_c=10.0, pca_mahalanobis_eps=1e-8):
+                       pca_mahalanobis_c=10.0, pca_mahalanobis_percentile=None,
+                       pca_mahalanobis_eps=1e-8):
     """Return [B] raw signals, weighted contributions and their sum.
 
     p = spatial softmax(logits), with temperature fixed at 1.
@@ -28,10 +29,13 @@ def compute_tta_losses(heatmaps, landmarks, pca_prior, *, pca_weight=1.0,
     """
     validate_tta_weights(pca_weight, entropy_weight, spread_weight)
     validate_pca_mahalanobis(pca_mahalanobis_enabled, pca_mahalanobis_weight,
-                            pca_mahalanobis_c, pca_mahalanobis_eps)
+                            pca_mahalanobis_c, pca_mahalanobis_eps,
+                            pca_mahalanobis_percentile)
     options = dict(mahalanobis_enabled=pca_mahalanobis_enabled,
                    mahalanobis_weight=pca_mahalanobis_weight,
-                   mahalanobis_c=pca_mahalanobis_c, mahalanobis_eps=pca_mahalanobis_eps)
+                   mahalanobis_c=pca_mahalanobis_c,
+                   mahalanobis_percentile=pca_mahalanobis_percentile,
+                   mahalanobis_eps=pca_mahalanobis_eps)
     if pca_prior_mode not in {"global", "min_pose"}:
         raise ValueError(f"Unsupported PCA prior mode: {pca_prior_mode}")
     statistics = heatmap_distribution_statistics(heatmaps)
