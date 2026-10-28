@@ -415,6 +415,37 @@ def parse_args() -> argparse.Namespace:
         help="Enable geometric training augmentations that also transform landmarks.",
     )
     parser.add_argument(
+        "--background-augmentation-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.background_augmentation_enabled,
+        help="Randomize near-white synthetic training background outside the protected face region.",
+    )
+    parser.add_argument(
+        "--background-augmentation-probability",
+        type=float, default=defaults.background_augmentation_probability,
+        help="Per-image probability of synthetic background randomization.",
+    )
+    parser.add_argument(
+        "--background-white-threshold",
+        type=int, default=defaults.background_white_threshold,
+        help="Minimum RGB channel value at which neutral near-white pixels become eligible.",
+    )
+    parser.add_argument(
+        "--background-face-margin-px",
+        type=int, default=defaults.background_face_margin_px,
+        help="Pixel margin around face silhouette and landmark hull.",
+    )
+    parser.add_argument(
+        "--background-texture-std",
+        type=float, default=defaults.background_texture_std,
+        help="Standard deviation of smooth RGB background texture in [0,1] units.",
+    )
+    parser.add_argument(
+        "--background-fine-noise-std",
+        type=float, default=defaults.background_fine_noise_std,
+        help="Standard deviation of fine background noise in [0,1] units.",
+    )
+    parser.add_argument(
         "--brightness-jitter",
         type=float,
         default=defaults.color_jitter_brightness,

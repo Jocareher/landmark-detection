@@ -1,0 +1,200 @@
+# Run: python -m scripts.main --config configs/normalizer_experiments.yaml
+# Keep the flat arguments mapping: keys are argparse destinations; CLI overrides YAML.
+arguments:
+
+  # ---------------------------------------------------------------------------
+  # Experiment selection
+  # ---------------------------------------------------------------------------
+  # Active preset: InstanceNorm at the end of the external normalizer and
+  # immediately after HRNet layer1; BatchNorm remains in all task heads.
+  # For the older baseline/layer/instance/adain variants, set BOTH new flags
+  # below to false and choose the earlier normalizer/head normalization pair.
+  # HPC --normalization selects the complete variant and overrides all four fields.
+  # instance_early: normalizer none + final IN true + layer1 IN true + BN heads.
+  # instance_hidden: normalizer instance + final IN false + layer1 IN true + BN heads.
+  # batch_all_norms: batch norm in hidden normalizer blocks, BN backbone + BN heads.
+  # instance_all_norms: instance norm in hidden normalizer blocks, all HRNet
+  #                    BatchNorm replaced with IN, and IN heads.
+  # AdaIN source moments are collected only on
+  # synbaby72/train; the best checkpoint is recalibrated without augmentations.
+  # For every variant, give wandb_run_name a distinct value.
+  # Modes: none | normalizer_sanity | normalizer_train_frozen_landmarker |
+  #        normalizer_joint_finetune.
+  experiment_mode: normalizer_joint_finetune
+  normalizer_normalization: none
+  normalizer_final_instance_norm: true
+  layer1_output_instance_norm: true
+  head_normalization: batch
+  backbone_normalization: batch
+  wandb_run_name: train_instance_early_pca_aligned_bg_randomized
+
+  # ---------------------------------------------------------------------------
+  # Training data and output
+  # ---------------------------------------------------------------------------
+  # output_dir is the parent directory; the run is saved under output_dir/wandb_run_name.
+  dataset_root: /home/jocareher/Downloads/landmark-detection/data/synbaby72
+  output_dir: /home/jocareher/Downloads/landmark-detection/runs
+  cache_dir: /home/jocareher/Downloads/landmark-detection/dataset_cache
+
+  # ---------------------------------------------------------------------------
+  # Initialization and trainable modules
+  # ---------------------------------------------------------------------------
+  # Joint fine-tuning starts from official HRNet weights and new heads/normalizer.
+  # Keep checkpoint null for this mode. Sanity/frozen-landmarker modes require a checkpoint.
+  # Train the complete normalizer, the new post-layer1 InstanceNorm affine
+  # parameters, transition3, stage4, and all task heads. Stem/layer1 convolutions
+  # and their BatchNorm statistics remain frozen during source training.
+  # With backbone_normalization: instance, only the BN affine weight/bias from
+  # official pretraining transfer; BN running mean/variance have no IN equivalent.
+  # All backbone IN affine parameters train, even in frozen convolutional stages.
+  pretrained_weights: /home/jocareher/Downloads/landmark-detection/weights/HR18-300W.pth
+  checkpoint: null
+  checkpoint_strict: true
+  transfer_mode: fine_tuning
+  num_unfrozen_stages: 1
+  unfreeze_stem: false
+
+  # ---------------------------------------------------------------------------
+  # Residual normalizer architecture
+  # ---------------------------------------------------------------------------
+  # Hidden blocks: Conv -> selected normalization -> activation.
+  # Final-only IN is inserted after the last HIDDEN convolution, before ReLU.
+  # The final RGB convolution is never normalized. Do not enable final-only IN
+  # together with per-block normalization; use one of the two presets above.
+  # The post-layer1 IN is between layer1 and transition1 (256 channels).
+  # layer: LayerNorm across channels at each pixel.
+  # instance: InstanceNorm2d with affine parameters and no running statistics.
+  # adain: per-instance normalization toward fixed synbaby72 source moments;
+  # the scale/bias and moments are saved with the trained checkpoint.
+  # Other normalizer choices: none, group, batch. Other head choice: batch.
+  # The final zero-initialized convolution preserves the initial identity mapping.
+  normalizer_hidden_channels: 16
+  normalizer_num_layers: 3
+  normalizer_kernel_size: 3
+  normalizer_activation: relu
+  normalizer_residual_scale: 0.05
+  normalizer_initialize_identity: true
+  normalizer_clamp_output: false
+
+  # ---------------------------------------------------------------------------
+  # Supervised losses and PCA
+  # ---------------------------------------------------------------------------
+  # Wasserstein uses barycenter decoding. Adaptive Wing settings are inactive here.
+  # Select ONE PCA loss:
+  # aligned = original MSE(prediction aligned by Procrustes, PCA reconstruction).
+  # image = MSE(original prediction, inverse-transformed PCA reconstruction), in pixels^2.
+  # Both preserve gradients through alignment; image also through its inverse.
+  # No additional face-size normalization. Weights are NOT comparable across spaces.
+  # Set lambda_pca_projection to 0 to disable training PCA.
+  pca_loss_space: aligned
+  # Optional coefficient prior: L_PCA = reconstruction + beta * max(D^2 - c, 0).
+  # Manual c is used only when percentile is null; neither mode takes a square root.
+  pca_mahalanobis_enabled: false
+  pca_mahalanobis_weight: 1.0  # beta; tune separately from the reconstruction weight
+  pca_mahalanobis_c: 10.0
+  pca_mahalanobis_percentile: 95.0  # chi-square quantile using retained K; overrides c when enabled
+  pca_mahalanobis_eps: 1.0e-8  # floor for PCA component variances
+  landmark_loss: wasserstein
+  wasserstein_softmax_temperature: 1.0
+  wasserstein_epsilon: 1.0e-08
+  adaptive_wing_omega: 14.0
+  adaptive_wing_theta: 0.5
+  adaptive_wing_epsilon: 1.0
+  adaptive_wing_alpha: 2.1
+  pca_prior_path: /home/jocareher/Downloads/landmark-detection/weights/pca_prior_13y_k32.pt
+  lambda_pca_projection: 1.0
+
+  # ---------------------------------------------------------------------------
+  # Optional image regularization
+  # ---------------------------------------------------------------------------
+  # Disabled: no L1/TV image regularization is added.
+  normalizer_image_regularization: false
+  normalizer_lambda_l1: 0.0
+  normalizer_lambda_tv: 0.0
+
+  # ---------------------------------------------------------------------------
+  # Training budget and runtime
+  # ---------------------------------------------------------------------------
+  epochs: 60
+  batch_size: 32
+  eval_batch_size: 32
+  num_workers: 4
+  lr: 0.0001
+  seed: 42
+  device: auto
+  disable_amp: false
+  disable_cache: false
+  smoke_test: false
+
+  # ---------------------------------------------------------------------------
+  # Photometric augmentation
+  # ---------------------------------------------------------------------------
+  enable_photometric_augmentations: true
+
+  # Train-only: randomize near-white synthetic background, protect landmark box.
+  background_augmentation_enabled: true
+  background_augmentation_probability: 0.7
+  background_white_threshold: 225
+  background_face_margin_px: 2
+  background_texture_std: 0.06
+  background_fine_noise_std: 0.01
+  brightness_jitter: 0.15
+  contrast_jitter: 0.15
+  saturation_jitter: 0.1
+  color_jitter_probability: 0.5
+  blur_probability: 0.5
+  blur_radius_min: 0.1
+  blur_radius_max: 1.2
+  noise_probability: 0.5
+  noise_std: 0.02
+  jpeg_probability: 0.15
+  jpeg_quality_min: 60
+  jpeg_quality_max: 95
+  rgb_shift_probability: 0.15
+  rgb_shift_limit: 0.04
+
+  # ---------------------------------------------------------------------------
+  # Geometric augmentation
+  # ---------------------------------------------------------------------------
+  # Parameters below are inactive while enable_geometric_augmentations is false.
+  enable_geometric_augmentations: false
+  geometric_probability: 0.5
+  geometric_max_translation: 0.05
+  geometric_scale_min: 0.95
+  geometric_scale_max: 1.05
+  geometric_max_rotation_deg: 8.0
+
+  # ---------------------------------------------------------------------------
+  # Post-training evaluation datasets
+  # ---------------------------------------------------------------------------
+  # Natural datasets remain evaluation-only. These paths do not select training data.
+  # Sanity mode disables SynBaby unless --evaluate-synbaby is explicitly supplied.
+  evaluate_synbaby: true
+  evaluate_babyland: true
+  evaluate_infanface: true
+  babyland_crop_root: /home/jocareher/Downloads/babyland72_622_inference/crops/all_detections
+  babyland_gt_root: /home/jocareher/Downloads/landmark-detection/data/babyland72/labels
+  babyland_source_root: null
+  infanface_crop_root: /home/jocareher/Downloads/infanface_inference/crops/all_detections
+  infanface_gt_root: /home/jocareher/Downloads/infanface_prepared/all/labels
+  infanface_source_root: null
+
+  # ---------------------------------------------------------------------------
+  # Normalizer diagnostics
+  # ---------------------------------------------------------------------------
+  # These monitoring options do not enable TTA; use pca_tta_evaluation.yaml for TTA.
+  normalizer_visual_examples: 32
+  normalizer_monitoring: true
+  normalizer_monitor_probes: 4
+  normalizer_monitor_steps: [0, 1, 5, 10, 20]
+  normalizer_tta_monitor_steps: [0, 1, 5, 10, 20]
+  normalizer_monitor_difference_max: 0.15
+  normalizer_monitor_registration_warning_px: 1.0
+  normalizer_monitor_edge_correlation_warning: 0.9
+
+  # ---------------------------------------------------------------------------
+  # Tracking and reproducibility
+  # ---------------------------------------------------------------------------
+  use_wandb: true
+  wandb_project: BabyLMKS
+  save_config: true

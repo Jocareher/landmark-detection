@@ -11,6 +11,7 @@ from .natural_dataset import NaturalLandmarkEvaluationDataset
 from .dataset import SyntheticLandmarkDataset
 from .transforms import (
     Compose,
+    CaptureWhiteBackgroundReference,
     Normalize,
     RandomAffineLandmarks,
     RandomColorJitter,
@@ -18,6 +19,7 @@ from .transforms import (
     RandomGaussianNoise,
     RandomJpegCompression,
     RandomRGBShift,
+    RandomWhiteBackground,
     Resize,
     ToTensor,
 )
@@ -39,6 +41,9 @@ def build_transforms(config: ExperimentConfig) -> tuple[Compose, Compose]:
         )
 
     train_transforms.append(Resize(size=config.image_size))
+
+    if config.background_augmentation_enabled:
+        train_transforms.append(CaptureWhiteBackgroundReference())
 
     if config.enable_photometric_augmentations:
         train_transforms.extend(
@@ -68,6 +73,19 @@ def build_transforms(config: ExperimentConfig) -> tuple[Compose, Compose]:
                     shift_limit=config.rgb_shift_limit,
                 ),
             ]
+        )
+
+    if config.background_augmentation_enabled:
+        # The mask is based on the original resized white background, but the
+        # replacement runs after blur/JPEG so it cannot spill into the face.
+        train_transforms.append(
+            RandomWhiteBackground(
+                probability=config.background_augmentation_probability,
+                white_threshold=config.background_white_threshold,
+                face_margin_px=config.background_face_margin_px,
+                texture_std=config.background_texture_std,
+                fine_noise_std=config.background_fine_noise_std,
+            )
         )
 
     train_transforms.extend(

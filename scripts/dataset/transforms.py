@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 import numpy as np
 import torch
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter
 
 SampleDict = dict[str, Any]
 
@@ -153,6 +153,181 @@ class RandomGaussianNoise:
         noisy_image = np.clip(image_np + noise, 0.0, 1.0)
         sample["image"] = Image.fromarray((noisy_image * 255.0).astype(np.uint8))
         return sample
+
+
+@dataclass
+class CaptureWhiteBackgroundReference:
+    """Keep the resized synthetic RGB image for a late background-only transform."""
+
+    def __call__(self, sample: SampleDict) -> SampleDict:
+        image = sample["image"]
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        if not isinstance(image, Image.Image):
+            raise TypeError(f"Unsupported image type: {type(image)}.")
+        sample["_white_background_reference"] = image.convert("RGB").copy()
+        return sample
+
+
+@dataclass
+class RandomWhiteBackground:
+    """Randomize near-white synthetic background without changing the face region.
+
+    The available labels are landmarks rather than a foreground segmentation mask.
+    A convex hull of visible landmarks and the non-white foreground are protected.
+    Only neutral near-white pixels outside this protection are eligible. This is
+    a conservative approximation, not pixel-accurate foreground segmentation.
+    """
+
+    probability: float = 0.7
+    white_threshold: int = 225
+    max_chroma: int = 20
+    face_margin_px: int = 2
+    texture_std: float = 0.06
+    fine_noise_std: float = 0.01
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.probability <= 1.0:
+            raise ValueError("Background augmentation probability must be in [0, 1].")
+        if not 0 <= self.white_threshold < 255:
+            raise ValueError("Background white threshold must be in [0, 254].")
+        if not 0 <= self.max_chroma <= 255:
+            raise ValueError("Background max chroma must be in [0, 255].")
+        if not 0 <= self.face_margin_px <= 32:
+            raise ValueError("Background face margin must be an integer in [0, 32].")
+        if self.texture_std < 0 or self.fine_noise_std < 0:
+            raise ValueError("Background noise standard deviations must be nonnegative.")
+
+    def __call__(self, sample: SampleDict) -> SampleDict:
+        """Replace eligible background with a random smooth color/texture field."""
+        reference = sample.pop("_white_background_reference", None)
+        metadata = dict(sample.get("metadata", {}))
+        metadata["background_augmentation"] = {
+            "applied": False,
+            "landmark_box_xyxy": (0, 0, 0, 0),
+            "eligible_fraction": 0.0,
+        }
+        sample["metadata"] = metadata
+        if random.random() >= self.probability:
+            return sample
+        image = sample["image"]
+        if isinstance(image, np.ndarray):
+            image = Image.fromarray(image)
+        if not isinstance(image, Image.Image):
+            raise TypeError(f"Unsupported image type: {type(image)}.")
+        original = np.asarray(image.convert("RGB"), dtype=np.uint8)
+        mask_source = np.asarray(reference, dtype=np.uint8) if reference is not None else original
+        height, width = original.shape[:2]
+        if mask_source.shape != original.shape:
+            raise ValueError("Background reference and augmented image sizes differ.")
+        points = np.asarray(sample["landmarks"], dtype=np.float32)
+        visibility = np.asarray(sample["visibility"], dtype=np.float32)
+        if points.ndim != 2 or points.shape[1] != 2 or visibility.shape != (len(points),):
+            raise ValueError("Background augmentation requires Nx2 landmarks and N visibility flags.")
+        usable = (
+            (visibility > 0)
+            & np.isfinite(points).all(axis=1)
+            & (points[:, 0] >= 0) & (points[:, 0] < width)
+            & (points[:, 1] >= 0) & (points[:, 1] < height)
+        )
+        if usable.sum() < 5:
+            return sample  # fail closed when the face location is unreliable
+
+        x_min, y_min = points[usable].min(axis=0)
+        x_max, y_max = points[usable].max(axis=0)
+        landmark_box = (
+            max(0, int(math.floor(x_min))), max(0, int(math.floor(y_min))),
+            min(width, int(math.ceil(x_max)) + 1),
+            min(height, int(math.ceil(y_max)) + 1),
+        )
+
+        # A pixel must be bright and close to neutral RGB. The silhouette and
+        # landmark hull protect face/skin highlights without leaving a white
+        # rectangular box in the randomized background.
+        image_f = original.astype(np.float32) / 255.0
+        low = mask_source.min(axis=2).astype(np.float32)
+        chroma = (mask_source.max(axis=2).astype(np.int16)
+                  - mask_source.min(axis=2).astype(np.int16))
+        whiteness = np.clip((low - self.white_threshold) / (255.0 - self.white_threshold), 0.0, 1.0)
+        whiteness[chroma > self.max_chroma] = 0.0
+        foreground = ((whiteness == 0) | (chroma > self.max_chroma)).astype(np.uint8) * 255
+        hull_points = self._convex_hull(points[usable])
+        if len(hull_points) < 3:
+            return sample
+        hull = Image.new('L', (width, height), 0)
+        ImageDraw.Draw(hull).polygon(hull_points, fill=255)
+        margin = self.face_margin_px
+        foreground_image = Image.fromarray(foreground)
+        if margin:
+            filter_size = 2 * margin + 1
+            foreground_image = foreground_image.filter(ImageFilter.MaxFilter(filter_size))
+            hull = hull.filter(ImageFilter.MaxFilter(filter_size))
+        protection = np.maximum(np.asarray(foreground_image, dtype=np.uint8),
+                                np.asarray(hull, dtype=np.uint8))
+        if margin:
+            soft = np.asarray(Image.fromarray(protection).filter(
+                ImageFilter.GaussianBlur(radius=max(1, margin / 2))), dtype=np.uint8)
+            protection = np.maximum(protection, soft)
+        alpha = (whiteness * (1.0 - protection.astype(np.float32) / 255.0)).astype(np.float32)
+        if not np.any(alpha > 0):
+            return sample
+
+        # A varied color plus smooth texture removes the constant-white cue.
+        # Fine noise alone would leave the background nearly white and create
+        # an artificial high-frequency texture.
+        luminance = random.uniform(0.30, 0.94)
+        base_color = np.clip(
+            luminance + np.random.uniform(-0.10, 0.10, size=3), 0.15, 1.0
+        ).astype(np.float32)
+        coarse_luminance = np.random.normal(
+            0.0, self.texture_std, size=(6, 6, 1)).astype(np.float32)
+        coarse_color = np.random.normal(
+            0.0, self.texture_std * 0.2, size=(6, 6, 3)).astype(np.float32)
+        coarse = coarse_luminance + coarse_color
+        smooth = np.stack([
+            np.asarray(Image.fromarray(coarse[:, :, channel]).resize(
+                (width, height), Image.BILINEAR), dtype=np.float32)
+            for channel in range(3)
+        ], axis=2)
+        fine = np.random.normal(0.0, self.fine_noise_std,
+                                size=(height, width, 1)).astype(np.float32)
+        background = np.clip(base_color + smooth + fine, 0.0, 1.0)
+        result = np.clip((1.0 - alpha[..., None]) * image_f
+                         + alpha[..., None] * background, 0.0, 1.0)
+        output = np.rint(result * 255.0).astype(np.uint8)
+        # Exact preservation for all non-white foreground and the landmark hull.
+        output[(protection == 255) | (whiteness == 0)] = original[
+            (protection == 255) | (whiteness == 0)]
+        sample["image"] = Image.fromarray(output)
+        metadata["background_augmentation"] = {
+            "applied": True,
+            "landmark_box_xyxy": landmark_box,
+            "eligible_fraction": float((alpha > 0).mean()),
+        }
+        sample["metadata"] = metadata
+        return sample
+
+    @staticmethod
+    def _convex_hull(points: np.ndarray) -> list[tuple[int, int]]:
+        """Return a simple polygon enclosing the visible landmark points."""
+        coords = sorted({(int(round(x)), int(round(y))) for x, y in points})
+        if len(coords) < 3:
+            return coords
+
+        def cross(a: tuple[int, int], b: tuple[int, int], c: tuple[int, int]) -> int:
+            return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+        lower: list[tuple[int, int]] = []
+        for point in coords:
+            while len(lower) >= 2 and cross(lower[-2], lower[-1], point) <= 0:
+                lower.pop()
+            lower.append(point)
+        upper: list[tuple[int, int]] = []
+        for point in reversed(coords):
+            while len(upper) >= 2 and cross(upper[-2], upper[-1], point) <= 0:
+                upper.pop()
+            upper.append(point)
+        return lower[:-1] + upper[:-1]
 
 
 @dataclass
