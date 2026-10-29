@@ -1,0 +1,38 @@
+{
+  "cluster": "correfoc",
+  "partition": "std-gpu",
+  "runs_root": "/projects/lab_REPLACE/REPLACE_USER/landmark-detection/runs",
+  "python_executable": "/projects/lab_REPLACE/REPLACE_USER/envs/lmks/bin/python",
+  "modules": [],
+  "minimum_gpu_memory_gib": 22,
+  "account": null,
+  "wandb_mode": "offline",
+  "paths": {
+    "train_dataset": "/projects/lab_REPLACE/REPLACE_USER/landmark-detection/data/synbaby72",
+    "pretrained_weights": "/projects/lab_REPLACE/REPLACE_USER/landmark-detection/weights/HR18-300W.pth",
+    "pca_prior": "/projects/lab_REPLACE/REPLACE_USER/landmark-detection/weights/pca_prior_13y_k32.pt",
+    "babyland_crops": "/projects/lab_REPLACE/REPLACE_USER/landmark-detection/data/babyland72/all_detections",
+    "babyland_source_root": "/projects/lab_REPLACE/REPLACE_USER/landmark-detection/data/babyland72/images",
+    "babyland_labels": "/projects/lab_REPLACE/REPLACE_USER/landmark-detection/data/babyland72/labels",
+    "infanface_crops": "/projects/lab_REPLACE/REPLACE_USER/landmark-detection/data/infanface_adapted/all_detections",
+    "infanface_source_root": "/projects/lab_REPLACE/REPLACE_USER/landmark-detection/data/infanface_adapted/all/images",
+    "infanface_labels": "/projects/lab_REPLACE/REPLACE_USER/landmark-detection/data/infanface_adapted/all/labels"
+  },
+  "train": {
+    "time": "08:00:00",
+    "cpus": 8,
+    "memory": "32G",
+    "workers": 4,
+    "batch_size": 32,
+    "epochs": 60
+  },
+  "tta": {
+    "time": "08:00:00",
+    "cpus": 4,
+    "memory": "16G",
+    "workers": 2,
+    "batch_size": 1,
+    "steps": 20,
+    "learning_rate": 0.0001
+  }
+}

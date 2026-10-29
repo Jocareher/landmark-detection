@@ -178,4 +178,5 @@ external_repos/*
 
 # Machine-specific HPC paths and generated cluster runs
 configs/upf_hpc.local.json
+configs/correfoc_hpc.local.json
 runs_hpc/

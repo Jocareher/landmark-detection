@@ -33,6 +33,58 @@ def test_snow_queues_and_real_gpu_types():
         launch.choose_partition('15-00:00:00')
 
 
+def test_correfoc_uses_hardware_partitions_and_generic_gpu_request(tmp_path, monkeypatch):
+    settings = json.loads((ROOT / 'configs/correfoc_hpc.example.json').read_text())
+    for key in settings['paths']:
+        path = tmp_path / key
+        path.mkdir()
+        settings['paths'][key] = str(path)
+    python = tmp_path / 'env/bin/python'
+    python.parent.mkdir(parents=True)
+    python.write_text('')
+    settings['python_executable'] = str(python)
+    settings['runs_root'] = str(tmp_path / 'runs')
+    settings['modules'] = ['modulepath/EESSI/2025.06', 'Python/example']
+    settings_path = tmp_path / 'correfoc.json'
+    settings_path.write_text(json.dumps(settings))
+    args = SimpleNamespace(mode='train', settings=settings_path, config=None,
+                           normalization='instance', run_name='correfoc_test',
+                           scope='normalizer', dataset='babyland', checkpoint=None,
+                           normalizer_checkpoint=None, afterok=None, time=None,
+                           partition=None, gpu_type=None, epochs=1, steps=None,
+                           batch_size=None, dry_run=False)
+    commands = []
+
+    def check_output(command, **kwargs):
+        commands.append(command)
+        if command[0] == 'sinfo':
+            return 'gpu:1\n'
+        if command[0] == 'scontrol':
+            return 'PartitionName=std-gpu MaxTime=1-00:00:00'
+        return '789\n'
+
+    monkeypatch.setattr(launch, 'arguments', lambda: args)
+    monkeypatch.setattr(launch.subprocess, 'check_output', check_output)
+    launch.main()
+    command = commands[-1]
+    assert '--partition=std-gpu' in command
+    assert '--gres=gpu:1' in command
+    assert not any(part.startswith('--gres=gpu:l40s:') for part in command)
+    assert command[-3:] == [str(python), *settings['modules']]
+    run, = (tmp_path / 'runs').iterdir()
+    plan = json.loads((run / 'metadata/launch.json').read_text())
+    assert plan['cluster'] == 'correfoc'
+    assert plan['python_executable'] == str(python)
+    assert plan['modules'] == settings['modules']
+    args.partition = 'medium'
+    with pytest.raises(ValueError, match='not valid for correfoc'):
+        launch.main()
+    args.partition = 'high-gpu'
+    args.gpu_type = 'l40s'
+    with pytest.raises(ValueError, match='omit --gpu-type'):
+        launch.main()
+
+
 @pytest.mark.parametrize('mode', ['train', 'tta'])
 @pytest.mark.parametrize('run_name', [None, 'train_hidden_aligned'])
 @pytest.mark.parametrize('heatmap_only', [False, True])

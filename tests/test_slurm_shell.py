@@ -90,3 +90,33 @@ ensure_lmks lmks "$2"
     assert ('conda create' in trace) == (not existing)
     assert ('pip install' in trace) == (not complete)
     assert '[ENV] Ready' in result.stdout
+
+
+def test_prepared_correfoc_python_skips_conda_and_loads_modules(tmp_path):
+    import os
+    interpreter = tmp_path / 'env/bin/python'
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text('#!/bin/bash\nprintf "python %s\\n" "$*" >> "$TRACE"\n')
+    interpreter.chmod(0o755)
+    shell = r'''
+set -e
+module() { printf 'module %s\n' "$*" >> "$TRACE"; }
+conda() { printf 'UNEXPECTED_CONDA\n' >> "$TRACE"; return 99; }
+srun() {
+    [[ "$1" == --export=ALL && "$SLURM_EXPORT_ENV" == ALL ]] || return 1
+    shift 3
+    "$@"
+}
+source "$1" plan.json '' lmks "$2" modulepath/EESSI/2025.06 Python/example
+'''
+    env = dict(os.environ, TRACE=str(tmp_path / 'trace'))
+    result = subprocess.run(['bash', '-c', shell, 'test',
+                             str(ROOT / 'slurm/job.sh'), str(interpreter)],
+                            cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    trace = (tmp_path / 'trace').read_text()
+    assert 'UNEXPECTED_CONDA' not in trace
+    assert 'module load modulepath/EESSI/2025.06' in trace
+    assert 'module load Python/example' in trace
+    assert 'python ' + str(tmp_path / 'slurm/check_environment.py') in trace
+    assert 'python -u ' + str(tmp_path / 'slurm/run_job.py') + ' plan.json' in trace

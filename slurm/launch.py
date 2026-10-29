@@ -30,8 +30,14 @@ def duration_seconds(value):
     return total
 
 
-def choose_partition(walltime):
+def choose_partition(walltime, cluster='snow'):
     seconds = duration_seconds(walltime)
+    if cluster == 'correfoc':
+        # Correfoc uses hardware partitions, not the old time-based queues.
+        # The live MaxTime is checked below before submission.
+        return 'std-gpu'
+    if cluster != 'snow':
+        raise ValueError(f'Unsupported cluster: {cluster}')
     if seconds <= 7200:
         return 'short'
     if seconds <= 28800:
@@ -90,8 +96,8 @@ def arguments():
     parser.add_argument('--normalizer-checkpoint', type=Path)
     parser.add_argument('--afterok', help='Wait for a successful training job ID.')
     parser.add_argument('--time', help='Overrides provisional, unbenchmarked settings.')
-    parser.add_argument('--partition', choices=('short', 'medium', 'high'))
-    parser.add_argument('--gpu-type', help='Exact type from sinfo; auto prefers L40S then RTX6000.')
+    parser.add_argument('--partition', help='SNOW: short/medium/high; Correfoc: std-gpu/high-gpu.')
+    parser.add_argument('--gpu-type', help='SNOW only: exact type from sinfo; auto prefers L40S then RTX6000.')
     parser.add_argument('--epochs', type=int)
     parser.add_argument('--steps', type=int)
     parser.add_argument('--batch-size', type=int)
@@ -183,6 +189,14 @@ def main():
     args = arguments()
     validate_runtime_files()
     settings = json.loads(args.settings.read_text())
+    cluster = settings.get('cluster', 'snow')
+    if cluster not in ('snow', 'correfoc'):
+        raise ValueError(f'Unsupported cluster: {cluster}')
+    if cluster == 'correfoc' and not settings.get('python_executable'):
+        raise ValueError('Correfoc requires python_executable pointing to a prepared GPU environment.')
+    modules = settings.get('modules', [])
+    if not isinstance(modules, list) or any(not isinstance(item, str) or not item for item in modules):
+        raise ValueError('modules must be a list of nonempty module names.')
     resources = dict(settings[args.mode])
     for key in ('time', 'epochs', 'steps', 'batch_size'):
         value = getattr(args, key)
@@ -204,10 +218,15 @@ def main():
     if (args.mode == 'tta' and args.scope == 'normalizer_all_instance_norms'
             and int(resources['batch_size']) != 1):
         raise ValueError('normalizer_all_instance_norms requires --batch-size 1.')
-    partition = args.partition or choose_partition(resources['time'])
+    partition = args.partition or settings.get('partition') or choose_partition(resources['time'], cluster)
+    allowed = ('std-gpu', 'high-gpu') if cluster == 'correfoc' else ('short', 'medium', 'high')
+    if partition not in allowed:
+        raise ValueError(f'Partition {partition!r} is not valid for {cluster}; choose from {allowed}.')
+    if cluster == 'correfoc' and args.gpu_type:
+        raise ValueError('Correfoc uses generic --gres=gpu:1; omit --gpu-type.')
     inventory = subprocess.check_output(
         ['sinfo', '--noheader', f'--partition={partition}', '--format=%G'], universal_newlines=True)
-    gpu = choose_gpu(args.gpu_type or settings['gpu_type'], inventory)
+    gpu = choose_gpu(args.gpu_type or settings.get('gpu_type', 'auto'), inventory) if cluster == 'snow' else None
     partition_info = subprocess.check_output(['scontrol', 'show', 'partition', partition], universal_newlines=True)
     maximum = re.search(r'MaxTime=(\S+)', partition_info)
     if maximum and maximum[1] not in ('UNLIMITED', 'INFINITE'):
@@ -234,6 +253,8 @@ def main():
     checkpoint = required_path(args.checkpoint, exists=not bool(args.afterok)) if args.checkpoint else None
     separate = required_path(args.normalizer_checkpoint, exists=not bool(args.afterok)) if args.normalizer_checkpoint else None
     root = Path(required_path(settings['runs_root'], exists=False))
+    python_executable = (required_path(settings['python_executable'])
+                         if settings.get('python_executable') else None)
     label = (safe_run_name(args.run_name) if getattr(args, 'run_name', None)
              else yaml_run_name(base_yaml))
     name = f'{label}_{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}_{uuid.uuid4().hex[:6]}'
@@ -245,10 +266,13 @@ def main():
                 evaluations=evaluations, tta_loss_weights=tta_weights,
                 dataset=args.dataset, paths=selected_paths, checkpoint=checkpoint,
                 normalizer_checkpoint=separate, run_dir=str(run), resources=resources,
-                partition=partition, gpu_type=gpu, wandb_mode=settings.get('wandb_mode', 'offline'),
+                cluster=cluster, partition=partition, gpu_type=gpu,
+                python_executable=python_executable, modules=modules,
+                wandb_mode=settings.get('wandb_mode', 'offline'),
                 minimum_gpu_memory_gib=settings.get('minimum_gpu_memory_gib', 22))
     command = ['sbatch', '--parsable', '--nodes=1', '--ntasks=1', '--no-requeue',
-               f'--job-name={label}', f'--partition={partition}', f'--gres=gpu:{gpu}:1',
+               f'--job-name={label}', f'--partition={partition}',
+               '--gres=gpu:1' if cluster == 'correfoc' else f'--gres=gpu:{gpu}:1',
                f'--cpus-per-task={resources["cpus"]}', f'--mem={resources["memory"]}',
                f'--time={resources["time"]}', f'--chdir={run / "code"}',
                f'--output={run / "logs/slurm-%j.out"}', f'--error={run / "logs/slurm-%j.err"}']
@@ -257,7 +281,9 @@ def main():
     if args.afterok:
         command.extend([f'--dependency=afterok:{args.afterok}', '--kill-on-invalid-dep=yes'])
     command.extend([str(run / 'code/slurm/job.sh'), str(run / 'metadata/launch.json'),
-                    settings.get('conda_module', ''), settings.get('conda_env', 'lmks')])
+                    settings.get('conda_module') or '', settings.get('conda_env', 'lmks'),
+                    python_executable or ''])
+    command.extend(modules)
     print(' '.join(shlex.quote(part) for part in command))
     print(f'Run directory: {run}')
     if args.mode == 'train':

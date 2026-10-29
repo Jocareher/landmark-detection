@@ -1,4 +1,9 @@
-# Entrenamiento y TTA en SNOW / DTIC (UPF)
+# Entrenamiento y TTA en HPC de UPF
+
+Para el nuevo clúster **Correfoc**, seguí [la guía de migración](CORREFOC.md)
+y usá `configs/correfoc_hpc.example.json`. Las instrucciones históricas de
+SNOW están a continuación y siguen disponibles con `cluster: "snow"` o con
+el JSON antiguo sin clave `cluster`.
 
 ## Elegir la pérdida PCA
 
@@ -109,8 +114,8 @@ Los valores de `pca_tta_adaptation_scope` disponibles para la comparación son
 `normalizer_layer1_instance`. La arquitectura procede del checkpoint de
 entrenamiento, no del YAML de evaluación.
 
-Estos lanzadores corresponden a **SNOW**, descrito en la guía indicada por el
-usuario, no a las particiones `std-gpu`/`high-gpu` de Correfoc. Se consultó la
+Los parámetros y rutas de esta sección corresponden a **SNOW**, no a las
+particiones `std-gpu`/`high-gpu` de Correfoc. Se consultó la
 documentación el 22-09-2026:
 
 - [Colas y límites](https://guiesbibtic.upf.edu/recerca/hpc/cluster-queues):
