@@ -89,7 +89,8 @@ def arguments():
     for signal in ('pca', 'entropy', 'spread'):
         parser.add_argument(f'--tta-{signal}-weight', type=float,
                             help='Override the TTA signal weight in the YAML; zero disables it.')
-    parser.add_argument('--pca-prior-mode', choices=('global', 'min_pose'), help='Override the YAML prior selection mode.')
+    parser.add_argument('--pca-prior-mode', choices=('global', 'min_pose', 'gt_pose'), help='Override the YAML prior selection mode.')
+    parser.add_argument('--pca-prior-path', type=Path, help='Override settings.paths.pca_prior.')
     parser.add_argument('--pca-tta-episode-unit', choices=('auto', 'image', 'batch'), help='Override the YAML episode unit.')
     parser.add_argument('--dataset', choices=('babyland', 'infanface'), default='babyland')
     parser.add_argument('--checkpoint', type=Path)
@@ -100,6 +101,7 @@ def arguments():
     parser.add_argument('--gpu-type', help='SNOW only: exact type from sinfo; auto prefers L40S then RTX6000.')
     parser.add_argument('--epochs', type=int)
     parser.add_argument('--steps', type=int)
+    parser.add_argument('--tta-learning-rate', type=float, help='Override settings.tta.learning_rate.')
     parser.add_argument('--batch-size', type=int)
     parser.add_argument('--dry-run', action='store_true', help='Check paths/resources and print plan; do not submit.')
     return parser.parse_args()
@@ -202,6 +204,11 @@ def main():
         value = getattr(args, key)
         if value is not None:
             resources[key] = value
+    tta_learning_rate = getattr(args, 'tta_learning_rate', None)
+    if args.mode == 'tta' and tta_learning_rate is not None:
+        if not 0 < tta_learning_rate < float('inf'):
+            raise ValueError('--tta-learning-rate must be finite and positive.')
+        resources['learning_rate'] = tta_learning_rate
     if args.mode == 'tta' and args.checkpoint is None:
         raise ValueError('TTA requires --checkpoint (full model or landmarker + normalizer).')
     if args.afterok and not re.fullmatch(r'\d+', args.afterok):
@@ -249,7 +256,9 @@ def main():
         needed = [f'{args.dataset}_crops', f'{args.dataset}_labels', f'{args.dataset}_source_root']
         if tta_weights['pca'] > 0:
             needed.insert(0, 'pca_prior')
-    selected_paths = {name: required_path(paths[name]) for name in needed}
+    prior_override = getattr(args, 'pca_prior_path', None)
+    selected_paths = {name: required_path(prior_override if name == 'pca_prior' and prior_override is not None
+                                         else paths[name]) for name in needed}
     checkpoint = required_path(args.checkpoint, exists=not bool(args.afterok)) if args.checkpoint else None
     separate = required_path(args.normalizer_checkpoint, exists=not bool(args.afterok)) if args.normalizer_checkpoint else None
     root = Path(required_path(settings['runs_root'], exists=False))

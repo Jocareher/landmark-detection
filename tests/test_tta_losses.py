@@ -20,6 +20,41 @@ class BatchLandmarker(TinyLandmarker):
         return super().forward(self.norm(images))
 
 
+def test_gt_pose_keeps_annotated_prior_for_mixed_batch(tmp_path):
+    torch.manual_seed(8)
+    prior = _pca_prior()
+    prior["pose_priors"] = {}
+    for index, yaw in enumerate(("75", "0", "-45", "45", "-75")):
+        candidate = deepcopy(prior["global_prior"])
+        candidate["mean_shape"][0, 0] += .2 * index
+        prior["pose_priors"][yaw] = candidate
+    model = NormalizedLandmarker(BatchLandmarker(), ResidualImageNormalizer(
+        hidden_channels=4, num_layers=2, normalization="batch"))
+    adapter = PCAGuidedTTA(
+        model, prior, torch.device("cpu"), tmp_path,
+        PCATTAConfig(steps=2, probe_count=0, pca_prior_mode="gt_pose",
+                     adaptation_scope="normalizer_all_norms", pca_loss_space="aligned"),
+    )
+    images = torch.randn(2, 3, 8, 8)
+    with pytest.raises(ValueError, match="annotated orientation"):
+        adapter.adapt_batch(images, ["left", "right"])
+    with pytest.raises(ValueError, match="orientation class"):
+        adapter.adapt_batch(images, ["left", "right"], torch.tensor([0, -1]))
+
+    adapter.adapt_batch(images, ["left", "right"], torch.tensor([0, 4]))
+    assert not adapter.failed_samples
+    assert len(adapter.trajectory_rows) == 6
+    chose_nonminimum = False
+    for row in adapter.trajectory_rows:
+        yaw = -75 if row["sample_id"] == "left" else 75
+        assert row["pca_selected_yaw"] == yaw
+        selected = row[f"pca_candidate_loss_yaw_{yaw}"]
+        assert row["sample_tta_loss"] == selected
+        candidates = (value for key, value in row.items() if key.startswith("pca_candidate_loss_yaw_"))
+        chose_nonminimum |= selected > min(candidates)
+    assert chose_nonminimum
+
+
 def test_normalized_signals_limits_and_gradients():
     uniform = torch.zeros(1, 2, 2, 2, dtype=torch.double)
     stats = heatmap_distribution_statistics(uniform)

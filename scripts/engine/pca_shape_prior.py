@@ -401,20 +401,46 @@ def chi_square_critical_value(num_components: int, percentile: float) -> float:
     return (low + high) / 2.0
 
 
+def mahalanobis_basis(prior: dict[str, Any]) -> tuple[torch.Tensor, torch.Tensor]:
+    """Use the separately fitted significant subspace when PA metadata exists."""
+    selected = prior.get("parallel_analysis")
+    if selected is None:
+        return prior["components"], prior["explained_variance"]
+    basis = prior.get("mahalanobis_components")
+    variance = prior.get("mahalanobis_explained_variance")
+    mean = prior.get("mahalanobis_mean_shape")
+    p = selected.get("num_significant_components")
+    if not isinstance(p, int) or p < 1 or basis is None or variance is None:
+        raise ValueError("Parallel-analysis prior requires a positive significant dimension and its basis/variances.")
+    if basis.ndim != 2 or basis.shape != (p, prior["components"].shape[1]) or variance.shape != (p,):
+        raise ValueError("Parallel-analysis basis dimensions do not match significant p.")
+    if mean is None or mean.shape != (basis.shape[1],) or not bool(torch.isfinite(mean).all()):
+        raise ValueError("Parallel-analysis prior requires its finite coefficient mean.")
+    if not bool(torch.isfinite(basis).all()) or not bool(torch.isfinite(variance).all()) or bool((variance <= 0).any()):
+        raise ValueError("Parallel-analysis basis must be finite with positive variances.")
+    return basis, variance
+
+
 def pca_mahalanobis_threshold(prior: dict[str, Any], manual_c: float,
                               percentile: float | None) -> float:
     """Resolve the manual threshold or the prior-specific chi-square quantile."""
+    if prior.get("parallel_analysis") is not None and percentile is None:
+        raise ValueError("Parallel-analysis priors require a chi-square percentile; a manual c would bypass significant p.")
     if percentile is None:
         return manual_c
-    return chi_square_critical_value(prior["components"].shape[0], percentile)
+    # Historical priors use retained K; PA priors use the actual selected basis.
+    count = mahalanobis_basis(prior)[0].shape[0] if "parallel_analysis" in prior else prior["components"].shape[0]
+    return chi_square_critical_value(count, percentile)
 
 
 def validate_pca_mahalanobis_prior(pca_prior, mode="global"):
     """Reject incompatible priors before starting an adaptation episode."""
-    priors = pca_prior.get("pose_priors", {}) if mode == "min_pose" else {"global": pca_prior["global_prior"]}
+    priors = pca_prior.get("pose_priors", {}) if mode in {"min_pose", "gt_pose"} else {"global": pca_prior["global_prior"]}
     if not priors:
-        raise ValueError("Mahalanobis PCA requires nonempty pose priors in min_pose mode.")
+        raise ValueError(f"Mahalanobis PCA requires nonempty pose priors in {mode} mode.")
     for label, prior in priors.items():
+        if "parallel_analysis" in prior:
+            mahalanobis_basis(prior)
         if "explained_variance" not in prior:
             raise ValueError(f"Mahalanobis PCA prior {label} requires explained_variance; rebuild the prior.")
         variance = prior["explained_variance"]
@@ -512,14 +538,17 @@ def compute_pca_projection_terms(
         if mahalanobis_enabled:
             if "explained_variance" not in global_prior:
                 raise ValueError("Mahalanobis PCA requires explained_variance in the prior; rebuild the prior.")
-            variance = global_prior["explained_variance"].to(
+            distance_basis, distance_variance = mahalanobis_basis(global_prior)
+            distance_mean = global_prior.get("mahalanobis_mean_shape", mean_shape).to(device=centered.device, dtype=centered.dtype)
+            distance_coefficients = (shape_vector - distance_mean) @ distance_basis.to(device=centered.device, dtype=centered.dtype).T
+            variance = distance_variance.to(
                 device=coefficients.device, dtype=coefficients.dtype).reshape(-1)
-            if variance.numel() != coefficients.shape[-1]:
+            if variance.numel() != distance_coefficients.shape[-1]:
                 raise ValueError("PCA explained_variance must match the retained component count.")
             if not bool(torch.isfinite(variance).all()) or bool((variance < 0).any()):
                 raise ValueError("PCA explained_variance must be finite and nonnegative.")
             # Diagonal covariance: no dense inverse, no division by component count.
-            distance = (coefficients.square() / variance.clamp_min(mahalanobis_eps)).sum()
+            distance = (distance_coefficients.square() / variance.clamp_min(mahalanobis_eps)).sum()
         squared_distances.append(distance)
         reconstructed = mean_shape + coefficients @ components
         if loss_space == "aligned":

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from .runtime_reporting import clock, distribution, write_rows, save_tta_curves
-from .tta_losses import compute_tta_losses, validate_tta_weights
+from .tta_losses import (
+    PCA_PRIOR_MODES, POSE5_YAW_BY_CLASS, compute_tta_losses, resolve_gt_pose_labels,
+    validate_tta_weights,
+)
 from .heatmap_diagnostics import heatmap_image_rows, save_tta_heatmap_curves, DEFINITIONS
 
 import csv
@@ -18,7 +21,7 @@ import torch
 from PIL import Image, ImageDraw
 
 from .pca_shape_prior import (
-    pca_mahalanobis_threshold, softargmax_heatmaps_to_image_coords,
+    pca_mahalanobis_threshold, mahalanobis_basis, softargmax_heatmaps_to_image_coords,
 )
 from ..models import NormalizedLandmarker
 from ..models.normalization import SourceAdaptiveInstanceNorm2d
@@ -27,7 +30,7 @@ from ..utils.visualization import plt as plotting
 
 @dataclass(frozen=True)
 class PCATTAConfig:
-    """Configuration for episodic TTA with weighted label-free signals."""
+    """Configuration for episodic TTA with weighted adaptation signals."""
 
     adaptation_scope: str = "normalizer"
     steps: int = 20
@@ -62,8 +65,10 @@ class PCATTAConfig:
         validate_tta_weights(self.pca_weight, self.entropy_weight, self.spread_weight)
         from .pca_shape_prior import validate_pca_mahalanobis
         validate_pca_mahalanobis(self.pca_mahalanobis_enabled, self.pca_mahalanobis_weight, self.pca_mahalanobis_c, self.pca_mahalanobis_eps, self.pca_mahalanobis_percentile)
-        if self.pca_prior_mode not in {"global", "min_pose"}:
+        if self.pca_prior_mode not in PCA_PRIOR_MODES:
             raise ValueError(f"Unsupported PCA prior mode: {self.pca_prior_mode}")
+        if self.pca_prior_mode == "gt_pose" and self.pca_weight <= 0:
+            raise ValueError("gt_pose requires a positive PCA loss weight.")
         if self.episode_unit not in {"auto", "image", "batch"}:
             raise ValueError(f"Unsupported TTA episode unit: {self.episode_unit}")
         if self.episode_unit == "image" and self.adaptation_scope == "normalizer_all_norms":
@@ -112,7 +117,8 @@ class PCAGuidedTTA:
 
     Adaptation is episodic: all adapted source weights and a fresh Adam
     optimizer are restored for every input image. The PCA prior remains frozen.
-    No target ground truth is consumed by this class.
+    The optional gt_pose mode uses annotated orientation to route each image
+    to a fixed prior. Ground-truth landmark coordinates are reserved for evaluation.
     """
 
     def __init__(
@@ -126,11 +132,20 @@ class PCAGuidedTTA:
     ) -> None:
         """Snapshot source weights and initialize trajectory reporting."""
         config.validate()
-        if config.pca_weight > 0 and config.pca_mahalanobis_enabled and pca_prior is not None:
-            from .pca_shape_prior import validate_pca_mahalanobis_prior
-            validate_pca_mahalanobis_prior(pca_prior, config.pca_prior_mode)
         if config.pca_weight > 0 and pca_prior is None:
             raise ValueError("A PCA prior is required when tta_pca_weight > 0.")
+        if config.pca_prior_mode == "gt_pose":
+            priors = pca_prior.get("pose_priors", {})
+            if set(priors) != set(POSE5_YAW_BY_CLASS.values()):
+                raise ValueError("gt_pose requires a five-pose PCA prior bank.")
+            if config.pca_mahalanobis_enabled and (
+                config.pca_mahalanobis_percentile is None
+                or any(prior.get("parallel_analysis") is None for prior in priors.values())
+            ):
+                raise ValueError("gt_pose Mahalanobis requires parallel-analysis pose priors and a chi-square percentile.")
+        if config.pca_weight > 0 and config.pca_mahalanobis_enabled:
+            from .pca_shape_prior import validate_pca_mahalanobis_prior
+            validate_pca_mahalanobis_prior(pca_prior, config.pca_prior_mode)
         if config.pca_weight > 0 and config.pca_prior_mode == "min_pose" and not pca_prior.get("pose_priors"):
             raise ValueError("min_pose requires pose_priors; build a pose5 or pose13 prior first.")
         if not isinstance(model, NormalizedLandmarker) or model.normalizer is None:
@@ -194,10 +209,10 @@ class PCAGuidedTTA:
             f"normalizer_trainable={normalizer_total:,}"
         )
 
-    def adapt_batch(self, images, sample_ids=None):
+    def adapt_batch(self, images, sample_ids=None, orientation_class_ids=None):
         started = clock(self.device)
         start_count = self.processed_samples
-        result = self._adapt_batch_impl(images, sample_ids)
+        result = self._adapt_batch_impl(images, sample_ids, orientation_class_ids)
         self.adaptation_timings.append({"call_index": len(self.adaptation_timings),
             "batch_size": images.shape[0], "adaptation_seconds": clock(self.device)-started,
             "scope": self.config.adaptation_scope, "episode_unit": self._episode_unit(),
@@ -218,6 +233,7 @@ class PCAGuidedTTA:
         self,
         images: torch.Tensor,
         sample_ids: Sequence[str] | None = None,
+        orientation_class_ids: Sequence[int] | torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor]:
         """Adapt per image, or adapt a whole loader batch in the BN scope."""
         if images.ndim != 4:
@@ -234,11 +250,14 @@ class PCAGuidedTTA:
         )
         if len(ids) != images.shape[0]:
             raise ValueError("sample_ids length must match the image batch size.")
+        gt_pose_labels = None
+        if self.config.pca_prior_mode == "gt_pose":
+            gt_pose_labels = resolve_gt_pose_labels(orientation_class_ids, images.shape[0])
         if self.config.adaptation_scope == "normalizer_all_instance_norms" and images.shape[0] != 1:
             raise ValueError("InstanceNorm-only TTA requires batch_size=1.")
         if self._episode_unit() == "batch":
             self.episode_batch_sizes.append(images.shape[0])
-            return self._adapt_batch_episode(images, ids)
+            return self._adapt_batch_episode(images, ids, gt_pose_labels)
 
         batched_outputs: dict[str, list[torch.Tensor]] = {}
         for sample_index, sample_id in enumerate(ids):
@@ -246,6 +265,7 @@ class PCAGuidedTTA:
             outputs = self._adapt_sample(
                 image=images[sample_index : sample_index + 1],
                 sample_id=sample_id,
+                gt_pose_labels=None if gt_pose_labels is None else gt_pose_labels[sample_index:sample_index + 1],
             )
             for key, value in outputs.items():
                 batched_outputs.setdefault(key, []).append(value)
@@ -257,6 +277,7 @@ class PCAGuidedTTA:
         self,
         image: torch.Tensor,
         sample_id: str,
+        gt_pose_labels: Sequence[str] | None = None,
     ) -> dict[str, torch.Tensor]:
         """Run one independent adaptation episode and restore source weights."""
         self._restore_source_normalizer()
@@ -302,7 +323,7 @@ class PCAGuidedTTA:
                     image_height=image.shape[2],
                     image_width=image.shape[3],
                 )
-                components = self._losses(outputs["heatmaps"], landmarks)
+                components = self._losses(outputs["heatmaps"], landmarks, gt_pose_labels)
                 total_loss = components["sample_tta_loss"].mean()
                 if not bool(torch.isfinite(total_loss).item()):
                     raise FloatingPointError(
@@ -452,7 +473,8 @@ class PCAGuidedTTA:
         return final_outputs
 
     def _adapt_batch_episode(
-        self, images: torch.Tensor, sample_ids: Sequence[str]
+        self, images: torch.Tensor, sample_ids: Sequence[str],
+        gt_pose_labels: Sequence[str] | None = None,
     ) -> dict[str, torch.Tensor]:
         """Share one optimizer across a batch and restore all source state afterward."""
         self._restore_source_normalizer()
@@ -512,7 +534,7 @@ class PCAGuidedTTA:
                 landmarks = softargmax_heatmaps_to_image_coords(
                     outputs["heatmaps"], images.shape[2], images.shape[3]
                 )
-                components = self._losses(outputs["heatmaps"], landmarks)
+                components = self._losses(outputs["heatmaps"], landmarks, gt_pose_labels)
                 sample_losses = components["sample_tta_loss"]
                 batch_loss = sample_losses.mean()
                 if not bool(torch.isfinite(sample_losses).all().item()):
@@ -838,7 +860,7 @@ class PCAGuidedTTA:
             return self.config.episode_unit
         return "batch" if self.config.adaptation_scope == "normalizer_all_norms" else "image"
 
-    def _losses(self, heatmaps, landmarks):
+    def _losses(self, heatmaps, landmarks, gt_pose_labels=None):
         return compute_tta_losses(
             heatmaps, landmarks, self.pca_prior,
             pca_weight=self.config.pca_weight, entropy_weight=self.config.entropy_weight,
@@ -848,7 +870,7 @@ class PCAGuidedTTA:
             pca_mahalanobis_c=self.config.pca_mahalanobis_c,
             pca_mahalanobis_percentile=self.config.pca_mahalanobis_percentile,
             pca_mahalanobis_eps=self.config.pca_mahalanobis_eps,
-            pca_prior_mode=self.config.pca_prior_mode)
+            pca_prior_mode=self.config.pca_prior_mode, gt_pose_labels=gt_pose_labels)
 
     def finalize(self) -> dict[str, Any]:
         """Write raw, per-image, aggregate, plot, and interpretation artifacts."""
@@ -892,6 +914,9 @@ class PCAGuidedTTA:
             "adaptation_scope": self.config.adaptation_scope,
             "adaptation_unit": self._episode_unit(),
             "pca_prior_mode": self.config.pca_prior_mode,
+            "pca_gt_pose_class_to_yaw": (
+                POSE5_YAW_BY_CLASS if self.config.pca_prior_mode == "gt_pose" else {}
+            ),
             "pca_pose_classes": list(self.pca_prior.get("pose_priors", {})) if self.pca_prior else [],
             "episode_batch_sizes": self.episode_batch_sizes,
             "adapted_parameter_names": self.adapted_parameter_names,
@@ -911,11 +936,17 @@ class PCAGuidedTTA:
             "pca_mahalanobis_weight": self.config.pca_mahalanobis_weight,
             "pca_mahalanobis_c": self.config.pca_mahalanobis_c,
             "pca_mahalanobis_percentile": self.config.pca_mahalanobis_percentile,
+            "pca_mahalanobis_effective_dimensions": (
+                {label: int(mahalanobis_basis(prior)[0].shape[0])
+                 for label, prior in (self.pca_prior['pose_priors'].items()
+                                      if self.config.pca_prior_mode != 'global'
+                                      else [('global', self.pca_prior['global_prior'])])}
+                if self.config.pca_weight > 0 and self.config.pca_mahalanobis_enabled else {}),
             "pca_mahalanobis_effective_thresholds": (
                 {label: pca_mahalanobis_threshold(prior, self.config.pca_mahalanobis_c,
                                                   self.config.pca_mahalanobis_percentile)
                  for label, prior in (self.pca_prior['pose_priors'].items()
-                                      if self.config.pca_prior_mode == 'min_pose'
+                                      if self.config.pca_prior_mode != 'global'
                                       else [('global', self.pca_prior['global_prior'])])}
                 if self.config.pca_weight > 0 and self.config.pca_mahalanobis_enabled
                 else {}),
@@ -1930,14 +1961,14 @@ InstanceNorm, and `normalizer_layer1_instance` updates just that new InstanceNor
 `normalizer_all_norms` updates all landmarker normalization layers in batches;
 `normalizer_all_instance_norms` updates all landmarker InstanceNorm affine
 parameters, one image at a time. Other landmarker parameters and the PCA prior
-remain frozen. {episode} The objective is a weighted sum of PCA, heatmap entropy and heatmap spread; no
-target ground truth, image regularizer, parameter regularizer, or consistency
-loss is used.
+remain frozen. {episode} The objective is a weighted sum of PCA, heatmap entropy
+and heatmap spread. Ground-truth landmarks are reserved for evaluation.
 
 PCA prior mode: `{config.pca_prior_mode}`. `min_pose` evaluates every pose prior,
-selects the minimum for EACH image at EACH step, and then averages the batch.
-Only the winning residual contributes PCA gradients; pose labels are never read.
-Candidate losses and winning yaw are recorded in trajectories.
+selects the minimum for each image at each step, and then averages the batch.
+`gt_pose` fixes the prior per image using the annotated BabyLand class.
+Only the selected prior contributes PCA gradients. Candidate losses and the
+selected yaw are recorded in trajectories.
 
 Weights (PCA, entropy, spread): `({config.pca_weight}, {config.entropy_weight}, {config.spread_weight})`.
 Zero disables a signal. A PCA prior is needed only when PCA weight is positive.

@@ -1,0 +1,28 @@
+# BabyLand oracle pose ablation. Use the same checkpoint and 622-image set as min_pose.
+arguments:
+  eval_mode: babyland
+  pca_tta: true
+  pca_prior_mode: gt_pose
+  pca_tta_adaptation_scope: normalizer_all_norms
+  pca_tta_episode_unit: batch
+  pca_loss_space: aligned
+  pca_prior_path: outputs/parallel_analysis_2026_11_02/pose5_parallel_alpha05.pt
+  tta_pca_weight: 1.0
+  tta_entropy_weight: 0.0
+  tta_spread_weight: 0.0
+  pca_mahalanobis_enabled: false
+  pca_tta_steps: 1500
+  pca_tta_learning_rate: 0.001
+  pca_tta_lr_scheduler: constant
+  pca_tta_weight_decay: 0.0
+  pca_tta_max_gradient_norm: 0.0
+  batch_size: 16
+  seed: 42
+  landmark_loss: wasserstein
+  wasserstein_softmax_temperature: 1.0
+  use_landmark_names: false
+  output_dir: runs/tta_gt_pose5_reconstruction
+  wandb_run_name: tta_gt_pose5_reconstruction
+  wandb_project: BabyLMKS
+  use_wandb: true
+  save_config: true

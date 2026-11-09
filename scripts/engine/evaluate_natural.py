@@ -162,7 +162,10 @@ def evaluate_natural_checkpoint(
                     outputs = model(images)
         else:
             with timing.stage("adaptation"):
-                outputs = tta_adapter.adapt_batch(images=images, sample_ids=sample_ids)
+                outputs = tta_adapter.adapt_batch(
+                    images=images, sample_ids=sample_ids,
+                    orientation_class_ids=metadata_batch.get("class_idx"),
+                )
 
         with torch.inference_mode():
             with timing.stage("decode"):

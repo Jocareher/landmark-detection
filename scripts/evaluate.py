@@ -241,8 +241,8 @@ def parse_args() -> argparse.Namespace:
         default=defaults.pca_loss_space,
         help="Select original aligned PCA loss or inverse-transformed image-space loss for TTA.",
     )
-    parser.add_argument("--pca-prior-mode", choices=("global", "min_pose"), default=defaults.pca_prior_mode,
-                        help="Use global prior or minimum reconstruction loss across pose priors, per image.")
+    parser.add_argument("--pca-prior-mode", choices=("global", "min_pose", "gt_pose"), default=defaults.pca_prior_mode,
+                        help="Use the global prior, the minimum-loss pose prior, or the annotated BabyLand pose prior.")
     parser.add_argument("--pca-tta-episode-unit", choices=("auto", "image", "batch"), default=defaults.pca_tta_episode_unit,
                         help="Adapt each image or a whole batch. auto preserves the scope's historical behavior.")
     parser.add_argument(
@@ -609,6 +609,8 @@ def main() -> None:
             raise ValueError("normalizer_all_instance_norms requires --batch-size 1.")
         if dataset_protocol == "synthetic":
             raise ValueError("PCA-guided TTA is supported only for natural datasets.")
+        if config.pca_prior_mode == "gt_pose" and dataset_protocol != "babyland":
+            raise ValueError("gt_pose TTA uses the five annotated BabyLand orientation classes.")
         if not isinstance(model, NormalizedLandmarker):
             raise ValueError(
                 "--pca-tta requires a full normalized-model checkpoint or a "
