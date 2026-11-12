@@ -1,0 +1,76 @@
+{
+  "dataset_root": "/Users/jocareher/Documents/synbaby72",
+  "split": "train",
+  "labels_sha256": "14330998bcf809f98c00c83d37df50d0e2d9bbee97357631f9fdb01872b09ede",
+  "num_shapes": 11375,
+  "num_identities": 875,
+  "exact_yaw_counts": {
+    "-75": 875,
+    "-65": 875,
+    "-55": 875,
+    "-45": 875,
+    "-30": 875,
+    "-15": 875,
+    "0": 875,
+    "15": 875,
+    "30": 875,
+    "45": 875,
+    "55": 875,
+    "65": 875,
+    "75": 875
+  },
+  "class_to_name": {
+    "0": "left",
+    "1": "quarter_left",
+    "2": "frontal",
+    "3": "quarter_right",
+    "4": "right"
+  },
+  "yaw_groups": {
+    "0": [
+      -75,
+      -65
+    ],
+    "1": [
+      -55,
+      -45,
+      -30
+    ],
+    "2": [
+      -15,
+      0,
+      15
+    ],
+    "3": [
+      30,
+      45,
+      55
+    ],
+    "4": [
+      65,
+      75
+    ]
+  },
+  "representative_keys": {
+    "0": -75,
+    "1": -45,
+    "2": 0,
+    "3": 45,
+    "4": 75
+  },
+  "babyland_original_class_counts": {
+    "0": 81,
+    "1": 31,
+    "2": 83,
+    "4": 93,
+    "3": 23
+  },
+  "babyland_use": "Visual class review only; excluded from all PCA and PA fits",
+  "grouping_rationale": "Explicit symmetric nearest-representative grouping for the 13 available angles; \u00b155 maps to \u00b145",
+  "permutations": 500,
+  "bootstrap_repetitions": 200,
+  "bootstrap_unit": "identity, all member angles resampled together",
+  "seed": 20261112,
+  "common_alignment": "Shared global Procrustes reference, no reflection",
+  "interpretation": "Visual correspondence proposal, not a statistically optimal or validated class boundary"
+}

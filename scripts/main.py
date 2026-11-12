@@ -327,6 +327,16 @@ def parse_args() -> argparse.Namespace:
                         default=defaults.pca_mahalanobis_percentile,
                         help="Chi-square percentile in (0, 100); overrides --pca-mahalanobis-c when enabled.")
     parser.add_argument("--pca-mahalanobis-eps", type=float, default=defaults.pca_mahalanobis_eps)
+    parser.add_argument("--lambda-pca-reconstruction", type=float, default=defaults.lambda_pca_reconstruction,
+                        help="Independent training weight of the PCA reconstruction term; set with --lambda-pca-mahalanobis.")
+    parser.add_argument("--lambda-pca-mahalanobis", type=float, default=defaults.lambda_pca_mahalanobis,
+                        help="Independent training weight of the raw Mahalanobis hinge; overrides the legacy lambda/beta product.")
+    parser.add_argument("--pca-training-prior-mode", choices=["global", "gt_grouped"],
+                        default=defaults.pca_training_prior_mode,
+                        help="Training-only routing: use explicit synthetic yaw groups from the prior metadata.")
+    parser.add_argument("--pca-gradient-monitor-interval", type=int,
+                        default=defaults.pca_gradient_monitor_interval,
+                        help="Record per-term gradient norms every N train batches; 0 disables probes.")
     parser.add_argument(
         "--pca-loss-space", choices=["aligned", "image"],
         default=defaults.pca_loss_space,
@@ -687,6 +697,13 @@ def validate_experiment_config(config: ExperimentConfig) -> None:
     """Validate and resolve invariants of the normalizer experiment modes."""
     from scripts.engine.pca_shape_prior import validate_pca_mahalanobis
     validate_pca_mahalanobis(config.pca_mahalanobis_enabled, config.pca_mahalanobis_weight, config.pca_mahalanobis_c, config.pca_mahalanobis_eps, config.pca_mahalanobis_percentile)
+    from scripts.engine.losses import resolve_pca_training_weights
+    _, coefficient_weight = resolve_pca_training_weights(config.lambda_pca_projection, config.pca_mahalanobis_weight,
+        config.lambda_pca_reconstruction, config.lambda_pca_mahalanobis)
+    if config.lambda_pca_mahalanobis is not None and coefficient_weight > 0 and not config.pca_mahalanobis_enabled:
+        raise ValueError("Positive lambda_pca_mahalanobis requires pca_mahalanobis_enabled.")
+    if config.pca_gradient_monitor_interval < 0:
+        raise ValueError("pca_gradient_monitor_interval must be nonnegative.")
     if config.pca_loss_space not in {"aligned", "image"}:
         raise ValueError(f"Unsupported PCA loss space: {config.pca_loss_space}")
     if config.experiment_mode == "none":
@@ -1212,6 +1229,9 @@ def main() -> None:
                 pca_mahalanobis_c=config.pca_mahalanobis_c,
                 pca_mahalanobis_percentile=config.pca_mahalanobis_percentile,
                 pca_mahalanobis_eps=config.pca_mahalanobis_eps,
+                pca_training_prior_mode=config.pca_training_prior_mode,
+                lambda_pca_reconstruction=config.lambda_pca_reconstruction,
+                lambda_pca_mahalanobis=config.lambda_pca_mahalanobis,
                 pca_prior_path=config.pca_prior_path,
                 coordinate_decoder=config.coordinate_decoder,
                 wasserstein_softmax_temperature=config.wasserstein_softmax_temperature,
@@ -1239,6 +1259,10 @@ def main() -> None:
             pca_mahalanobis_c=config.pca_mahalanobis_c,
             pca_mahalanobis_percentile=config.pca_mahalanobis_percentile,
             pca_mahalanobis_eps=config.pca_mahalanobis_eps,
+            pca_training_prior_mode=config.pca_training_prior_mode,
+            lambda_pca_reconstruction=config.lambda_pca_reconstruction,
+            lambda_pca_mahalanobis=config.lambda_pca_mahalanobis,
+            pca_gradient_monitor_interval=config.pca_gradient_monitor_interval,
             lambda_image_l1=config.normalizer_lambda_l1,
             lambda_image_tv=config.normalizer_lambda_tv,
             pca_prior_path=config.pca_prior_path,

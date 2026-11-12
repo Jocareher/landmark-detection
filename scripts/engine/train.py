@@ -10,7 +10,7 @@ from typing import Any
 
 import torch
 
-from .losses import compute_multitask_loss
+from .losses import compute_multitask_loss, resolve_pca_training_weights
 from .metrics import (
     AverageMeter,
     compute_box_normalized_nme,
@@ -22,7 +22,7 @@ from .normalizer_monitoring import (
     NormalizerProbeMonitor,
     should_capture_source_step,
 )
-from .pca_shape_prior import load_pca_shape_prior, pca_mahalanobis_threshold
+from .pca_shape_prior import load_pca_shape_prior, pca_mahalanobis_threshold, mahalanobis_basis
 from ..models import NormalizedLandmarker
 from ..utils.training_progress import TrainingProgressReporter
 
@@ -121,8 +121,17 @@ def run_epoch(
     pca_mahalanobis_c: float = 10.0,
     pca_mahalanobis_percentile: float | None = None,
     pca_mahalanobis_eps: float = 1e-8,
+    pca_training_prior_mode: str = "global",
+    lambda_pca_reconstruction: float | None = None,
+    lambda_pca_mahalanobis: float | None = None,
+    pca_gradient_monitor_interval: int = 0,
+    pca_gradient_log_path: Path | None = None,
 ) -> dict[str, float]:
     """Run one full training or validation epoch and aggregate split metrics."""
+    reconstruction_weight, coefficient_weight = resolve_pca_training_weights(
+        lambda_pca_projection, pca_mahalanobis_weight, lambda_pca_reconstruction, lambda_pca_mahalanobis)
+    pca_requested = reconstruction_weight > 0 or coefficient_weight > 0 or pca_gradient_monitor_interval > 0
+
     if training and optimizer is None:
         raise ValueError("An optimizer is required when training=True.")
 
@@ -136,7 +145,7 @@ def run_epoch(
     visible_landmark_loss_meter = AverageMeter()
     visibility_loss_meter = AverageMeter()
     pca_projection_loss_meter = AverageMeter()
-    pca_term_meters = {key: AverageMeter() for key in ('pca_reconstruction_loss', 'pca_mahalanobis_squared', 'pca_mahalanobis_penalty', 'weighted_pca_mahalanobis_loss')}
+    pca_term_meters = {key: AverageMeter() for key in ('pca_reconstruction_loss', 'pca_mahalanobis_squared', 'pca_mahalanobis_penalty', 'weighted_pca_mahalanobis_loss', 'weighted_pca_reconstruction_loss', 'weighted_pca_total_mahalanobis_loss', 'weighted_pca_loss', 'pca_mahalanobis_active_fraction')}
     image_l1_loss_meter = AverageMeter()
     image_tv_loss_meter = AverageMeter()
     nme_meter = AverageMeter()
@@ -149,7 +158,7 @@ def run_epoch(
     validation_inference_seconds = 0.0
     validation_inference_images = 0
 
-    for batch in dataloader:
+    for batch_index, batch in enumerate(dataloader):
         batch_start_time = time.time()
         images = batch["image"].to(device, non_blocking=True)
         heatmaps = batch["heatmaps"].to(device, non_blocking=True)
@@ -158,6 +167,8 @@ def run_epoch(
             "heatmaps": heatmaps,
             "visibility": visibility,
         }
+        if "yaw_angle" in batch:
+            batch_on_device["yaw_angle"] = batch["yaw_angle"].to(device, non_blocking=True)
         if "landmarks" in batch:
             batch_on_device["landmarks"] = batch["landmarks"].to(
                 device, non_blocking=True
@@ -179,6 +190,10 @@ def run_epoch(
                     lambda_lmk_full=lambda_lmk_full,
                     lambda_pca_projection=lambda_pca_projection,
                     pca_loss_space=pca_loss_space,
+                    pca_training_prior_mode=pca_training_prior_mode,
+                    lambda_pca_reconstruction=lambda_pca_reconstruction,
+                    lambda_pca_mahalanobis=lambda_pca_mahalanobis,
+                    compute_pca_diagnostics=pca_gradient_monitor_interval > 0,
                     pca_mahalanobis_enabled=pca_mahalanobis_enabled,
                     pca_mahalanobis_weight=pca_mahalanobis_weight,
                     pca_mahalanobis_c=pca_mahalanobis_c,
@@ -196,6 +211,20 @@ def run_epoch(
                     lambda_image_tv,
                 )
             total_loss = loss_dict["total_loss"]
+            if (pca_gradient_monitor_interval > 0 and pca_requested
+                    and batch_index % pca_gradient_monitor_interval == 0):
+                from .loss_calibration import training_loss_probe, append_probe
+                probe = training_loss_probe(loss_dict, model, lambda_pca_projection, pca_mahalanobis_weight,
+                                            lambda_pca_reconstruction, lambda_pca_mahalanobis)
+                if pca_gradient_log_path is not None:
+                    append_probe(pca_gradient_log_path, dict(
+                        batch=batch_index, images=images.shape[0],
+                        lambda_pca_projection=lambda_pca_projection, beta=pca_mahalanobis_weight,
+                        lambda_pca_reconstruction=reconstruction_weight, lambda_pca_mahalanobis=coefficient_weight,
+                        **{key: float(loss_dict[key].detach()) for key in (
+                            "pca_reconstruction_loss", "pca_mahalanobis_penalty", "pca_loss",
+                            "weighted_pca_reconstruction_loss", "weighted_pca_total_mahalanobis_loss",
+                            "pca_mahalanobis_active_fraction")}, **probe))
             if use_amp:
                 if scaler is None:
                     raise ValueError(
@@ -226,6 +255,10 @@ def run_epoch(
                         lambda_lmk_full=lambda_lmk_full,
                         lambda_pca_projection=lambda_pca_projection,
                         pca_loss_space=pca_loss_space,
+                        pca_training_prior_mode=pca_training_prior_mode,
+                        lambda_pca_reconstruction=lambda_pca_reconstruction,
+                        lambda_pca_mahalanobis=lambda_pca_mahalanobis,
+                        compute_pca_diagnostics=pca_gradient_monitor_interval > 0,
                         pca_mahalanobis_enabled=pca_mahalanobis_enabled,
                         pca_mahalanobis_weight=pca_mahalanobis_weight,
                         pca_mahalanobis_c=pca_mahalanobis_c,
@@ -343,6 +376,9 @@ def save_checkpoint(
     pca_mahalanobis_c: float = 10.0,
     pca_mahalanobis_percentile: float | None = None,
     pca_mahalanobis_eps: float = 1e-8,
+    pca_training_prior_mode: str = "global",
+    lambda_pca_reconstruction: float | None = None,
+    lambda_pca_mahalanobis: float | None = None,
 ) -> None:
     """Save a model checkpoint with optimizer state and tracked metrics."""
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
@@ -362,6 +398,9 @@ def save_checkpoint(
     payload["pca_mahalanobis_c"] = pca_mahalanobis_c
     payload["pca_mahalanobis_percentile"] = pca_mahalanobis_percentile
     payload["pca_mahalanobis_eps"] = pca_mahalanobis_eps
+    payload["pca_training_prior_mode"] = pca_training_prior_mode
+    payload["lambda_pca_reconstruction"] = lambda_pca_reconstruction
+    payload["lambda_pca_mahalanobis"] = lambda_pca_mahalanobis
 
     if isinstance(model, NormalizedLandmarker) and model.normalizer is not None:
         payload["normalizer_architecture"] = model.normalizer.architecture_config()
@@ -416,7 +455,7 @@ def append_results_row(
     with csv_path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         fields = list(reader.fieldnames or [])
-        missing = [key for key in ("mean_heatmap_entropy", "mean_heatmap_spread") if key not in fields]
+        missing = [key for key in metrics if key not in fields]
         old_rows = list(reader) if missing else []
     if missing:
         fields.extend(missing)
@@ -496,8 +535,16 @@ def train_model(
     pca_mahalanobis_c: float = 10.0,
     pca_mahalanobis_percentile: float | None = None,
     pca_mahalanobis_eps: float = 1e-8,
+    pca_training_prior_mode: str = "global",
+    lambda_pca_reconstruction: float | None = None,
+    lambda_pca_mahalanobis: float | None = None,
+    pca_gradient_monitor_interval: int = 0,
 ) -> dict[str, Any]:
     """Execute the full training pipeline, including validation and checkpointing."""
+    reconstruction_weight, coefficient_weight = resolve_pca_training_weights(
+        lambda_pca_projection, pca_mahalanobis_weight, lambda_pca_reconstruction, lambda_pca_mahalanobis)
+    pca_requested = reconstruction_weight > 0 or coefficient_weight > 0 or pca_gradient_monitor_interval > 0
+
     from .pca_shape_prior import validate_pca_mahalanobis
     validate_pca_mahalanobis(pca_mahalanobis_enabled, pca_mahalanobis_weight, pca_mahalanobis_c, pca_mahalanobis_eps, pca_mahalanobis_percentile)
     training_started = clock(device)
@@ -580,11 +627,19 @@ def train_model(
         if not pca_prior_path.exists():
             raise FileNotFoundError(f"PCA prior file not found: {pca_prior_path}")
         pca_shape_prior = load_pca_shape_prior(pca_prior_path, device=device)
-        if lambda_pca_projection > 0 and pca_mahalanobis_enabled:
+        if pca_requested and pca_mahalanobis_enabled:
             from .pca_shape_prior import validate_pca_mahalanobis_prior
-            validate_pca_mahalanobis_prior(pca_shape_prior)
-    if lambda_pca_projection > 0.0 and pca_shape_prior is None:
-        raise ValueError("lambda_pca_projection > 0 requires a valid pca_prior_path.")
+            validate_pca_mahalanobis_prior(pca_shape_prior, "gt_pose" if pca_training_prior_mode == "gt_grouped" else "global")
+    if pca_training_prior_mode not in {"global", "gt_grouped"}:
+        raise ValueError(f"Unsupported training PCA prior mode: {pca_training_prior_mode}")
+    if pca_training_prior_mode == "gt_grouped" and pca_requested and pca_shape_prior is not None:
+        from .pca_shape_prior import grouped_training_prior_labels
+        grouped_training_prior_labels([0.0], pca_shape_prior, 1)
+        if pca_mahalanobis_enabled and (pca_mahalanobis_percentile is None or any(
+                "parallel_analysis" not in p for p in pca_shape_prior["pose_priors"].values())):
+            raise ValueError("Grouped Mahalanobis training requires PA priors and a chi-square percentile.")
+    if pca_requested and pca_shape_prior is None:
+        raise ValueError("PCA training weights or diagnostics require a valid pca_prior_path.")
 
     best_val_loss = float("inf")
     best_val_nme = float("inf")
@@ -611,6 +666,9 @@ def train_model(
             lambda_lmk_full=lambda_lmk_full,
             lambda_pca_projection=lambda_pca_projection,
             pca_loss_space=pca_loss_space,
+            pca_training_prior_mode=pca_training_prior_mode,
+            lambda_pca_reconstruction=lambda_pca_reconstruction,
+            lambda_pca_mahalanobis=lambda_pca_mahalanobis,
             pca_mahalanobis_enabled=pca_mahalanobis_enabled,
             pca_mahalanobis_weight=pca_mahalanobis_weight,
             pca_mahalanobis_c=pca_mahalanobis_c,
@@ -620,6 +678,8 @@ def train_model(
             lambda_image_tv=lambda_image_tv,
             pca_shape_prior=pca_shape_prior,
             training=True,
+            pca_gradient_monitor_interval=pca_gradient_monitor_interval,
+            pca_gradient_log_path=output_dir / "loss_calibration" / f"train_epoch_{epoch+1:04d}.csv",
             use_subpixel_decode=True,
             use_amp=amp_enabled,
             coordinate_decoder=coordinate_decoder,
@@ -643,6 +703,9 @@ def train_model(
             lambda_lmk_full=lambda_lmk_full,
             lambda_pca_projection=lambda_pca_projection,
             pca_loss_space=pca_loss_space,
+            pca_training_prior_mode=pca_training_prior_mode,
+            lambda_pca_reconstruction=lambda_pca_reconstruction,
+            lambda_pca_mahalanobis=lambda_pca_mahalanobis,
             pca_mahalanobis_enabled=pca_mahalanobis_enabled,
             pca_mahalanobis_weight=pca_mahalanobis_weight,
             pca_mahalanobis_c=pca_mahalanobis_c,
@@ -652,6 +715,7 @@ def train_model(
             lambda_image_tv=lambda_image_tv,
             pca_shape_prior=pca_shape_prior,
             training=False,
+            pca_gradient_monitor_interval=pca_gradient_monitor_interval,
             use_subpixel_decode=True,
             use_amp=amp_enabled,
             coordinate_decoder=coordinate_decoder,
@@ -688,6 +752,9 @@ def train_model(
         save_checkpoint(
             output_dir / "last_model.pth", epoch, model, optimizer, metrics_payload,
             pca_loss_space=pca_loss_space,
+            pca_training_prior_mode=pca_training_prior_mode,
+            lambda_pca_reconstruction=lambda_pca_reconstruction,
+            lambda_pca_mahalanobis=lambda_pca_mahalanobis,
             pca_mahalanobis_enabled=pca_mahalanobis_enabled,
             pca_mahalanobis_weight=pca_mahalanobis_weight,
             pca_mahalanobis_c=pca_mahalanobis_c,
@@ -704,6 +771,9 @@ def train_model(
             save_checkpoint(
                 output_dir / "best_model.pth", epoch, model, optimizer, metrics_payload,
                 pca_loss_space=pca_loss_space,
+                pca_training_prior_mode=pca_training_prior_mode,
+                lambda_pca_reconstruction=lambda_pca_reconstruction,
+                lambda_pca_mahalanobis=lambda_pca_mahalanobis,
                 pca_mahalanobis_enabled=pca_mahalanobis_enabled,
                 pca_mahalanobis_weight=pca_mahalanobis_weight,
                 pca_mahalanobis_c=pca_mahalanobis_c,
@@ -747,6 +817,9 @@ def train_model(
                     "train/pca_mahalanobis_squared": train_metrics["pca_mahalanobis_squared"],
                     "train/pca_mahalanobis_penalty": train_metrics["pca_mahalanobis_penalty"],
                     "train/weighted_pca_mahalanobis_loss": train_metrics["weighted_pca_mahalanobis_loss"],
+                    **{"train/"+key: train_metrics[key] for key in (
+                        "weighted_pca_reconstruction_loss", "weighted_pca_total_mahalanobis_loss",
+                        "weighted_pca_loss", "pca_mahalanobis_active_fraction")},
 
                     "train/image_l1_loss": train_metrics["image_l1_loss"],
                     "train/image_tv_loss": train_metrics["image_tv_loss"],
@@ -761,6 +834,9 @@ def train_model(
                     "val/pca_mahalanobis_squared": val_metrics["pca_mahalanobis_squared"],
                     "val/pca_mahalanobis_penalty": val_metrics["pca_mahalanobis_penalty"],
                     "val/weighted_pca_mahalanobis_loss": val_metrics["weighted_pca_mahalanobis_loss"],
+                    **{"val/"+key: val_metrics[key] for key in (
+                        "weighted_pca_reconstruction_loss", "weighted_pca_total_mahalanobis_loss",
+                        "weighted_pca_loss", "pca_mahalanobis_active_fraction")},
 
                     "val/image_l1_loss": val_metrics["image_l1_loss"],
                     "val/image_tv_loss": val_metrics["image_tv_loss"],
@@ -850,13 +926,21 @@ def train_model(
         "timing": runtime,
         "best_val_loss": best_val_loss,
         "pca_loss_space": pca_loss_space,
+        "pca_training_prior_mode": pca_training_prior_mode,
+        "lambda_pca_reconstruction": reconstruction_weight,
+        "lambda_pca_mahalanobis": coefficient_weight,
         "pca_mahalanobis_enabled": pca_mahalanobis_enabled,
         "pca_mahalanobis_weight": pca_mahalanobis_weight,
         "pca_mahalanobis_c": pca_mahalanobis_c,
         "pca_mahalanobis_percentile": pca_mahalanobis_percentile,
+        "pca_mahalanobis_effective_dimensions": (
+            ({key: int(mahalanobis_basis(prior)[0].shape[0]) for key, prior in pca_shape_prior['pose_priors'].items()}
+             if pca_training_prior_mode == 'gt_grouped' else int(mahalanobis_basis(pca_shape_prior['global_prior'])[0].shape[0]))
+            if pca_mahalanobis_enabled and pca_shape_prior is not None else None),
         "pca_mahalanobis_effective_c": (
-            pca_mahalanobis_threshold(pca_shape_prior['global_prior'], pca_mahalanobis_c,
-                                      pca_mahalanobis_percentile)
+            ({key: pca_mahalanobis_threshold(prior, pca_mahalanobis_c, pca_mahalanobis_percentile)
+              for key, prior in pca_shape_prior['pose_priors'].items()} if pca_training_prior_mode == 'gt_grouped' else
+             pca_mahalanobis_threshold(pca_shape_prior['global_prior'], pca_mahalanobis_c, pca_mahalanobis_percentile))
             if pca_mahalanobis_enabled and pca_shape_prior is not None else None),
         "pca_mahalanobis_eps": pca_mahalanobis_eps,
 
@@ -889,8 +973,15 @@ def smoke_test_single_batch(
     pca_mahalanobis_c: float = 10.0,
     pca_mahalanobis_percentile: float | None = None,
     pca_mahalanobis_eps: float = 1e-8,
+    pca_training_prior_mode: str = "global",
+    lambda_pca_reconstruction: float | None = None,
+    lambda_pca_mahalanobis: float | None = None,
 ) -> None:
     """Run a single optimization step to validate the end-to-end training path."""
+    reconstruction_weight, coefficient_weight = resolve_pca_training_weights(
+        lambda_pca_projection, pca_mahalanobis_weight, lambda_pca_reconstruction, lambda_pca_mahalanobis)
+    pca_requested = reconstruction_weight > 0 or coefficient_weight > 0
+
     model.train()
     batch = next(iter(dataloader))
     images = batch["image"].to(device, non_blocking=True)
@@ -900,17 +991,26 @@ def smoke_test_single_batch(
     pca_shape_prior = None
     if pca_prior_path is not None:
         pca_shape_prior = load_pca_shape_prior(pca_prior_path, device=device)
-        if lambda_pca_projection > 0 and pca_mahalanobis_enabled:
+        if pca_requested and pca_mahalanobis_enabled:
             from .pca_shape_prior import validate_pca_mahalanobis_prior
-            validate_pca_mahalanobis_prior(pca_shape_prior)
-    if lambda_pca_projection > 0.0 and pca_shape_prior is None:
-        raise ValueError("lambda_pca_projection > 0 requires a valid pca_prior_path.")
+            validate_pca_mahalanobis_prior(pca_shape_prior, "gt_pose" if pca_training_prior_mode == "gt_grouped" else "global")
+    if pca_training_prior_mode not in {"global", "gt_grouped"}:
+        raise ValueError(f"Unsupported training PCA prior mode: {pca_training_prior_mode}")
+    if pca_training_prior_mode == "gt_grouped" and pca_requested and pca_shape_prior is not None:
+        from .pca_shape_prior import grouped_training_prior_labels
+        grouped_training_prior_labels([0.0], pca_shape_prior, 1)
+        if pca_mahalanobis_enabled and (pca_mahalanobis_percentile is None or any(
+                "parallel_analysis" not in p for p in pca_shape_prior["pose_priors"].values())):
+            raise ValueError("Grouped Mahalanobis training requires PA priors and a chi-square percentile.")
+    if pca_requested and pca_shape_prior is None:
+        raise ValueError("PCA training weights or diagnostics require a valid pca_prior_path.")
     outputs = model(images)
     loss_dict = compute_multitask_loss(
         outputs=outputs,
         batch={
             "heatmaps": heatmaps,
             "visibility": visibility,
+            "yaw_angle": batch.get("yaw_angle"),
         },
         heatmap_loss_fn=heatmap_loss_fn,
         visibility_loss_fn=visibility_loss_fn,
@@ -919,6 +1019,9 @@ def smoke_test_single_batch(
         lambda_lmk_full=lambda_lmk_full,
         lambda_pca_projection=lambda_pca_projection,
         pca_loss_space=pca_loss_space,
+        pca_training_prior_mode=pca_training_prior_mode,
+        lambda_pca_reconstruction=lambda_pca_reconstruction,
+        lambda_pca_mahalanobis=lambda_pca_mahalanobis,
         pca_mahalanobis_enabled=pca_mahalanobis_enabled,
         pca_mahalanobis_weight=pca_mahalanobis_weight,
         pca_mahalanobis_c=pca_mahalanobis_c,

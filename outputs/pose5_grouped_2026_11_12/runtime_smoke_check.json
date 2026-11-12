@@ -1,0 +1,54 @@
+[
+  {
+    "alpha": "05",
+    "source_yaws": [
+      -65,
+      -55,
+      0,
+      55,
+      65
+    ],
+    "orientation_classes": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "selected_prior_keys": [
+      -75,
+      -45,
+      0,
+      45,
+      75
+    ],
+    "finite_loss": true,
+    "finite_prediction_gradients": true
+  },
+  {
+    "alpha": "10",
+    "source_yaws": [
+      -65,
+      -55,
+      0,
+      55,
+      65
+    ],
+    "orientation_classes": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "selected_prior_keys": [
+      -75,
+      -45,
+      0,
+      45,
+      75
+    ],
+    "finite_loss": true,
+    "finite_prediction_gradients": true
+  }
+]

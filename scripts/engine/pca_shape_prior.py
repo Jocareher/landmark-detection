@@ -635,6 +635,58 @@ def build_pose_pca_shape_prior_payload(landmarks, yaw_angles, mode="pose5",
     return payload, aligned, aligned_by_pose
 
 
+def grouped_training_prior_labels(yaw_angles, pca_prior, batch_size):
+    """Resolve explicit synthetic degree annotations using the bank's saved groups."""
+    groups = pca_prior.get("yaw_groups")
+    mapping = pca_prior.get("orientation_class_to_prior")
+    if pca_prior.get("pose_selection") != "explicit_yaw_groups" or not groups or not mapping:
+        raise ValueError("gt_grouped training requires a grouped prior with explicit yaw_groups metadata.")
+    if {str(k) for k in groups} != {str(i) for i in range(5)}:
+        raise ValueError("Grouped training requires all five orientation classes.")
+    lookup = {}
+    for cls, angles in groups.items():
+        key = mapping.get(str(cls), mapping.get(int(cls)))
+        if key not in pca_prior.get("pose_priors", {}):
+            raise ValueError(f"Missing grouped prior for orientation class {cls}.")
+        for angle in angles:
+            if float(angle) in lookup:
+                raise ValueError("Synthetic yaw belongs to more than one grouped prior.")
+            lookup[float(angle)] = key
+    if yaw_angles is None:
+        raise ValueError("gt_grouped training requires batch yaw_angle in degrees.")
+    yaw = torch.as_tensor(yaw_angles).detach().reshape(-1).cpu()
+    if yaw.numel() != batch_size or not torch.isfinite(yaw).all():
+        raise ValueError("gt_grouped requires one finite synthetic yaw_angle per image.")
+    labels = []
+    for value in yaw.tolist():
+        if value not in lookup:
+            raise ValueError(f"Unsupported exact synthetic yaw {value}; not a BabyLand class index.")
+        labels.append(lookup[value])
+    return labels
+
+
+def compute_grouped_training_pca_terms(predicted_landmarks, pca_prior, yaw_angles,
+                                      loss_space="image", **kwargs):
+    """Select the annotated group BEFORE scoring, using its own PA basis/cutoff."""
+    labels = grouped_training_prior_labels(yaw_angles, pca_prior, len(predicted_landmarks))
+    if kwargs.get("mahalanobis_enabled", False) and (
+            kwargs.get("mahalanobis_percentile") is None or any(
+                "parallel_analysis" not in p for p in pca_prior["pose_priors"].values())):
+        raise ValueError("Grouped Mahalanobis training requires PA priors and a chi-square percentile.")
+    terms = {}
+    for label in dict.fromkeys(labels):
+        indices = torch.tensor([i for i, key in enumerate(labels) if key == label],
+                               device=predicted_landmarks.device)
+        sub = {"alignment": pca_prior["alignment"], "global_prior": pca_prior["pose_priors"][label]}
+        part = compute_pca_projection_terms(predicted_landmarks[indices], sub,
+                                            loss_space, reduction="none", **kwargs)
+        for key, value in part.items():
+            base = terms.get(key, value.new_zeros(len(labels)))
+            terms[key] = base.index_copy(0, indices, value)
+    terms["mahalanobis_active_fraction"] = (terms["mahalanobis_penalty"] > 0).float().mean()
+    return {key: value.mean() for key, value in terms.items()}
+
+
 def compute_min_pose_pca_loss(predicted_landmarks, pca_prior, loss_space="image", **kwargs):
     """Choose the minimum per image, keeping the winning residual differentiable."""
     priors = pca_prior.get("pose_priors", {})

@@ -351,6 +351,10 @@ DEFAULT_CONFIG_VALUES: dict[str, Any] = {
     "pca_mahalanobis_c": 10.0,
     "pca_mahalanobis_percentile": None,
     "pca_mahalanobis_eps": 1e-8,
+    "pca_training_prior_mode": "global",
+    "lambda_pca_reconstruction": None,
+    "lambda_pca_mahalanobis": None,
+    "pca_gradient_monitor_interval": 0,
 
     "pca_tta_enabled": PCA_TTA_ENABLED,
     "pca_prior_mode": "global",
