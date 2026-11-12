@@ -26,7 +26,7 @@ arguments:
   layer1_output_instance_norm: true
   head_normalization: batch
   backbone_normalization: batch
-  wandb_run_name: train_instance_early_pca_aligned
+  wandb_run_name: train_instance_early_grouped_pca_lambda_h_diagnostic
 
   # ---------------------------------------------------------------------------
   # Training data and output
@@ -85,15 +85,21 @@ arguments:
   # image = MSE(original prediction, inverse-transformed PCA reconstruction), in pixels^2.
   # Both preserve gradients through alignment; image also through its inverse.
   # No additional face-size normalization. Weights are NOT comparable across spaces.
-  # Set lambda_pca_projection to 0 to disable training PCA.
+  # Independent weights below: L = L_other + lambda_R * R + lambda_H * H.
+  # This one-epoch diagnostic keeps reconstruction at its existing weight and
+  # measures raw H without applying it. All supervised weights stay unchanged.
   pca_loss_space: aligned
-  # Optional coefficient prior: L_PCA = reconstruction + beta * max(D^2 - c, 0).
-  # Manual c is used only when percentile is null; neither mode takes a square root.
-  pca_mahalanobis_enabled: false
-  pca_mahalanobis_weight: 1.0  # beta; tune separately from the reconstruction weight
-  pca_mahalanobis_c: 10.0
-  pca_mahalanobis_percentile: 95.0  # chi-square quantile using retained K; overrides c when enabled
+  # SynBaby exact yaw selects its saved five-class group, including +/-55 at +/-45.
+  pca_training_prior_mode: gt_grouped
+  pca_prior_path: outputs/pose5_grouped_2026_11_12/pose5_grouped_parallel_alpha05.pt
+  # H = max(D^2 - chi2_critical(p, q), 0), using the selected group's PA p.
+  # PA alpha=.05 selects p; the independent coverage q below is 95%.
+  pca_mahalanobis_enabled: true
+  pca_mahalanobis_percentile: 95.0
   pca_mahalanobis_eps: 1.0e-8  # floor for PCA component variances
+  lambda_pca_reconstruction: 1.0  # unchanged reconstruction weight
+  lambda_pca_mahalanobis: 0.0  # replace ONLY this weight after calibration
+  pca_gradient_monitor_interval: 10  # raw loss/gradient probes every 10 train batches
   landmark_loss: wasserstein
   wasserstein_softmax_temperature: 1.0
   wasserstein_epsilon: 1.0e-08
@@ -101,8 +107,6 @@ arguments:
   adaptive_wing_theta: 0.5
   adaptive_wing_epsilon: 1.0
   adaptive_wing_alpha: 2.1
-  pca_prior_path: /home/jocareher/Downloads/landmark-detection/weights/pca_prior_13y_k32.pt
-  lambda_pca_projection: 1.0
 
   # ---------------------------------------------------------------------------
   # Optional image regularization
@@ -115,7 +119,8 @@ arguments:
   # ---------------------------------------------------------------------------
   # Training budget and runtime
   # ---------------------------------------------------------------------------
-  epochs: 60
+  # After measuring lambda_H: use 5 for matched pilots, then 60 for the full run.
+  epochs: 1
   batch_size: 32
   eval_batch_size: 32
   num_workers: 4
