@@ -26,7 +26,7 @@ arguments:
   layer1_output_instance_norm: true
   head_normalization: batch
   backbone_normalization: batch
-  wandb_run_name: train_instance_early_grouped_pca_lambda_h_diagnostic
+  wandb_run_name: train_instance_early_grouped_pca_q90_lambda_h_diagnostic
 
   # ---------------------------------------------------------------------------
   # Training data and output
@@ -93,9 +93,9 @@ arguments:
   pca_training_prior_mode: gt_grouped
   pca_prior_path: outputs/pose5_grouped_2026_11_12/pose5_grouped_parallel_alpha05.pt
   # H = max(D^2 - chi2_critical(p, q), 0), using the selected group's PA p.
-  # PA alpha=.05 selects p; the independent coverage q below is 95%.
+  # PA alpha=.05 selects p; the independent coverage q below is 90%.
   pca_mahalanobis_enabled: true
-  pca_mahalanobis_percentile: 95.0
+  pca_mahalanobis_percentile: 90.0
   pca_mahalanobis_eps: 1.0e-8  # floor for PCA component variances
   lambda_pca_reconstruction: 1.0  # unchanged reconstruction weight
   lambda_pca_mahalanobis: 0.0  # replace ONLY this weight after calibration

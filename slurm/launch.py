@@ -80,8 +80,8 @@ def arguments():
     parser.add_argument('mode', choices=('train', 'tta'))
     parser.add_argument('--settings', type=Path, required=True)
     parser.add_argument('--config', type=Path, help='YAML template; defaults to the matching preset.')
-    parser.add_argument('--normalization', choices=('baseline', 'layer', 'instance', 'adain', 'instance_early', 'instance_hidden', 'batch_all_norms', 'instance_all_norms'), default='layer',
-                        help='Training normalization preset. batch_all_norms and instance_all_norms configure all-normalization experiments.')
+    parser.add_argument('--normalization', choices=('baseline', 'layer', 'instance', 'adain', 'instance_early', 'instance_hidden', 'batch_all_norms', 'instance_all_norms'),
+                        help='Training normalization preset; when omitted, retain the YAML normalization fields.')
     parser.add_argument('--run-name', help='Override arguments.wandb_run_name for this submission.')
     parser.add_argument('--scope', choices=SCOPES, default='normalizer')
     parser.add_argument('--pca-loss-space', choices=('aligned', 'image'),
@@ -91,6 +91,14 @@ def arguments():
                             help='Override the TTA signal weight in the YAML; zero disables it.')
     parser.add_argument('--pca-prior-mode', choices=('global', 'min_pose', 'gt_pose'), help='Override the YAML prior selection mode.')
     parser.add_argument('--pca-prior-path', type=Path, help='Override settings.paths.pca_prior.')
+    parser.add_argument('--pca-training-prior-mode', choices=('global', 'gt_grouped'))
+    parser.add_argument('--lambda-pca-reconstruction', type=float)
+    parser.add_argument('--lambda-pca-mahalanobis', type=float)
+    parser.add_argument('--pca-mahalanobis-percentile', type=float)
+    parser.add_argument('--pca-mahalanobis-enabled', action=argparse.BooleanOptionalAction, default=None)
+    parser.add_argument('--pca-gradient-monitor-interval', type=int)
+    for dataset_name in ('synbaby', 'babyland', 'infanface'):
+        parser.add_argument(f'--evaluate-{dataset_name}', action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument('--pca-tta-episode-unit', choices=('auto', 'image', 'batch'), help='Override the YAML episode unit.')
     parser.add_argument('--dataset', choices=('babyland', 'infanface'), default='babyland')
     parser.add_argument('--checkpoint', type=Path)
@@ -156,6 +164,23 @@ def yaml_evaluation_enabled(source, name):
     if len(matches) != 1:
         raise ValueError(f'Set arguments.{name} to true or false in the training YAML.')
     return matches[0].lower() == 'true'
+
+
+def resolve_training_overrides(args):
+    fields = ('pca_training_prior_mode', 'lambda_pca_reconstruction', 'lambda_pca_mahalanobis',
+              'pca_mahalanobis_percentile', 'pca_mahalanobis_enabled', 'pca_gradient_monitor_interval',
+              'evaluate_synbaby', 'evaluate_babyland', 'evaluate_infanface')
+    values = {key: getattr(args, key) for key in fields if getattr(args, key, None) is not None}
+    if args.mode != 'train' and values:
+        raise ValueError('Training PCA/evaluation overrides require train mode.')
+    for key in ('lambda_pca_reconstruction', 'lambda_pca_mahalanobis'):
+        if key in values and (not math.isfinite(values[key]) or values[key] < 0):
+            raise ValueError(f'{key} must be finite and nonnegative.')
+    if 'pca_mahalanobis_percentile' in values and not 0 < values['pca_mahalanobis_percentile'] < 100:
+        raise ValueError('pca_mahalanobis_percentile must lie in (0, 100).')
+    if values.get('pca_gradient_monitor_interval', 0) < 0:
+        raise ValueError('pca_gradient_monitor_interval must be nonnegative.')
+    return values
 
 
 def resolve_tta_weights(source, args):
@@ -242,8 +267,9 @@ def main():
     template = 'normalizer_experiments.yaml' if args.mode == 'train' else 'pca_tta_evaluation.yaml'
     template_path = args.config if args.config is not None else REPO / 'configs' / template
     base_yaml = template_path.read_text()
+    training_overrides = resolve_training_overrides(args)
     tta_weights = resolve_tta_weights(base_yaml, args) if args.mode == 'tta' else None
-    evaluations = ({name: yaml_evaluation_enabled(base_yaml, f'evaluate_{name}')
+    evaluations = ({name: training_overrides.get(f'evaluate_{name}', yaml_evaluation_enabled(base_yaml, f'evaluate_{name}'))
                     for name in ('babyland', 'infanface')} if args.mode == 'train' else {})
     paths = settings['paths']
     if args.mode == 'train':
@@ -273,6 +299,7 @@ def main():
                 pca_prior_mode=getattr(args, 'pca_prior_mode', None),
                 pca_tta_episode_unit=getattr(args, 'pca_tta_episode_unit', None),
                 evaluations=evaluations, tta_loss_weights=tta_weights,
+                training_overrides=training_overrides,
                 dataset=args.dataset, paths=selected_paths, checkpoint=checkpoint,
                 normalizer_checkpoint=separate, run_dir=str(run), resources=resources,
                 cluster=cluster, partition=partition, gpu_type=gpu,

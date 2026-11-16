@@ -142,3 +142,62 @@ In explicit-weight mode, `pca_loss` is the unweighted R+H diagnostic. It may be
 large even when its actual weighted contribution is small. Read
 `weighted_pca_loss` to see what enters the total objective. Epoch metrics go to
 CSV/history and W&B. Explicit weights and routing mode are saved in checkpoints.
+
+## Correfoc pilots with 90% coverage
+
+Changing q from 95 to 90 changes the hinge values, so repeat the diagnostic if
+the initial coefficient must still match mean reconstruction magnitude. Keep the
+same alpha05 bank: q=90 does not mean PA alpha=.10. The launcher accepts training
+weight and percentile overrides, snapshots each resolved job independently, and
+can skip SynBaby test evaluation while retaining the usual training validation.
+Its default no-normalization-override behavior retains the YAML architecture.
+
+From the repository root on Correfoc, use the settings JSON with your configured
+paths (replace the local settings filename below if yours has another name):
+
+```bash
+submit_h90() {
+  bash slurm/train_hrnet_landmarks_template.sh \
+    --settings configs/correfoc_hpc.local.json \
+    --config configs/normalizer_experiments.yaml \
+    --pca-prior-path "$PWD/outputs/pose5_grouped_2026_11_12/pose5_grouped_parallel_alpha05.pt" \
+    --pca-training-prior-mode gt_grouped \
+    --pca-loss-space aligned \
+    --pca-mahalanobis-enabled \
+    --pca-mahalanobis-percentile 90 \
+    --lambda-pca-reconstruction 1 \
+    --lambda-pca-mahalanobis "$2" \
+    --pca-gradient-monitor-interval 10 \
+    --epochs "$3" \
+    --no-evaluate-synbaby --evaluate-babyland --no-evaluate-infanface \
+    --run-name "$1" "${@:4}"
+}
+
+# Validate paths/resources first. No job is submitted with --dry-run.
+submit_h90 gt_grouped_a05_q90_calibration 0 1 --no-evaluate-babyland --dry-run
+# Submit one diagnostic epoch. No natural-dataset evaluation is needed here.
+submit_h90 gt_grouped_a05_q90_calibration 0 1 --no-evaluate-babyland
+```
+
+After that job completes, activate the lmks environment and replace CAL90 below
+with the actual run directory's loss_calibration subdirectory:
+
+```bash
+CAL90=/path/to/completed_calibration_run/loss_calibration
+python -m scripts.analysis.calibrate_training_pca_weights --log-dir "$CAL90"
+H90=$(python -c 'import json,sys; v=json.load(open(sys.argv[1]))["lambda_pca_mahalanobis"]; assert v is not None and v>0; print(v)' "$CAL90/weight_starting_points.json")
+H90_LOW=$(python -c 'import sys; print(.3*float(sys.argv[1]))' "$H90")
+H90_HIGH=$(python -c 'import sys; print(3*float(sys.argv[1]))' "$H90")
+
+submit_h90 gt_grouped_a05_q90_H0   0           5
+submit_h90 gt_grouped_a05_q90_H03 "$H90_LOW"  5
+submit_h90 gt_grouped_a05_q90_H1  "$H90"      5
+submit_h90 gt_grouped_a05_q90_H3  "$H90_HIGH" 5
+```
+
+The old 95%-calibrated weights remain possible exploratory candidates, but are
+not guaranteed to match mean reconstruction loss at 90%. Each pilot keeps the
+same reconstruction/supervised weights and YAML normalization. BabyLand runs
+after training, SynBaby test and InfanFace do not. Validation during training
+continues normally. The existing post-training best-checkpoint selection is
+unchanged; inspect recorded checkpoints/epochs when comparing BabyLand results.
