@@ -5,8 +5,8 @@ arguments:
   # ---------------------------------------------------------------------------
   # Experiment selection
   # ---------------------------------------------------------------------------
-  # Active preset: InstanceNorm at the end of the external normalizer and
-  # immediately after HRNet layer1; BatchNorm remains in all task heads.
+  # Active preset: BatchNorm in the normalizer, HRNet and all task heads,
+  # matching the downloaded grouped-PCA lambda-H pilots.
   # For the older baseline/layer/instance/adain variants, set BOTH new flags
   # below to false and choose the earlier normalizer/head normalization pair.
   # HPC --normalization selects the complete variant and overrides all four fields.
@@ -21,12 +21,12 @@ arguments:
   # Modes: none | normalizer_sanity | normalizer_train_frozen_landmarker |
   #        normalizer_joint_finetune.
   experiment_mode: normalizer_joint_finetune
-  normalizer_normalization: none
-  normalizer_final_instance_norm: true
-  layer1_output_instance_norm: true
+  normalizer_normalization: batch
+  normalizer_final_instance_norm: false
+  layer1_output_instance_norm: false
   head_normalization: batch
   backbone_normalization: batch
-  wandb_run_name: train_instance_early_grouped_pca_q90_lambda_h_diagnostic
+  wandb_run_name: train_bn_grouped_a05_q95_H0_full
 
   # ---------------------------------------------------------------------------
   # Training data and output
@@ -41,9 +41,8 @@ arguments:
   # ---------------------------------------------------------------------------
   # Joint fine-tuning starts from official HRNet weights and new heads/normalizer.
   # Keep checkpoint null for this mode. Sanity/frozen-landmarker modes require a checkpoint.
-  # Train the complete normalizer, the new post-layer1 InstanceNorm affine
-  # parameters, transition3, stage4, and all task heads. Stem/layer1 convolutions
-  # and their BatchNorm statistics remain frozen during source training.
+  # Train the complete normalizer, transition3, stage4, and all task heads.
+  # Stem/layer1 convolutions and their BatchNorm statistics remain frozen.
   # With backbone_normalization: instance, only the BN affine weight/bias from
   # official pretraining transfer; BN running mean/variance have no IN equivalent.
   # All backbone IN affine parameters train, even in frozen convolutional stages.
@@ -86,19 +85,19 @@ arguments:
   # Both preserve gradients through alignment; image also through its inverse.
   # No additional face-size normalization. Weights are NOT comparable across spaces.
   # Independent weights below: L = L_other + lambda_R * R + lambda_H * H.
-  # This one-epoch diagnostic keeps reconstruction at its existing weight and
-  # measures raw H without applying it. All supervised weights stay unchanged.
+  # Full reconstruction-only baseline: log raw H without applying it.
+  # All supervised weights stay unchanged.
   pca_loss_space: aligned
   # SynBaby exact yaw selects its saved five-class group, including +/-55 at +/-45.
   pca_training_prior_mode: gt_grouped
   pca_prior_path: outputs/pose5_grouped_2026_11_12/pose5_grouped_parallel_alpha05.pt
   # H = max(D^2 - chi2_critical(p, q), 0), using the selected group's PA p.
-  # PA alpha=.05 selects p; the independent coverage q below is 90%.
+  # PA alpha=.05 selects p; the independent coverage q below is 95%.
   pca_mahalanobis_enabled: true
-  pca_mahalanobis_percentile: 90.0
+  pca_mahalanobis_percentile: 95.0
   pca_mahalanobis_eps: 1.0e-8  # floor for PCA component variances
   lambda_pca_reconstruction: 1.0  # unchanged reconstruction weight
-  lambda_pca_mahalanobis: 0.0  # replace ONLY this weight after calibration
+  lambda_pca_mahalanobis: 0.0  # baseline: no Mahalanobis contribution
   pca_gradient_monitor_interval: 10  # raw loss/gradient probes every 10 train batches
   landmark_loss: wasserstein
   wasserstein_softmax_temperature: 1.0
@@ -119,8 +118,8 @@ arguments:
   # ---------------------------------------------------------------------------
   # Training budget and runtime
   # ---------------------------------------------------------------------------
-  # After measuring lambda_H: use 5 for matched pilots, then 60 for the full run.
-  epochs: 1
+  # The HPC launcher reads epochs and batch_size here unless overridden by CLI.
+  epochs: 60
   batch_size: 32
   eval_batch_size: 32
   num_workers: 4
@@ -166,9 +165,9 @@ arguments:
   # ---------------------------------------------------------------------------
   # Natural datasets remain evaluation-only. These paths do not select training data.
   # Sanity mode disables SynBaby unless --evaluate-synbaby is explicitly supplied.
-  evaluate_synbaby: true
+  evaluate_synbaby: false  # skip post-training test; train/validation still run
   evaluate_babyland: true
-  evaluate_infanface: true
+  evaluate_infanface: false
   babyland_crop_root: /home/jocareher/Downloads/babyland72_622_inference/crops/all_detections
   babyland_gt_root: /home/jocareher/Downloads/landmark-detection/data/babyland72/labels
   babyland_source_root: null

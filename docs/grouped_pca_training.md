@@ -143,6 +143,31 @@ large even when its actual weighted contribution is small. Read
 `weighted_pca_loss` to see what enters the total objective. Epoch metrics go to
 CSV/history and W&B. Explicit weights and routing mode are saved in checkpoints.
 
+## Submit the complete baseline using only the YAML
+
+The active `configs/normalizer_experiments.yaml` is configured for the matched
+full baseline: all BatchNorm, GT-grouped alpha05 prior, q=95%, lambda_R=1,
+lambda_H=0, 60 epochs and batch size32. It skips post-training SynBaby test and
+InfanFace while retaining ordinary train/validation and BabyLand evaluation.
+
+From the repository root on Correfoc:
+
+```bash
+bash slurm/train_hrnet_landmarks_template.sh \
+  --settings configs/correfoc_hpc.example.json \
+  --config configs/normalizer_experiments.yaml
+```
+
+Use the settings JSON already configured with your cluster paths. Add `--dry-run`
+to check the plan first. No explicit normalization or loss-weight flags are
+needed: the YAML supplies them. Epochs and batch size use CLI > training YAML >
+JSON defaults. A repository-relative PCA prior in the YAML takes precedence
+over the JSON prior path; old absolute workstation prior paths retain the HPC
+JSON mapping unless overridden explicitly with `--pca-prior-path`. Dataset,
+pretrained-weight and output paths, GPU/CPU resources and time limits remain
+managed by the HPC settings. Each submission snapshots its own YAML, so later
+edits do not change an already submitted job.
+
 ## Correfoc pilots with 90% coverage
 
 Changing q from 95 to 90 changes the hinge values, so repeat the diagnostic if

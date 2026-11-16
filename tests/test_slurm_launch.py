@@ -147,9 +147,11 @@ def test_submission_snapshot_and_dependency(tmp_path, monkeypatch, mode, run_nam
     if mode == 'train':
         assert resolved['normalizer_normalization'] == resolved['head_normalization'] == 'instance'
         assert resolved['num_unfrozen_stages'] == 1
-        assert resolved['evaluate_babyland'] and resolved['evaluate_infanface']
-        assert resolved['babyland_source_root'] == settings['paths']['babyland_source_root']
-        assert resolved['infanface_source_root'] == settings['paths']['infanface_source_root']
+        assert resolved['evaluate_babyland'] == base['evaluate_babyland']
+        assert resolved['evaluate_infanface'] == base['evaluate_infanface']
+        for dataset_name in ('babyland', 'infanface'):
+            expected = settings['paths'][f'{dataset_name}_source_root'] if base[f'evaluate_{dataset_name}'] else None
+            assert resolved[f'{dataset_name}_source_root'] == expected
         assert Path(resolved['output_dir']) / resolved['wandb_run_name'] == run
     else:
         assert resolved['pca_tta_adaptation_scope'] == 'normalizer_heads'
@@ -238,6 +240,22 @@ def test_baseline_cli_preset(monkeypatch):
     monkeypatch.setattr('sys.argv', ['launch.py', 'train', '--settings', 'hpc.json',
                                     '--normalization', 'baseline'])
     assert launch.arguments().normalization == 'baseline'
+
+
+def test_omitted_normalization_keeps_training_yaml(monkeypatch, tmp_path):
+    monkeypatch.setattr('sys.argv', ['launch.py', 'train', '--settings', 'hpc.json'])
+    assert launch.arguments().normalization is None
+    base = yaml.safe_load((ROOT / 'configs/normalizer_background_randomization.yaml').read_text())['arguments']
+    plan = dict(mode='train', run_dir=str(tmp_path / 'run'), normalization=None,
+                evaluations={'babyland': False, 'infanface': False},
+                resources=dict(batch_size=8, workers=2, epochs=1),
+                paths=dict(pca_prior='/weights/pca.pt', train_dataset='/data/train',
+                           pretrained_weights='/weights/hrnet.pt'))
+    resolved = worker.resolved_arguments(plan, base)
+    for key in ('normalizer_normalization', 'normalizer_final_instance_norm',
+                'layer1_output_instance_norm', 'head_normalization',
+                'backbone_normalization'):
+        assert resolved[key] == base[key]
 
 
 @pytest.mark.parametrize('scalar,expected', [

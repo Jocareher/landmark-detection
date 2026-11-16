@@ -166,6 +166,35 @@ def yaml_evaluation_enabled(source, name):
     return matches[0].lower() == 'true'
 
 
+def yaml_flat_value(source, name):
+    """Read a flat arguments scalar without PyYAML on login nodes."""
+    values = re.findall(r'^  ' + re.escape(name) + r':[ \t]*([^#\n]+)', source, re.M)
+    if len(values) > 1:
+        raise ValueError(f'Duplicate arguments.{name}')
+    return values[0].strip().strip('"\'') if values else None
+
+
+def training_resource_defaults(source, resources):
+    """Experiment sizes come from YAML, with JSON reserved for HPC defaults."""
+    result = dict(resources)
+    for name in ('epochs', 'batch_size'):
+        value = yaml_flat_value(source, name)
+        if value is not None:
+            if not re.fullmatch(r'[1-9]\d*', value):
+                raise ValueError(f'arguments.{name} must be a positive integer.')
+            result[name] = int(value)
+    return result
+
+
+def portable_training_prior(source):
+    """A repo-relative prior travels with the code; absolute HPC paths use settings."""
+    value = yaml_flat_value(source, 'pca_prior_path')
+    if not value or value.lower() in ('null', 'none', '~'):
+        return None
+    path = Path(value).expanduser()
+    return REPO / path if not path.is_absolute() else None
+
+
 def resolve_training_overrides(args):
     fields = ('pca_training_prior_mode', 'lambda_pca_reconstruction', 'lambda_pca_mahalanobis',
               'pca_mahalanobis_percentile', 'pca_mahalanobis_enabled', 'pca_gradient_monitor_interval',
@@ -224,7 +253,12 @@ def main():
     modules = settings.get('modules', [])
     if not isinstance(modules, list) or any(not isinstance(item, str) or not item for item in modules):
         raise ValueError('modules must be a list of nonempty module names.')
+    template = 'normalizer_experiments.yaml' if args.mode == 'train' else 'pca_tta_evaluation.yaml'
+    template_path = args.config if args.config is not None else REPO / 'configs' / template
+    base_yaml = template_path.read_text()
     resources = dict(settings[args.mode])
+    if args.mode == 'train':
+        resources = training_resource_defaults(base_yaml, resources)
     for key in ('time', 'epochs', 'steps', 'batch_size'):
         value = getattr(args, key)
         if value is not None:
@@ -264,9 +298,6 @@ def main():
     if maximum and maximum[1] not in ('UNLIMITED', 'INFINITE'):
         if duration_seconds(resources['time']) > duration_seconds(maximum[1]):
             raise ValueError(f'Request exceeds partition MaxTime={maximum[1]}')
-    template = 'normalizer_experiments.yaml' if args.mode == 'train' else 'pca_tta_evaluation.yaml'
-    template_path = args.config if args.config is not None else REPO / 'configs' / template
-    base_yaml = template_path.read_text()
     training_overrides = resolve_training_overrides(args)
     tta_weights = resolve_tta_weights(base_yaml, args) if args.mode == 'tta' else None
     evaluations = ({name: training_overrides.get(f'evaluate_{name}', yaml_evaluation_enabled(base_yaml, f'evaluate_{name}'))
@@ -283,6 +314,8 @@ def main():
         if tta_weights['pca'] > 0:
             needed.insert(0, 'pca_prior')
     prior_override = getattr(args, 'pca_prior_path', None)
+    if prior_override is None and args.mode == 'train':
+        prior_override = portable_training_prior(base_yaml)
     selected_paths = {name: required_path(prior_override if name == 'pca_prior' and prior_override is not None
                                          else paths[name]) for name in needed}
     checkpoint = required_path(args.checkpoint, exists=not bool(args.afterok)) if args.checkpoint else None
