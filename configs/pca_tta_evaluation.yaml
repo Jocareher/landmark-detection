@@ -6,7 +6,7 @@ arguments:
   # Experiment selection
   # ---------------------------------------------------------------------------
   # Active preset: compare the fully trained all-BatchNorm grouped-PCA models
-  # using the SAME reconstruction-only TTA protocol on BabyLand.
+  # using grouped PCA + weighted Mahalanobis TTA on BabyLand.
   # Scopes:
   #   normalizer            = complete external normalizer
   #   normalizer_head_norms = normalizer + gamma/beta of normalization in all three heads
@@ -61,10 +61,10 @@ arguments:
   # Changing the scope above does NOT rename these paths automatically.
   # Example suffixes: babyland_normalizer_head_norms, babyland_normalizer_heads.
   # summary.json records the scope, selected parameters, architecture, and PCA loss space.
-  output_dir: runs/tta_gt_grouped_reconstruction_allbn_bs16
+  output_dir: runs/tta_gt_grouped_mahalanobis_Hsmall_q95_allbn_bs16
   use_wandb: true
   wandb_project: BabyLMKS
-  wandb_run_name: tta_gt_grouped_reconstruction_allbn_bs16
+  wandb_run_name: tta_gt_grouped_mahalanobis_Hsmall_q95_allbn_bs16
   save_config: true
 
   # ---------------------------------------------------------------------------
@@ -92,10 +92,10 @@ arguments:
   pca_loss_space: aligned
   # Optional coefficient prior: L_PCA = reconstruction + beta * max(D^2 - c, 0).
   # Manual c is used only when percentile is null; neither mode takes a square root.
-  pca_mahalanobis_enabled: false
+  pca_mahalanobis_enabled: true
   # In TTA, the loss is tta_pca_weight * (R + beta * H).
   # Training's lambda_pca_* fields do not set these TTA coefficients.
-  pca_mahalanobis_weight: 1.23917647e-6  # exploratory only if enabled later
+  pca_mahalanobis_weight: 1.23917647e-6  # selected lambda_H, with reconstruction weight 1
   pca_mahalanobis_c: 10.0
   pca_mahalanobis_percentile: 95.0  # chi-square quantile using this group's significant p
   pca_mahalanobis_eps: 1.0e-8  # floor for PCA component variances

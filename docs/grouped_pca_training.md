@@ -229,17 +229,19 @@ unchanged; inspect recorded checkpoints/epochs when comparing BabyLand results.
 
 ## TTA after the full training runs
 
-The active `configs/pca_tta_evaluation.yaml` starts with reconstruction-only TTA
+The active `configs/pca_tta_evaluation.yaml` applies grouped PCA + Mahalanobis TTA
 on BabyLand, using the SAME grouped alpha05 bank and GT orientation routing.
+The reconstruction weight is1, the Mahalanobis weight is1.23917647e-6, and
+chi-square coverage is95%.
 The protocol is all normalization layers, batch size16,1500steps, constant
 learning rate.001, seed42, and no entropy/spread losses. Model architecture
 comes from the full checkpoint, not from the evaluation YAML.
 
-First compare the new source models with this same fixed adaptation objective:
-source-trained lambda_H=0 versus source-trained lambda_H=1.23917647e-6. This
-isolates the source-training change. Enabling Mahalanobis during TTA is a
-separate adaptation ablation; the source-training coefficient is not
-automatically copied into the TTA objective.
+Compare the two source models under this same fixed adaptation objective:
+source-trained lambda_H=0 versus source-trained lambda_H=1.23917647e-6.
+To isolate the effect of Mahalanobis during adaptation, additionally run the SAME
+checkpoint with `pca_mahalanobis_enabled: false`. The active weight is set
+explicitly in the TTA YAML; training weights are not copied automatically.
 
 In the TTA YAML, set `checkpoint` to the new training run's
 `checkpoints/full_model_best.pth`, keep `normalizer_checkpoint: null`, and give
@@ -261,10 +263,22 @@ GT pose mode uses BabyLand orientation classes0–4 to choose a fixed prior. GT
 landmark coordinates remain evaluation-only. This is an oracle-orientation
 protocol, as in the previous GT-conditioned experiments.
 
-For a later TTA+Mahalanobis experiment, enable `pca_mahalanobis_enabled` and set
-`pca_mahalanobis_weight` deliberately. In the TTA engine the coefficients are
+The active TTA+Mahalanobis experiment has `pca_mahalanobis_enabled: true` and
+`pca_mahalanobis_weight: 1.23917647e-6`. In the TTA engine the coefficients are
 `tta_pca_weight * R + tta_pca_weight * pca_mahalanobis_weight * H`. Training's
 `lambda_pca_reconstruction` and `lambda_pca_mahalanobis` are not TTA switches.
 The stored small beta is only an exploratory starting value, not a coefficient
 calibrated on natural-image adaptation. Keep the same source checkpoint when
 comparing adaptation objectives.
+
+For local execution, activate your training/evaluation environment, check the
+local BabyLand paths in the YAML, and run from the repository root:
+
+```bash
+python -m scripts.evaluate \
+  --config configs/pca_tta_evaluation.yaml \
+  --checkpoint /path/to/new_training_run/checkpoints/full_model_best.pth
+```
+
+Alternatively, fill `checkpoint` in that YAML and omit the CLI checkpoint flag.
+Use different run/output names when evaluating different source checkpoints.

@@ -33,7 +33,9 @@ def test_tta_yaml_controls_adaptation_checkpoint_and_grouped_prior(tmp_path,monk
     assert plan['paths']['pca_prior'].endswith('pose5_grouped_parallel_alpha05.pt')
     resolved=worker.resolved_arguments(plan,base)
     assert resolved['pca_prior_mode']=='gt_pose' and resolved['pca_tta_episode_unit']=='batch'
-    assert not resolved['pca_mahalanobis_enabled'] and resolved['tta_pca_weight']==1
+    assert resolved['pca_mahalanobis_enabled'] and resolved['tta_pca_weight']==1
+    assert resolved['pca_mahalanobis_weight']==pytest.approx(1.23917647e-6)
+    assert resolved['pca_mahalanobis_percentile']==95
     assert resolved['tta_entropy_weight']==resolved['tta_spread_weight']==0
     monkeypatch.setattr('sys.argv',argv+['--steps','100','--batch-size','8','--tta-learning-rate','.0002','--scope','normalizer'])
     launch.main();output=capsys.readouterr().out;plan=json.loads(output[output.index('{'):])
