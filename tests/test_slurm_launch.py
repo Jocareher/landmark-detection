@@ -337,6 +337,7 @@ def test_tta_weights_yaml_and_cli(monkeypatch):
     weights = launch.resolve_tta_weights(source, SimpleNamespace(tta_spread_weight=0.5))
     assert weights == {'pca': 0, 'entropy': 0.25, 'spread': 0.5}
     monkeypatch.setattr('sys.argv', ['evaluate', '--config', str(ROOT/'configs/pca_tta_evaluation.yaml'),
+                                   '--checkpoint', '/weights/model.pth',
                                    '--tta-pca-weight', '0', '--tta-entropy-weight', '1',
                                    '--pca-prior-mode', 'min_pose', '--pca-tta-episode-unit', 'batch'])
     config = build_config_from_args(parse_args())

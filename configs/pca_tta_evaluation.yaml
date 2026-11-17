@@ -5,7 +5,8 @@ arguments:
   # ---------------------------------------------------------------------------
   # Experiment selection
   # ---------------------------------------------------------------------------
-  # Active preset: the new post-layer1 InstanceNorm checkpoint on BabyLand.
+  # Active preset: compare the fully trained all-BatchNorm grouped-PCA models
+  # using the SAME reconstruction-only TTA protocol on BabyLand.
   # Scopes:
   #   normalizer            = complete external normalizer
   #   normalizer_head_norms = normalizer + gamma/beta of normalization in all three heads
@@ -22,7 +23,7 @@ arguments:
   # Set pca_tta false for ordinary inference, or steps 0 for a zero-update TTA reference.
   eval_mode: babyland
   pca_tta: true
-  pca_tta_adaptation_scope: normalizer_stem_layer1
+  pca_tta_adaptation_scope: normalizer_all_norms
 
   # ---------------------------------------------------------------------------
   # Checkpoint loading
@@ -34,7 +35,9 @@ arguments:
   # Full-model checkpoint: normalizer_checkpoint must be null.
   # Split alternative: checkpoint = .../landmarker_best.pth and
   # normalizer_checkpoint = .../normalizer_best.pth from the same trained run.
-  checkpoint: /home/jocareher/Downloads/landmark-detection/runs/train_instance_early_pca_aligned/checkpoints/full_model_best.pth
+  # Set the NEW training run's checkpoints/full_model_best.pth here, or pass
+  # --checkpoint when submitting to Correfoc. Null prevents reuse of an old model.
+  checkpoint: null
   normalizer_checkpoint: null
 
   # ---------------------------------------------------------------------------
@@ -44,7 +47,8 @@ arguments:
   #   eval_mode: infanface
   #   dataset_root: /home/jocareher/Downloads/infanface_inference/crops/all_detections
   #   natural_gt_root: /home/jocareher/Downloads/infanface_prepared/all/labels
-  # Ground truth is used only for evaluation, never for adaptation.
+  # GT landmark coordinates are evaluation-only. In gt_pose mode, the annotated
+  # orientation class DOES select the prior throughout TTA (oracle pose protocol).
   dataset_root: /home/jocareher/Downloads/babyland72_622_inference/crops/all_detections
   natural_gt_root: /home/jocareher/Downloads/landmark-detection/data/babyland72/labels
   natural_source_root: null
@@ -57,10 +61,10 @@ arguments:
   # Changing the scope above does NOT rename these paths automatically.
   # Example suffixes: babyland_normalizer_head_norms, babyland_normalizer_heads.
   # summary.json records the scope, selected parameters, architecture, and PCA loss space.
-  output_dir: /home/jocareher/Downloads/landmark-detection/runs/train_instance_early_pca_aligned/evaluation/babyland_normalizer_stem_layer1_aligned
+  output_dir: runs/tta_gt_grouped_reconstruction_allbn_bs16
   use_wandb: true
   wandb_project: BabyLMKS
-  wandb_run_name: tta_instance_early_babyland_normalizer_stem_layer1_aligned
+  wandb_run_name: tta_gt_grouped_reconstruction_allbn_bs16
   save_config: true
 
   # ---------------------------------------------------------------------------
@@ -81,19 +85,21 @@ arguments:
   # PCA is loaded only if tta_pca_weight > 0. LR/weights may need recalibration.
   # global: historical single prior. min_pose: minimum over all pose priors per image.
   # min_pose requires a file built with --prior-mode pose5 or pose13.
-  pca_prior_mode: global
+  pca_prior_mode: gt_pose
   # auto: historical behavior; batch: shared optimizer for the loader batch.
   # Choose batch for the min_pose batch experiment (scope remains independent).
-  pca_tta_episode_unit: auto
+  pca_tta_episode_unit: batch
   pca_loss_space: aligned
   # Optional coefficient prior: L_PCA = reconstruction + beta * max(D^2 - c, 0).
   # Manual c is used only when percentile is null; neither mode takes a square root.
   pca_mahalanobis_enabled: false
-  pca_mahalanobis_weight: 1.0  # beta; tune separately from the reconstruction weight
+  # In TTA, the loss is tta_pca_weight * (R + beta * H).
+  # Training's lambda_pca_* fields do not set these TTA coefficients.
+  pca_mahalanobis_weight: 1.23917647e-6  # exploratory only if enabled later
   pca_mahalanobis_c: 10.0
-  pca_mahalanobis_percentile: 95.0  # chi-square quantile using retained K; overrides c when enabled
+  pca_mahalanobis_percentile: 95.0  # chi-square quantile using this group's significant p
   pca_mahalanobis_eps: 1.0e-8  # floor for PCA component variances
-  pca_prior_path: /home/jocareher/Downloads/landmark-detection/weights/pca_prior_13y_k32.pt
+  pca_prior_path: outputs/pose5_grouped_2026_11_12/pose5_grouped_parallel_alpha05.pt
 
   # ---------------------------------------------------------------------------
   # Adaptation budget and Adam
@@ -101,8 +107,8 @@ arguments:
   # The learning rate, weight decay, and clipping apply to all selected parameters.
   # max_gradient_norm: 0 disables clipping. Scheduler choices: constant | cosine.
   # min_learning_rate is the cosine schedule floor.
-  pca_tta_steps: 20
-  pca_tta_learning_rate: 0.0001
+  pca_tta_steps: 1500
+  pca_tta_learning_rate: 0.001
   pca_tta_weight_decay: 0.0
   pca_tta_adam_beta1: 0.9
   pca_tta_adam_beta2: 0.999
@@ -126,7 +132,7 @@ arguments:
   # normalizer_all_norms adapts one batch jointly; --batch-size selects its size.
   # normalizer_all_instance_norms requires batch_size: 1.
   # All other scopes adapt per image even when the loader batch is larger.
-  batch_size: 1
+  batch_size: 16
   num_workers: 4
   device: auto
   seed: 42

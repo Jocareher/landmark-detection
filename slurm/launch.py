@@ -83,7 +83,7 @@ def arguments():
     parser.add_argument('--normalization', choices=('baseline', 'layer', 'instance', 'adain', 'instance_early', 'instance_hidden', 'batch_all_norms', 'instance_all_norms'),
                         help='Training normalization preset; when omitted, retain the YAML normalization fields.')
     parser.add_argument('--run-name', help='Override arguments.wandb_run_name for this submission.')
-    parser.add_argument('--scope', choices=SCOPES, default='normalizer')
+    parser.add_argument('--scope', choices=SCOPES, help='Override the TTA scope; otherwise use the YAML.')
     parser.add_argument('--pca-loss-space', choices=('aligned', 'image'),
                         help='Override the PCA loss space selected in the YAML, for training or TTA.')
     for signal in ('pca', 'entropy', 'spread'):
@@ -186,6 +186,23 @@ def training_resource_defaults(source, resources):
     return result
 
 
+def tta_resource_defaults(source, resources):
+    result = dict(resources)
+    for yaml_name, name in (('pca_tta_steps', 'steps'), ('batch_size', 'batch_size')):
+        value = yaml_flat_value(source, yaml_name)
+        if value is not None:
+            if not re.fullmatch(r'\d+', value) or (name == 'batch_size' and int(value) < 1):
+                raise ValueError(f'Invalid arguments.{yaml_name}.')
+            result[name] = int(value)
+    value = yaml_flat_value(source, 'pca_tta_learning_rate')
+    if value is not None:
+        number = float(value)
+        if not math.isfinite(number) or number <= 0:
+            raise ValueError('pca_tta_learning_rate must be finite and positive.')
+        result['learning_rate'] = number
+    return result
+
+
 def portable_training_prior(source):
     """A repo-relative prior travels with the code; absolute HPC paths use settings."""
     value = yaml_flat_value(source, 'pca_prior_path')
@@ -259,6 +276,17 @@ def main():
     resources = dict(settings[args.mode])
     if args.mode == 'train':
         resources = training_resource_defaults(base_yaml, resources)
+    else:
+        resources = tta_resource_defaults(base_yaml, resources)
+        if args.scope is None:
+            args.scope = yaml_flat_value(base_yaml, 'pca_tta_adaptation_scope') or 'normalizer'
+        if args.scope not in SCOPES:
+            raise ValueError(f'Invalid TTA scope: {args.scope}')
+        for key in ('checkpoint', 'normalizer_checkpoint'):
+            if getattr(args, key, None) is None:
+                value = yaml_flat_value(base_yaml, key)
+                if value and value.lower() not in ('null', 'none', '~'):
+                    setattr(args, key, Path(value).expanduser())
     for key in ('time', 'epochs', 'steps', 'batch_size'):
         value = getattr(args, key)
         if value is not None:
@@ -269,7 +297,7 @@ def main():
             raise ValueError('--tta-learning-rate must be finite and positive.')
         resources['learning_rate'] = tta_learning_rate
     if args.mode == 'tta' and args.checkpoint is None:
-        raise ValueError('TTA requires --checkpoint (full model or landmarker + normalizer).')
+        raise ValueError('TTA requires checkpoint in the YAML or --checkpoint (full model or landmarker + normalizer).')
     if args.afterok and not re.fullmatch(r'\d+', args.afterok):
         raise ValueError('--afterok must be a numeric job ID.')
     for key in ('cpus', 'batch_size'):
@@ -314,7 +342,7 @@ def main():
         if tta_weights['pca'] > 0:
             needed.insert(0, 'pca_prior')
     prior_override = getattr(args, 'pca_prior_path', None)
-    if prior_override is None and args.mode == 'train':
+    if prior_override is None:
         prior_override = portable_training_prior(base_yaml)
     selected_paths = {name: required_path(prior_override if name == 'pca_prior' and prior_override is not None
                                          else paths[name]) for name in needed}
