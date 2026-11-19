@@ -95,6 +95,7 @@ def test_pca_tta_is_episodic_and_restores_source_normalizer(
             monitor_steps=(0, 1, 2),
             probe_count=0,
         ),
+        dataset_protocol="babyland",
     )
     assert all(
         not parameter.requires_grad for parameter in model.landmarker.parameters()
@@ -103,7 +104,7 @@ def test_pca_tta_is_episodic_and_restores_source_normalizer(
     image = torch.randn(1, 3, 12, 12)
 
     first = adapter.adapt_batch(image, ["first"])
-    second = adapter.adapt_batch(image, ["second"])
+    second = adapter.adapt_batch(image, ["flip_first"])
     adapter.record_evaluation_metrics(
         sample_id="first",
         orientation="frontal",
@@ -114,7 +115,7 @@ def test_pca_tta_is_episodic_and_restores_source_normalizer(
         number_of_valid_landmarks=4,
     )
     adapter.record_evaluation_metrics(
-        sample_id="second",
+        sample_id="flip_first",
         orientation="right",
         initial_nme_box_gt_valid=0.12,
         final_nme_box_gt_valid=0.14,
@@ -136,7 +137,7 @@ def test_pca_tta_is_episodic_and_restores_source_normalizer(
     second_losses = [
         row["pca_reconstruction_loss"]
         for row in adapter.trajectory_rows
-        if row["sample_id"] == "second"
+        if row["sample_id"] == "flip_first"
     ]
     assert first_losses == second_losses
     for key, expected in source_normalizer.items():
@@ -163,10 +164,15 @@ def test_pca_tta_is_episodic_and_restores_source_normalizer(
     assert (tmp_path / "tta/evaluation_analysis.json").exists()
     assert summary["evaluation_analysis"]["num_improved"] == 1
     assert summary["evaluation_analysis"]["num_worsened"] == 1
+    subsets = summary["evaluation_analysis"]["image_subset_metrics"]
+    assert subsets["original"]["improvement_rate"] == 1.0
+    assert subsets["mirrored"]["improvement_rate"] == 0.0
+    assert subsets["original"]["num_samples"] == subsets["mirrored"]["num_samples"] == 1
+    assert (tmp_path / "tta/image_subset_tta_summary.csv").exists()
     terminal_output = capsys.readouterr().out
     assert "landmarker_trainable=0" in terminal_output
     assert "sample=first" in terminal_output
-    assert "sample=second" in terminal_output
+    assert "sample=flip_first" in terminal_output
     assert terminal_output.count("source_normalizer_restored=yes") == 2
     assert terminal_output.count("optimizer=fresh") == 2
     assert terminal_output.count("source_normalizer_restored_after=yes") == 2

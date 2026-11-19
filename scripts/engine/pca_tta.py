@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .evaluation_reporting import group_babyland_image_rows
 from .runtime_reporting import clock, distribution, write_rows, save_tta_curves
 from .tta_losses import (
     PCA_PRIOR_MODES, POSE5_YAW_BY_CLASS, compute_tta_losses, resolve_gt_pose_labels,
@@ -129,6 +130,8 @@ class PCAGuidedTTA:
         output_dir: str | Path,
         config: PCATTAConfig,
         wandb_module: Any | None = None,
+        *,
+        dataset_protocol: str | None = None,
     ) -> None:
         """Snapshot source weights and initialize trajectory reporting."""
         config.validate()
@@ -158,6 +161,7 @@ class PCAGuidedTTA:
         self.device = device
         self.output_dir = Path(output_dir)
         self.config = config
+        self.dataset_protocol = dataset_protocol
         self.runtime_started = clock(device)
         self.adaptation_timings = []
         self.forward_timings = []
@@ -905,6 +909,7 @@ class PCAGuidedTTA:
             [{**row, "relative_loss_reduction": row["relative_pca_loss_reduction"]} for row in self.summary_rows],
             output_dir=self.output_dir,
             pca_enabled=self.config.pca_weight > 0,
+            dataset_protocol=self.dataset_protocol,
         )
         summary = {
             "heatmap_diagnostics": DEFINITIONS,
@@ -1445,6 +1450,7 @@ def _save_evaluation_analysis(
     *,
     output_dir: Path,
     pca_enabled: bool = True,
+    dataset_protocol: str | None = None,
 ) -> dict[str, Any] | None:
     """Save GT-only post-hoc analyses after adaptation has fully completed."""
     required = {
@@ -1513,6 +1519,24 @@ def _save_evaluation_analysis(
         values = np.asarray([row.get(f"{stage}_hausdorff_box_gt_valid", math.nan) for row in valid], dtype=float)
         values = values[np.isfinite(values)]
         analysis[f"std_{stage}_hausdorff_box_gt_valid"] = float(values.std()) if values.size else None
+    if dataset_protocol == "babyland":
+        subsets = group_babyland_image_rows(valid)
+        all_subsets = group_babyland_image_rows(rows)
+        subset_metrics = {}
+        for subset, selected in subsets.items():
+            metrics = _summarize_evaluation_group(selected)
+            subset_metrics[subset] = {
+                "num_samples": len(all_subsets[subset]),
+                **metrics,
+                "unchanged_images": metrics["count"] - metrics.get("improved_images", 0)
+                - metrics.get("worsened_images", 0),
+            }
+        subset_csv = output_dir / "image_subset_tta_summary.csv"
+        _write_rows_csv(subset_csv, [
+            {"image_subset": subset, **metrics} for subset, metrics in subset_metrics.items()
+        ])
+        analysis["image_subset_metrics"] = subset_metrics
+        analysis["image_subset_summary_csv"] = str(subset_csv)
     analysis_path = output_dir / "evaluation_analysis.json"
     analysis_path.write_text(json.dumps(analysis, indent=2), encoding="utf-8")
     analysis["analysis_json"] = str(analysis_path)
@@ -1527,42 +1551,36 @@ def _summarize_evaluation_by_orientation(
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         grouped.setdefault(str(row["orientation"]), []).append(row)
-    result: list[dict[str, Any]] = []
     ordered = [name for name in orientation_order if name in grouped]
     ordered.extend(sorted(set(grouped).difference(ordered)))
-    for orientation in ordered:
-        current = grouped[orientation]
-        initial = np.asarray(
-            [float(row["initial_nme_box_gt_valid"]) for row in current]
-        )
-        final = np.asarray([float(row["final_nme_box_gt_valid"]) for row in current])
-        delta = final - initial
-        result.append(
-            {
-                "orientation": orientation,
-                "count": int(len(current)),
-                "std_nme_before": float(initial.std()),
-                "std_nme_after": float(final.std()),
-                "std_nme_delta": float(delta.std()),
-                "mean_nme_before": float(initial.mean()),
-                "mean_nme_after": float(final.mean()),
-                "mean_nme_delta": float(delta.mean()),
-                "median_nme_before": float(np.median(initial)),
-                "median_nme_after": float(np.median(final)),
-                "median_nme_delta": float(np.median(delta)),
-                "improved_images": int((delta < 0.0).sum()),
-                "worsened_images": int((delta > 0.0).sum()),
-                "improvement_rate": float((delta < 0.0).mean()),
-            }
-        )
-    for row in result:
-        current = grouped[row["orientation"]]
-        for stage in ("initial", "final"):
-            values = np.asarray([item.get(f"{stage}_hausdorff_box_gt_valid", math.nan) for item in current], dtype=float)
-            values = values[np.isfinite(values)]
-            row[f"mean_hausdorff_{stage}"] = float(values.mean()) if values.size else math.nan
-            row[f"std_hausdorff_{stage}"] = float(values.std()) if values.size else math.nan
-    return result
+    return [
+        {"orientation": orientation, **_summarize_evaluation_group(grouped[orientation])}
+        for orientation in ordered
+    ]
+
+
+def _summarize_evaluation_group(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize paired pre/post localization errors for an evaluation group."""
+    metrics: dict[str, Any] = {"count": len(rows)}
+    if not rows:
+        return metrics
+
+    initial = np.asarray([float(row["initial_nme_box_gt_valid"]) for row in rows])
+    final = np.asarray([float(row["final_nme_box_gt_valid"]) for row in rows])
+    delta = final - initial
+    nme_by_stage = {"before": initial, "after": final, "delta": delta}
+    for stat, reduce in (("std", np.std), ("mean", np.mean), ("median", np.median)):
+        for stage, values in nme_by_stage.items():
+            metrics[f"{stat}_nme_{stage}"] = float(reduce(values))
+    metrics["improved_images"] = int((delta < 0.0).sum())
+    metrics["worsened_images"] = int((delta > 0.0).sum())
+    metrics["improvement_rate"] = float((delta < 0.0).mean())
+    for stage in ("initial", "final"):
+        values = np.asarray([row.get(f"{stage}_hausdorff_box_gt_valid") for row in rows], dtype=float)
+        values = values[np.isfinite(values)]
+        metrics[f"mean_hausdorff_{stage}"] = float(values.mean()) if values.size else None
+        metrics[f"std_hausdorff_{stage}"] = float(values.std()) if values.size else None
+    return metrics
 
 
 def _orientation_colors() -> dict[str, str]:
@@ -2009,6 +2027,7 @@ loss or face-size normalization is applied.
 - `orientation_tta_summary.csv` and `evaluation_analysis.json` summarize NME
   before/after, improvement rates, and the Spearman association between PCA-loss
   reduction and NME change.
+- BabyLand also reports original and mirrored images in `image_subset_tta_summary.csv`.
 - `figures/nme_before_after_scatter.png`,
   `figures/pca_loss_reduction_vs_nme_change.png`, and the orientation figures
   are generated only when post-hoc ground truth metrics are available.

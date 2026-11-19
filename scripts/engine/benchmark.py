@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from .evaluation_reporting import clean_metrics, add_distribution_statistics
+from .evaluation_reporting import (
+    add_distribution_statistics, clean_metrics, summarize_babyland_image_subsets,
+)
 from .heatmap_diagnostics import save_heatmap_diagnostics
 
 import csv
@@ -1117,6 +1119,7 @@ def benchmark_prediction_directory(
 
     summary = clean_metrics(summary, "babyland")
     add_distribution_statistics(summary, [clean_metrics(row, "babyland") for row in per_image_nme])
+    summary["image_subset_metrics"] = summarize_babyland_image_subsets(per_image_nme)
     summary["evaluation_protocol"] = "babyland"
     summary = round_metric_value(summary)
 

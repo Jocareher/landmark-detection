@@ -69,6 +69,8 @@ def _write_evaluation_readme(evaluation_root: Path) -> Path:
                 "",
                 "Orientation metrics are identified with the `orientation_<orientation>_` prefix in consolidated exports and include NME and Hausdorff whenever the dataset protocol supports them.",
                 "",
+                "BabyLand also reports original and mirrored localization metrics in `metrics_summary.csv` and `metrics_by_image_subset.csv`. Samples with the BabyLand `flip_` prefix belong to the mirrored subset.",
+                "",
                 "Normalizer-only image-change diagnostics are intentionally stored outside this tree under `normalizer_diagnostics/`; they are not substitutes for model evaluation metrics.",
                 "",
             ]

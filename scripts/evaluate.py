@@ -661,6 +661,7 @@ def main() -> None:
                 normalization_std=tuple(config.normalization_std),
             ),
             wandb_module=wandb_module,
+            dataset_protocol=dataset_protocol,
         )
         print(
             "[INFO] Episodic TTA enabled | "

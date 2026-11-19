@@ -26,7 +26,9 @@ from .evaluate import (
 )
 from .evaluation_modes import compute_masked_natural_per_landmark_nme
 from .metrics import decode_heatmaps_to_image_coords
-from .evaluation_reporting import clean_metrics, add_distribution_statistics
+from .evaluation_reporting import (
+    add_distribution_statistics, clean_metrics, summarize_babyland_image_subsets,
+)
 from .heatmap_diagnostics import heatmap_image_rows, save_heatmap_diagnostics
 from .postprocessing import (
     apply_homogeneous_transform,
@@ -793,6 +795,7 @@ def evaluate_natural_checkpoint(
 
     summary = clean_metrics(summary, "babyland")
     add_distribution_statistics(summary, [clean_metrics(row, "babyland") for row in per_image_nme])
+    summary["image_subset_metrics"] = summarize_babyland_image_subsets(per_image_nme)
     poses = {str(row["sample_id"]): row.get("orientation", row.get("yaw_group", "unknown")) for row in per_image_nme}
     for row in heatmap_rows:
         row["orientation"] = poses.get(row["sample_id"], "unknown")

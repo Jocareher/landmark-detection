@@ -13,6 +13,8 @@ REPORT_CATEGORIES = (
     "Hausdorff",
     "Heatmaps",
     "Orientation",
+    "Original images",
+    "Mirrored images",
     "Visibility",
     "Setup",
 )
@@ -117,6 +119,14 @@ def collect_official_metric_rows(
                             "value": value,
                         }
                     )
+        for subset, metrics in summary.get("image_subset_metrics", {}).items():
+            for metric_name, value in metrics.items():
+                rows.append({
+                    "dataset": dataset_name,
+                    "category": BABYLAND_IMAGE_SUBSETS[subset],
+                    "metric": f"{subset}_{metric_name}",
+                    "value": value,
+                })
     return rows
 
 
@@ -269,10 +279,48 @@ def add_distribution_statistics(summary: dict[str, Any], rows: list[dict[str, An
     summary["std_definition"] = "population standard deviation across finite per-image errors; ddof=0"
 
 
+BABYLAND_IMAGE_SUBSETS = {"original": "Original images", "mirrored": "Mirrored images"}
+
+
+def group_babyland_image_rows(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """Use the BabyLand builder's flip_ prefix, which survives crop export."""
+    groups: dict[str, list[dict[str, Any]]] = {subset: [] for subset in BABYLAND_IMAGE_SUBSETS}
+    for row in rows:
+        subset = "mirrored" if row["sample_id"].startswith("flip_") else "original"
+        groups[subset].append(row)
+    return groups
+
+
+def summarize_babyland_image_subsets(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Report localization and coverage for each BabyLand image variant."""
+    error_fields = {
+        "nme_box_gt_valid": "mean_nme_box_gt_valid",
+        "nme_box_point_to_line_gt_valid": "mean_nme_box_point_to_line_gt_valid",
+        "hausdorff_box_gt_valid": "hausdorff_box_gt_valid",
+        "hausdorff_pixel_gt_valid": "hausdorff_pixel_gt_valid",
+    }
+    summary = {}
+    for subset, selected in group_babyland_image_rows(rows).items():
+        metrics = {"num_samples": len({row["sample_id"] for row in selected})}
+        for name, field in error_fields.items():
+            values = np.asarray([row.get(field) for row in selected], dtype=float)
+            finite = np.isfinite(values)
+            if name == "nme_box_gt_valid":
+                metrics["num_samples_with_gt_valid_metrics"] = len({
+                    row["sample_id"] for row, valid in zip(selected, finite) if valid
+                })
+            values = values[finite]
+            metrics[f"mean_{name}"] = float(values.mean()) if values.size else None
+            metrics[f"median_{name}"] = float(np.median(values)) if values.size else None
+            metrics[f"std_{name}"] = float(values.std()) if values.size else None
+        summary[subset] = metrics
+    return summary
+
+
 def write_dataset_metric_summary(path: Path, summary: dict[str, Any]) -> None:
     """Ordered sections, populated fields only, with a separate pose comparison table."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    sections = {"Coverage": [], "NME": [], "Hausdorff": [], "Heatmaps": [], "Visibility": [], "Orientation": [], "Setup": []}
+    sections = {"Coverage": [], "NME": [], "Hausdorff": [], "Heatmaps": [], "Visibility": [], "Orientation": [], "Original images": [], "Mirrored images": [], "Setup": []}
     def section(key):
         if "heatmap" in key: return "Heatmaps"
         if "nme" in key: return "NME"
@@ -282,6 +330,10 @@ def write_dataset_metric_summary(path: Path, summary: dict[str, Any]) -> None:
         return "Setup"
     def visit(data, prefix="", override=None):
         for key, value in data.items():
+            if key == "image_subset_metrics":
+                for subset, metrics in value.items():
+                    visit(metrics, override=BABYLAND_IMAGE_SUBSETS[subset])
+                continue
             if value is None: continue
             full = f"{prefix}{key}"
             category = override or section(key)
@@ -310,3 +362,9 @@ def write_dataset_metric_summary(path: Path, summary: dict[str, Any]) -> None:
             writer.writeheader()
             for pose, metrics in poses.items():
                 writer.writerow({"orientation": pose, **{key: metrics.get(key) for key in fields}})
+
+    subsets = summary.get("image_subset_metrics", {})
+    if subsets:
+        _write_rows_csv(path.parent / "metrics_by_image_subset.csv", [
+            {"image_subset": subset, **metrics} for subset, metrics in subsets.items()
+        ])

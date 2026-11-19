@@ -95,14 +95,26 @@ def test_final_evaluators_export_clean_protocols_even_if_all_predicted_invisible
     syn = evaluate.evaluate_checkpoint(Model(), loader, torch.device('cpu'), tmp_path / 'syn', save_overlays=False)
     assert 'mean_nme_box_gt_valid' not in syn
     assert syn['num_landmarks'] == 72
-    natural = evaluate_natural.evaluate_natural_checkpoint(Model(), loader, torch.device('cpu'), tmp_path / 'baby', save_overlays=False)
+    mirrored = {**sample, 'landmarks': landmarks + 2, 'metadata': {**sample['metadata'], 'sample_id': 'flip_a'}}
+    baby_loader = torch.utils.data.DataLoader([sample, mirrored], batch_size=1)
+    natural = evaluate_natural.evaluate_natural_checkpoint(Model(), baby_loader, torch.device('cpu'), tmp_path / 'baby', save_overlays=False)
+    subsets = natural["image_subset_metrics"]
+    assert subsets["original"]["num_samples"] == subsets["mirrored"]["num_samples"] == 1
+    assert natural["num_samples"] == 2
+    assert subsets["original"]["mean_nme_box_gt_valid"] < subsets["mirrored"]["mean_nme_box_gt_valid"]
+    with (tmp_path / "baby/metrics_by_image_subset.csv").open() as handle:
+        split = {row["image_subset"]: row for row in csv.DictReader(handle)}
+    assert set(split) == {"original", "mirrored"}
+    with (tmp_path / "baby/metrics_summary.csv").open() as handle:
+        assert {"Original images", "Mirrored images"} <= {row["section"] for row in csv.DictReader(handle)}
+
     assert natural['mean_nme_box_gt_valid'] is not None
     assert 'mean_nme_box' not in natural
-    assert natural['std_nme_box_gt_valid'] == 0
-    assert natural['orientation_metrics']['frontal']['std_nme_box_gt_valid'] == 0
+    assert 'std_nme_box_gt_valid' in natural
+    assert subsets['original']['std_nme_box_gt_valid'] == subsets['mirrored']['std_nme_box_gt_valid'] == 0
     with (tmp_path / 'baby/per_image_per_landmark_nme.csv').open() as handle:
         rows = list(csv.DictReader(handle))
-    assert len(rows) == 72
+    assert len(rows) == 144
     assert {row['evaluation_landmark_inclusion'] for row in rows} == {'gt_valid'}
     with (tmp_path / 'baby/per_image_nme.csv').open() as handle:
         fields = csv.DictReader(handle).fieldnames
