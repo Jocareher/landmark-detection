@@ -355,13 +355,16 @@ def save_modular_checkpoints(
     checkpoints_dir.mkdir(parents=True, exist_ok=True)
     saved: dict[str, str] = {}
 
-    best_source = output_dir / "best_model.pth"
-    last_source = output_dir / "last_model.pth"
+    checkpoint_exports = [
+        (output_dir / "best_model.pth", "full_model_best.pth"),
+        (output_dir / "last_model.pth", "full_model_last.pth"),
+    ]
+    best_nme_source = output_dir / "best_nme_model.pth"
+    if best_nme_source.exists():
+        checkpoint_exports.append((best_nme_source, "full_model_best_nme.pth"))
+
     checkpoint_payloads: dict[str, dict[str, Any]] = {}
-    for source, name in (
-        (best_source, "full_model_best.pth"),
-        (last_source, "full_model_last.pth"),
-    ):
+    for source, name in checkpoint_exports:
         if source.exists():
             payload = torch.load(source, map_location="cpu", weights_only=False)
         else:

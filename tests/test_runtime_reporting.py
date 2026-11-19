@@ -93,25 +93,53 @@ def test_tta_timings_and_curves_preserve_episodic_restoration(tmp_path):
         assert (tmp_path/path).exists()
 
 
-def test_training_records_total_validation_inference_and_all_curves(tmp_path):
-    from scripts.engine.train import train_model
-    model = TinyLandmarker()
+def test_training_records_total_validation_inference_and_all_curves(tmp_path, monkeypatch):
+    from scripts.engine import train as train_engine
+    from scripts.engine.normalizer_experiments import save_modular_checkpoints
+
+    model = NormalizedLandmarker(
+        TinyLandmarker(), ResidualImageNormalizer(hidden_channels=4, num_layers=2)
+    )
+    actual_run_epoch = train_engine.run_epoch
+    validation_values = iter([(2.0, 0.1), (1.0, 0.2), (3.0, float("nan"))])
+
+    def run_epoch_with_different_validation_optima(**kwargs):
+        metrics = actual_run_epoch(**kwargs)
+        if not kwargs["training"]:
+            metrics["total_loss"], metrics["nme"] = next(validation_values)
+        return metrics
+
+    monkeypatch.setattr(train_engine, "run_epoch", run_epoch_with_different_validation_optima)
     optimizer = torch.optim.Adam(model.parameters(), lr=.001)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1)
     sample = {'image': torch.randn(3,8,8), 'heatmaps': torch.rand(4,8,8),
               'visibility': torch.ones(4), 'landmarks': torch.tensor([[1.,1.],[6.,1.],[6.,6.],[1.,6.]])}
     loader = torch.utils.data.DataLoader([sample], batch_size=1)
-    result = train_model(model, loader, loader, optimizer, scheduler,
-        torch.nn.MSELoss(), torch.nn.BCEWithLogitsLoss(), torch.device('cpu'), 1, tmp_path,
+    result = train_engine.train_model(model, loader, loader, optimizer, scheduler,
+        torch.nn.MSELoss(), torch.nn.BCEWithLogitsLoss(), torch.device('cpu'), 3, tmp_path,
         use_wandb=False, use_amp=False, visualize_every_n_epochs=0)
     timing = json.loads((tmp_path/'timing/training_summary.json').read_text())
-    assert timing['completed_epochs'] == 1
+    assert timing['completed_epochs'] == 3
     assert timing['training_total_seconds'] >= timing['train_epoch_seconds'] + timing['val_epoch_seconds']
     assert result['history']['val'][0]['validation_inference_seconds'] > 0
     assert result['history']['train'][0]['validation_inference_seconds'] is None
     with (tmp_path/'curves/train_val_losses.csv').open() as stream:
         rows = list(csv.DictReader(stream))
-    assert len(rows) == 2 and {'total_loss','full_landmark_loss','visible_landmark_loss','visibility_loss','pca_loss','image_l1_loss','image_tv_loss'} <= set(rows[0])
+    assert len(rows) == 6 and {'total_loss','full_landmark_loss','visible_landmark_loss','visibility_loss','pca_loss','image_l1_loss','image_tv_loss'} <= set(rows[0])
+
+    saved = save_modular_checkpoints(
+        model=model, output_dir=tmp_path, base_checkpoint_path=None,
+        experiment_mode="normalizer_joint_finetune", resolved_config_path=tmp_path / "resolved.yaml",
+        landmarker_updated=True, normalizer_updated=True, decoder_name="argmax_subpixel",
+        loss_pipeline_name="mse", evaluation_protocol="test",
+    )
+    for name, epoch in (
+        ("full_model_best.pth", 1), ("full_model_last.pth", 2), ("full_model_best_nme.pth", 0)
+    ):
+        payload = torch.load(saved[name], map_location="cpu", weights_only=False)
+        assert payload["epoch"] == epoch
+    assert result["best_nme_epoch"] == 1
+    assert result["best_val_nme"] == 0.1
 
 
 def test_accelerator_timing_synchronizes_stage_boundaries(monkeypatch):

@@ -227,6 +227,15 @@ after training, SynBaby test and InfanFace do not. Validation during training
 continues normally. The existing post-training best-checkpoint selection is
 unchanged; inspect recorded checkpoints/epochs when comparing BabyLand results.
 
+## Checkpoint selection
+
+Training saves `checkpoints/full_model_best.pth` at the minimum SynBaby validation
+total loss and `checkpoints/full_model_best_nme.pth` at the minimum finite
+SynBaby validation NME. The last epoch is exported as
+`checkpoints/full_model_last.pth`. Automatic post-training evaluation and early
+stopping still use validation total loss. Pass either best checkpoint explicitly
+to evaluate on BabyLand or to run TTA.
+
 ## TTA after the full training runs
 
 The active `configs/pca_tta_evaluation.yaml` applies grouped PCA + Mahalanobis TTA

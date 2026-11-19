@@ -641,6 +641,18 @@ def train_model(
     if pca_requested and pca_shape_prior is None:
         raise ValueError("PCA training weights or diagnostics require a valid pca_prior_path.")
 
+    checkpoint_metadata = {
+        "pca_loss_space": pca_loss_space,
+        "pca_training_prior_mode": pca_training_prior_mode,
+        "lambda_pca_reconstruction": lambda_pca_reconstruction,
+        "lambda_pca_mahalanobis": lambda_pca_mahalanobis,
+        "pca_mahalanobis_enabled": pca_mahalanobis_enabled,
+        "pca_mahalanobis_weight": pca_mahalanobis_weight,
+        "pca_mahalanobis_c": pca_mahalanobis_c,
+        "pca_mahalanobis_percentile": pca_mahalanobis_percentile,
+        "pca_mahalanobis_eps": pca_mahalanobis_eps,
+    }
+
     best_val_loss = float("inf")
     best_val_nme = float("inf")
     best_nme_epoch = -1
@@ -751,15 +763,7 @@ def train_model(
         metrics_payload = {"train": train_metrics, "val": val_metrics, "lr": current_lr}
         save_checkpoint(
             output_dir / "last_model.pth", epoch, model, optimizer, metrics_payload,
-            pca_loss_space=pca_loss_space,
-            pca_training_prior_mode=pca_training_prior_mode,
-            lambda_pca_reconstruction=lambda_pca_reconstruction,
-            lambda_pca_mahalanobis=lambda_pca_mahalanobis,
-            pca_mahalanobis_enabled=pca_mahalanobis_enabled,
-            pca_mahalanobis_weight=pca_mahalanobis_weight,
-            pca_mahalanobis_c=pca_mahalanobis_c,
-            pca_mahalanobis_percentile=pca_mahalanobis_percentile,
-            pca_mahalanobis_eps=pca_mahalanobis_eps,
+            **checkpoint_metadata,
         )
         reporter.report_checkpoint(output_dir / "last_model.pth", is_best=False)
 
@@ -770,15 +774,7 @@ def train_model(
             patience_counter = 0
             save_checkpoint(
                 output_dir / "best_model.pth", epoch, model, optimizer, metrics_payload,
-                pca_loss_space=pca_loss_space,
-                pca_training_prior_mode=pca_training_prior_mode,
-                lambda_pca_reconstruction=lambda_pca_reconstruction,
-                lambda_pca_mahalanobis=lambda_pca_mahalanobis,
-                pca_mahalanobis_enabled=pca_mahalanobis_enabled,
-                pca_mahalanobis_weight=pca_mahalanobis_weight,
-                pca_mahalanobis_c=pca_mahalanobis_c,
-                pca_mahalanobis_percentile=pca_mahalanobis_percentile,
-                pca_mahalanobis_eps=pca_mahalanobis_eps,
+                **checkpoint_metadata,
             )
             reporter.report_checkpoint(output_dir / "best_model.pth", is_best=True)
         else:
@@ -788,6 +784,11 @@ def train_model(
         if math.isfinite(current_val_nme) and current_val_nme < best_val_nme:
             best_val_nme = current_val_nme
             best_nme_epoch = epoch + 1
+            save_checkpoint(
+                output_dir / "best_nme_model.pth", epoch, model, optimizer, metrics_payload,
+                **checkpoint_metadata,
+            )
+            reporter.report_checkpoint(output_dir / "best_nme_model.pth", is_best=True)
 
         reporter.finish_epoch(
             train_metrics=train_metrics,
