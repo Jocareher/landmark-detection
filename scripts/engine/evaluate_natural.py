@@ -3,6 +3,7 @@ from __future__ import annotations
 from .runtime_reporting import PredictionTiming, project_prediction_batch
 
 import json
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -158,6 +159,12 @@ def evaluate_natural_checkpoint(
             images = batch["image"].to(device, non_blocking=True)
         metadata_batch = batch["metadata"]
         sample_ids = [str(value) for value in metadata_batch["sample_id"]]
+        decode_landmarks = partial(
+            decode_heatmaps_to_image_coords,
+            image_height=images.shape[2], image_width=images.shape[3],
+            use_subpixel=True, decoder=coordinate_decoder,
+            softmax_temperature=wasserstein_softmax_temperature,
+        )
         if tta_adapter is None:
             with torch.inference_mode():
                 with timing.stage("inference"):
@@ -167,18 +174,12 @@ def evaluate_natural_checkpoint(
                 outputs = tta_adapter.adapt_batch(
                     images=images, sample_ids=sample_ids,
                     orientation_class_ids=metadata_batch.get("class_idx"),
+                    monitor_decoder=decode_landmarks,
                 )
 
         with torch.inference_mode():
             with timing.stage("decode"):
-                predicted_landmarks_batch = decode_heatmaps_to_image_coords(
-                    heatmaps=outputs["heatmaps"],
-                    image_height=images.shape[2],
-                    image_width=images.shape[3],
-                    use_subpixel=True,
-                    decoder=coordinate_decoder,
-                    softmax_temperature=wasserstein_softmax_temperature,
-                ).cpu()
+                predicted_landmarks_batch = decode_landmarks(outputs["heatmaps"]).cpu()
                 predicted_visibility_logits = outputs["visibility_logits"].cpu()
                 predicted_visibility_scores = torch.sigmoid(predicted_visibility_logits)
                 predicted_visibility_batch = (
@@ -193,14 +194,7 @@ def evaluate_natural_checkpoint(
             baseline_landmarks_batch = None
             baseline_visibility_batch = None
             if tta_adapter is not None:
-                baseline_landmarks_batch = decode_heatmaps_to_image_coords(
-                    heatmaps=outputs["tta_baseline_heatmaps"],
-                    image_height=images.shape[2],
-                    image_width=images.shape[3],
-                    use_subpixel=True,
-                    decoder=coordinate_decoder,
-                    softmax_temperature=wasserstein_softmax_temperature,
-                ).cpu()
+                baseline_landmarks_batch = decode_landmarks(outputs["tta_baseline_heatmaps"]).cpu()
                 baseline_visibility_batch = (
                     torch.sigmoid(outputs["tta_baseline_visibility_logits"].cpu())
                     >= visibility_threshold
@@ -380,6 +374,27 @@ def evaluate_natural_checkpoint(
                         initial_hausdorff_box_gt_valid=baseline_hausdorff_box_gt_valid,
                         final_hausdorff_box_gt_valid=hausdorff_box_gt_valid,
                         number_of_valid_landmarks=int(gt_valid_mask.sum()),
+                    )
+                    step_nme = {}
+                    for step, landmarks in tta_adapter.monitored_landmarks.get(sample_id, {}).items():
+                        crop_landmarks = project_landmarks_between_sizes(
+                            landmarks, network_input_size, crop_size
+                        )
+                        original_landmarks = apply_homogeneous_transform(
+                            crop_landmarks, transform_crop_to_orig
+                        )
+                        _, _, step_nme[step], _ = compute_masked_natural_per_landmark_nme(
+                            predicted_landmarks=original_landmarks,
+                            target_landmarks=target_landmarks_original,
+                            target_visibility=target_visibility,
+                            predicted_visibility=predicted_visibility,
+                            normalization_fn=compute_box_normalization_factor,
+                            inclusion_mode="gt_valid",
+                        )
+                    tta_adapter.record_monitored_nme(
+                        sample_id=sample_id, orientation=orientation,
+                        source_nme=baseline_mean_box_nme_gt_valid, nme_by_step=step_nme,
+                        source_landmarks=baseline_landmarks_batch[sample_index:sample_index + 1],
                     )
                 if np.isfinite(hausdorff_box_visible):
                     visible_image_hausdorff_values.append(hausdorff_box_visible)

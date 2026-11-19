@@ -120,3 +120,90 @@ def test_final_evaluators_export_clean_protocols_even_if_all_predicted_invisible
         fields = csv.DictReader(handle).fieldnames
     assert 'mean_nme_box_gt_valid' in fields
     assert 'mean_nme_box' not in fields and 'mean_nme_interocular' not in fields
+
+
+def test_babyland_tta_monitors_official_nme_and_annotates_gif(tmp_path, monkeypatch):
+    from PIL import Image
+
+    from scripts.engine import evaluate_natural, pca_tta
+    from scripts.models import NormalizedLandmarker, ResidualImageNormalizer
+
+    class Landmarker(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.norm = torch.nn.BatchNorm2d(3)
+            self.norm.running_var.fill_(4.0)
+            self.head = torch.nn.Conv2d(3, 72, 1)
+
+        def forward(self, images):
+            heatmaps = self.head(self.norm(images))
+            return {"heatmaps": heatmaps, "visible_heatmaps": heatmaps,
+                    "visibility_logits": heatmaps.mean(dim=(2, 3))}
+
+    model = NormalizedLandmarker(
+        Landmarker(), ResidualImageNormalizer(hidden_channels=4, num_layers=2)
+    )
+    landmarks = torch.stack((torch.arange(72) % 8 + 2, torch.arange(72) // 8 + 2), dim=1).float()
+    samples = []
+    for name, orientation, class_id in (("a", "frontal", 2), ("flip_a", "left", 0)):
+        path = str(tmp_path / f"{name}.png")
+        samples.append({
+            "image": torch.randn(3, 16, 16), "landmarks": landmarks,
+            "visibility": torch.ones(72), "metadata": {
+                "sample_id": name, "orientation": orientation, "class_idx": class_id,
+                "source_image_path": path, "crop_image_path": path,
+                "crop_size": (32, 32), "transformed_size": (16, 16),
+                "transform_crop_to_orig": torch.tensor([[1., 0., 3.], [0., 1., 2.], [0., 0., 1.]]),
+                "source_image_name": f"{name}.png",
+            },
+        })
+    loader = torch.utils.data.DataLoader(samples, batch_size=2)
+    for name in ("plot_per_landmark_boxplot", "plot_yaw_view_boxplots", "plot_confusion_matrix",
+                 "plot_grouped_nme_boxplot"):
+        if hasattr(evaluate_natural, name):
+            monkeypatch.setattr(evaluate_natural, name, lambda **kwargs: None)
+    labels = []
+    build_panel = pca_tta._build_probe_panel
+
+    def track_label(**kwargs):
+        labels.append(kwargs["nme_label"])
+        return build_panel(**kwargs)
+
+    monkeypatch.setattr(pca_tta, "_build_probe_panel", track_label)
+    original = {key: value.clone() for key, value in model.state_dict().items()}
+    for episode_unit in ("batch", "image"):
+        labels.clear()
+        output = tmp_path / episode_unit
+        scope = "normalizer_all_norms" if episode_unit == "batch" else "normalizer"
+        adapter = pca_tta.PCAGuidedTTA(
+            model, None, torch.device("cpu"), output / "tta",
+            pca_tta.PCATTAConfig(pca_weight=0, entropy_weight=1, steps=3,
+                                 monitor_steps=(1,), probe_count=1, episode_unit=episode_unit,
+                                 adaptation_scope=scope),
+            dataset_protocol="babyland",
+        )
+        evaluate_natural.evaluate_natural_checkpoint(
+            model, loader, torch.device("cpu"), output / "babyland",
+            save_predictions=False, save_overlays=False, tta_adapter=adapter,
+            coordinate_decoder="barycenter",
+        )
+        assert all(torch.equal(value, original[key]) for key, value in model.state_dict().items())
+        summary = adapter.finalize()["monitored_nme"]
+        assert summary["num_complete_trajectories"] == 2
+        with (output / "tta/nme_by_image_and_step.csv").open() as handle:
+            rows = list(csv.DictReader(handle))
+        for item in adapter.summary_rows:
+            scored = [row for row in rows if row["sample_id"] == item["sample_id"]]
+            assert [row["step"] for row in scored] == ["", "0", "1", "3"]
+            assert np.isclose(float(scored[0]["nme_box_gt_valid"]), item["initial_nme_box_gt_valid"])
+            assert np.isclose(float(scored[-1]["nme_box_gt_valid"]), item["final_nme_box_gt_valid"])
+            if episode_unit == "batch":
+                assert not np.isclose(float(scored[1]["nme_box_gt_valid"]), item["initial_nme_box_gt_valid"])
+        assert labels == [f"NME (GT): {float(row['nme_box_gt_valid']):.2%}"
+                          for row in rows if row["sample_id"] == "a" and row["step"]]
+        with Image.open(output / "tta/probes/a/adaptation.gif") as gif:
+            assert gif.n_frames == 3
+        assert (output / "tta/nme_by_orientation_and_step.csv").is_file()
+        assert all((output / "tta/figures" / filename).is_file() for filename in (
+            "nme_trajectory_by_orientation.png", "nme_trajectory_by_image.png",
+        ))

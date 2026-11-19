@@ -141,7 +141,8 @@ arguments:
   # TTA monitoring
   # ---------------------------------------------------------------------------
   # Steps beyond pca_tta_steps are ignored; step 0 and the final step are always recorded.
-  pca_tta_monitor_steps: [0, 1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200]
+  # BabyLand evaluates NME at these same steps for every image.
+  pca_tta_monitor_steps: [0, 1, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 150, 200, 250, 500, 750, 1000, 1250, 1500]
   pca_tta_probe_count: 10
   pca_tta_difference_display_max: 0.15
 

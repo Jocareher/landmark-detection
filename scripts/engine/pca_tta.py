@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .evaluation_reporting import group_babyland_image_rows
+from .tta_nme_reporting import save_monitored_nme_report
 from .runtime_reporting import clock, distribution, write_rows, save_tta_curves
 from .tta_losses import (
     PCA_PRIOR_MODES, POSE5_YAW_BY_CLASS, compute_tta_losses, resolve_gt_pose_labels,
@@ -15,7 +16,7 @@ import warnings
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 import numpy as np
 import torch
@@ -173,6 +174,10 @@ class PCAGuidedTTA:
         self.trajectory_rows: list[dict[str, Any]] = []
         self.summary_rows: list[dict[str, Any]] = []
         self.summary_by_sample_id: dict[str, dict[str, Any]] = {}
+        self.monitored_landmarks: dict[str, dict[int, torch.Tensor]] = {}
+        self.monitored_nme_rows: list[dict[str, Any]] = []
+        self._pending_probes = {}
+        self._monitor_decoder: Callable[[torch.Tensor], torch.Tensor] | None = None
         self.processed_samples = 0
         self.failed_samples = 0
         self.episode_batch_sizes: list[int] = []
@@ -213,10 +218,20 @@ class PCAGuidedTTA:
             f"normalizer_trainable={normalizer_total:,}"
         )
 
-    def adapt_batch(self, images, sample_ids=None, orientation_class_ids=None):
+    def adapt_batch(
+        self, images, sample_ids=None, orientation_class_ids=None, *,
+        monitor_decoder: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    ):
+        """Adapt images and optionally retain decoded landmarks at monitor steps."""
         started = clock(self.device)
         start_count = self.processed_samples
-        result = self._adapt_batch_impl(images, sample_ids, orientation_class_ids)
+        self.monitored_landmarks.clear()
+        self._pending_probes.clear()
+        self._monitor_decoder = monitor_decoder
+        try:
+            result = self._adapt_batch_impl(images, sample_ids, orientation_class_ids)
+        finally:
+            self._monitor_decoder = None
         self.adaptation_timings.append({"call_index": len(self.adaptation_timings),
             "batch_size": images.shape[0], "adaptation_seconds": clock(self.device)-started,
             "scope": self.config.adaptation_scope, "episode_unit": self._episode_unit(),
@@ -319,6 +334,7 @@ class PCAGuidedTTA:
         failed = False
         failure_message = ""
 
+        capture_steps = self._capture_steps()
         try:
             for step in range(self.config.steps + 1):
                 outputs = self._timed_forward(image, step, [sample_id])
@@ -362,15 +378,15 @@ class PCAGuidedTTA:
                 }
                 sample_rows.append(row)
 
-                if step in self._capture_steps():
-                    snapshots.append(
-                        {
+                if step in capture_steps:
+                    decoded = self._capture_monitored_landmarks(step, [sample_id], outputs["heatmaps"])
+                    if self.processed_samples < self.config.probe_count:
+                        snapshots.append({
                             "step": step,
                             "normalized": normalized.detach().cpu().clone(),
-                            "landmarks": landmarks.detach().cpu().clone(),
+                            "landmarks": decoded if decoded is not None else landmarks.detach().cpu(),
                             "loss": float(total_loss.detach().item()),
-                        }
-                    )
+                        })
                 final_outputs = {
                     key: value.detach().clone() for key, value in outputs.items()
                 }
@@ -453,7 +469,7 @@ class PCAGuidedTTA:
             self.summary_rows.append(sample_summary)
             self.summary_by_sample_id[sample_id] = sample_summary
             if self.processed_samples < self.config.probe_count and snapshots:
-                self._save_probe(
+                self._queue_probe(
                     sample_id=sample_id,
                     image=image.detach().cpu(),
                     baseline_landmarks=baseline_landmarks,
@@ -526,6 +542,7 @@ class PCAGuidedTTA:
             f"[TTA][episode={episode_number:06d}] batch_size={batch_size} "
             f"scope={self.config.adaptation_scope} source_restored=yes optimizer=fresh"
         )
+        capture_steps = self._capture_steps()
         try:
             for step in range(self.config.steps + 1):
                 inference_started = clock(self.device)
@@ -548,6 +565,9 @@ class PCAGuidedTTA:
                 )
                 image_change = (normalized.detach() - images).abs().mean(dim=(1, 2, 3))
                 diagnostics = heatmap_image_rows(outputs["heatmaps"], sample_ids)
+                decoded = None
+                if step in capture_steps:
+                    decoded = self._capture_monitored_landmarks(step, sample_ids, outputs["heatmaps"])
                 for index, sample_id in enumerate(sample_ids):
                     rows_by_sample[sample_id].append({
                         **diagnostics[index],
@@ -564,11 +584,12 @@ class PCAGuidedTTA:
                         "failed": False,
                         "failure_message": "",
                     })
-                    if step in self._capture_steps():
+                    if step in capture_steps and self.processed_samples + index < self.config.probe_count:
                         snapshots_by_sample[sample_id].append({
                             "step": step,
                             "normalized": normalized[index:index + 1].detach().cpu().clone(),
-                            "landmarks": landmarks[index:index + 1].detach().cpu().clone(),
+                            "landmarks": (decoded[index:index + 1] if decoded is not None
+                                          else landmarks[index:index + 1].detach().cpu()),
                             "loss": float(sample_losses[index].detach().item()),
                         })
                 final_outputs = {
@@ -634,7 +655,7 @@ class PCAGuidedTTA:
                 if self.processed_samples + index < self.config.probe_count:
                     snapshots = snapshots_by_sample[sample_id]
                     if snapshots:
-                        self._save_probe(
+                        self._queue_probe(
                             sample_id=sample_id, image=images[index:index + 1].cpu(),
                             baseline_landmarks=source_landmarks[index:index + 1],
                             snapshots=snapshots,
@@ -691,6 +712,48 @@ class PCAGuidedTTA:
                 ),
             }
         )
+
+    def _capture_monitored_landmarks(
+        self, step: int, sample_ids: Sequence[str], heatmaps: torch.Tensor,
+    ) -> torch.Tensor | None:
+        if self._monitor_decoder is None:
+            return None
+        with torch.no_grad():
+            decoded = self._monitor_decoder(heatmaps.detach()).cpu()
+        for sample_id, landmarks in zip(sample_ids, decoded):
+            self.monitored_landmarks.setdefault(sample_id, {})[step] = landmarks
+        return decoded
+
+    def record_monitored_nme(
+        self, *, sample_id: str, orientation: str, source_nme: float | None,
+        nme_by_step: dict[int, float | None], source_landmarks: torch.Tensor,
+    ) -> None:
+        """Attach NME scores and render probes after adaptation."""
+        failed = bool(self.summary_by_sample_id[sample_id]["failed"])
+        common = {"sample_id": sample_id, "orientation": orientation, "episode_failed": failed}
+        self.monitored_nme_rows.append({
+            **common, "prediction_stage": "source", "step": None,
+            "nme_box_gt_valid": source_nme,
+        })
+        for step, nme in sorted(nme_by_step.items()):
+            self.monitored_nme_rows.append({
+                **common, "prediction_stage": "adaptation", "step": step,
+                "nme_box_gt_valid": nme,
+            })
+        probe = self._pending_probes.pop(sample_id, None)
+        if probe is not None:
+            for snapshot in probe["snapshots"]:
+                snapshot["nme_label"] = "NME (GT): n/a"
+                nme = nme_by_step.get(snapshot["step"])
+                if nme is not None and math.isfinite(nme):
+                    snapshot["nme_label"] = f"NME (GT): {nme:.2%}"
+            self._save_probe(**{**probe, "baseline_landmarks": source_landmarks})
+
+    def _queue_probe(self, **probe):
+        if self._monitor_decoder is None:
+            self._save_probe(**probe)
+        else:
+            self._pending_probes[probe["sample_id"]] = probe
 
     def _capture_steps(self) -> set[int]:
         """Return requested monitoring steps clipped to the episode length."""
@@ -836,6 +899,7 @@ class PCAGuidedTTA:
                 enhanced_display_max=enhanced_display_max,
                 baseline_landmarks=baseline_landmarks[0].cpu(),
                 adapted_landmarks=snapshot["landmarks"][0],
+                nme_label=snapshot.get("nme_label"),
                 title=(
                     f"{sample_id} | step {snapshot['step']} | "
                     f"TTA loss {snapshot['loss']:.6g} | "
@@ -976,6 +1040,10 @@ class PCAGuidedTTA:
             "probe_dir": str(self.output_dir / "probes"),
             "evaluation_analysis": evaluation_analysis,
         }
+        if self.monitored_nme_rows:
+            summary["monitored_nme"] = save_monitored_nme_report(
+                self.monitored_nme_rows, sorted(self._capture_steps()), self.output_dir
+            )
         if self.config.pca_weight == 0:
             for key in ("pca_loss_space", "pca_loss_mode", "pca_loss_reduction", "pca_alignment_gradient"):
                 summary[key] = None
@@ -1894,6 +1962,7 @@ def _build_probe_panel(
     baseline_landmarks: torch.Tensor,
     adapted_landmarks: torch.Tensor,
     title: str,
+    nme_label: str | None = None,
 ) -> Image.Image:
     original = _as_image(original_rgb)
     normalized = _as_image(normalized_rgb)
@@ -1906,7 +1975,7 @@ def _build_probe_panel(
         "Normalizer output",
         f"Abs. RGB diff (fixed 0–{fixed_display_max:.3g})",
         f"Abs. RGB diff (enhanced P99={enhanced_display_max:.3g})",
-        "Step-0 landmarks",
+        "Source landmarks" if nme_label is not None else "Step-0 landmarks",
         "Current landmarks",
     )
     tiles = (
@@ -1919,12 +1988,13 @@ def _build_probe_panel(
     )
     width, height = original.size
     header_height = 22
-    title_height = 28
-    canvas = Image.new(
-        "RGB", (len(tiles) * width, height + header_height + title_height), "white"
-    )
+    title_height = 44 if nme_label is not None else 28
+    panel_width = max(len(tiles) * width, 130 if nme_label is not None else 0)
+    canvas = Image.new("RGB", (panel_width, height + header_height + title_height), "white")
     draw = ImageDraw.Draw(canvas)
     draw.text((6, 7), title, fill="black")
+    if nme_label is not None:
+        draw.text((6, 23), nme_label, fill="black")
     for index, (name, tile) in enumerate(zip(names, tiles)):
         x_offset = index * width
         draw.text((x_offset + 4, title_height + 4), name, fill="black")
@@ -2028,6 +2098,14 @@ loss or face-size normalization is applied.
   before/after, improvement rates, and the Spearman association between PCA-loss
   reduction and NME change.
 - BabyLand also reports original and mirrored images in `image_subset_tta_summary.csv`.
+- `nme_by_image_and_step.csv` records BabyLand NME at the probe steps for all
+  images. `prediction_stage=source` identifies the unadapted reference separately
+  from the adaptation forward at step 0.
+- `nme_by_orientation_and_step.csv` and the trajectory figures compare the same
+  images across all monitored steps. `nme_trajectory_image_summary.csv` tracks the
+  best recorded step and the first monitored step worse than the source per image.
+  Ground truth is used for reporting only. The returned prediction uses the
+  configured final step unless the episode fails.
 - `figures/nme_before_after_scatter.png`,
   `figures/pca_loss_reduction_vs_nme_change.png`, and the orientation figures
   are generated only when post-hoc ground truth metrics are available.
